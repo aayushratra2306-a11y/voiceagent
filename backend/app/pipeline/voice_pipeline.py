@@ -23,6 +23,7 @@ async def run_voice_pipeline(
     system_prompt: str,
     voice_id: str,
     llm_model: str,
+    language: str = "en",
 ):
     logger.info(f"[PIPELINE] Starting for bot: {bot_name}")
 
@@ -40,9 +41,9 @@ async def run_voice_pipeline(
         ),
     )
 
-    stt = DeepgramSTTService(api_key=settings.deepgram_api_key)
+    stt = DeepgramSTTService(api_key=settings.deepgram_api_key, language=language)
     llm = OpenAILLMService(api_key=settings.openai_api_key, model=llm_model)
-    tts = CartesiaTTSService(api_key=settings.cartesia_api_key, voice_id=voice_id)
+    tts = CartesiaTTSService(api_key=settings.cartesia_api_key, voice_id=voice_id, language=language)
 
     context = LLMContext(messages=[{"role": "system", "content": system_prompt}])
     context_aggregator = LLMContextAggregatorPair(context)
