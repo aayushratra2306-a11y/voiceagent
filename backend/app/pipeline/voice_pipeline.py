@@ -33,9 +33,9 @@ async def run_voice_pipeline(
             audio_in_enabled=True,
             audio_out_enabled=True,
             vad_analyzer=SileroVADAnalyzer(params=VADParams(
-                confidence=0.4,
-                min_volume=0.2,
-                start_secs=0.2,
+                confidence=0.7,
+                min_volume=0.35,
+                start_secs=0.3,
                 stop_secs=0.8,
             )),
         ),
