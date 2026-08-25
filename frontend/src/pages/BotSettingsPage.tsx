@@ -1,7 +1,7 @@
-import { useEffect, useState, FormEvent } from 'react'
+import { useEffect, useRef, useState, FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { createBot, updateBot, listBots } from '../lib/api'
-import type { Bot } from '../lib/api'
+import { createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument } from '../lib/api'
+import type { Bot, BotDocument } from '../lib/api'
 
 const VOICES = [
   { id: 'a0e99841-438c-4a64-b679-ae501e7d6091', label: 'Aria — Neutral', desc: 'Clear, balanced tone' },
@@ -38,6 +38,10 @@ export default function BotSettingsPage() {
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [docs, setDocs] = useState<BotDocument[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (isNew) return
@@ -46,7 +50,29 @@ export default function BotSettingsPage() {
       if (bot) setForm({ name: bot.name, system_prompt: bot.system_prompt, voice_id: bot.voice_id, llm_model: bot.llm_model, language: bot.language })
       setLoading(false)
     })
+    listDocuments(id!).then(setDocs).catch(() => {})
   }, [id])
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file || isNew) return
+    setUploading(true)
+    setUploadError('')
+    try {
+      const doc = await uploadDocument(id!, file)
+      setDocs(prev => [...prev, doc])
+    } catch (err: any) {
+      setUploadError(err.message)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  async function handleDeleteDoc(docId: string) {
+    await deleteDocument(docId)
+    setDocs(prev => prev.filter(d => d.id !== docId))
+  }
 
   function set(field: keyof typeof form, value: string) {
     setForm(prev => ({ ...prev, [field]: value }))
@@ -182,6 +208,67 @@ export default function BotSettingsPage() {
               </select>
             </div>
           </div>
+
+          {/* Knowledge Base — only shown when editing an existing bot */}
+          {!isNew && (
+            <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Knowledge Base</label>
+                  <p className="text-xs text-slate-600 mt-0.5">Upload PDFs — the bot will answer questions from them</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="flex items-center gap-1.5 bg-violet-600/70 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition-all"
+                >
+                  {uploading ? (
+                    <span className="w-3 h-3 border border-white/40 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  )}
+                  {uploading ? 'Uploading…' : 'Upload PDF'}
+                </button>
+                <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
+              </div>
+
+              {uploadError && (
+                <p className="text-xs text-red-400 mb-2">{uploadError}</p>
+              )}
+
+              {docs.length === 0 ? (
+                <div className="border border-dashed border-white/8 rounded-xl p-5 text-center">
+                  <p className="text-xs text-slate-600">No documents uploaded yet</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {docs.map(doc => (
+                    <div key={doc.id} className="flex items-center justify-between bg-white/4 border border-white/8 rounded-xl px-3 py-2.5">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                        </svg>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-white truncate">{doc.filename}</p>
+                          <p className="text-xs text-slate-600">{doc.chunk_count} chunks indexed</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDoc(doc.id)}
+                        className="p-1 text-slate-600 hover:text-red-400 transition-colors ml-2 shrink-0"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex gap-3 pt-1">

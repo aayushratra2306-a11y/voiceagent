@@ -57,6 +57,7 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
                     voice_id=bot.voice_id,
                     llm_model=bot.llm_model,
                     language=bot.language,
+                    bot_id=str(bot.id),
                 )
             except Exception as e:
                 import traceback

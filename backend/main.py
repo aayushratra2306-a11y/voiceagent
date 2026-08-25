@@ -5,15 +5,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from app.api import auth, bots, connect
+from app.api import auth, bots, connect, documents
 from app.db.mongo import init_db
 from app.models.bot import Bot
+from app.models.document import Document
 from app.models.user import User
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db([User, Bot])
+    await init_db([User, Bot, Document])
     yield
 
 
@@ -30,6 +31,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(bots.router)
 app.include_router(connect.router)
+app.include_router(documents.router)
 
 
 @app.get("/health")

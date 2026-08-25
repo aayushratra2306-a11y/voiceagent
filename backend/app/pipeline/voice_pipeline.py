@@ -15,6 +15,7 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core.config import settings
+from app.pipeline.rag_processor import RAGContextProcessor
 
 
 async def run_voice_pipeline(
@@ -24,6 +25,7 @@ async def run_voice_pipeline(
     voice_id: str,
     llm_model: str,
     language: str = "en",
+    bot_id: str | None = None,
 ):
     logger.info(f"[PIPELINE] Starting for bot: {bot_name}")
 
@@ -48,15 +50,20 @@ async def run_voice_pipeline(
     context = LLMContext(messages=[{"role": "system", "content": system_prompt}])
     context_aggregator = LLMContextAggregatorPair(context)
 
-    pipeline = Pipeline([
-        transport.input(),
-        stt,
+    pipeline_steps = [transport.input(), stt]
+
+    if bot_id:
+        pipeline_steps.append(RAGContextProcessor(bot_id, context, system_prompt))
+
+    pipeline_steps += [
         context_aggregator.user(),
         llm,
         tts,
         transport.output(),
         context_aggregator.assistant(),
-    ])
+    ]
+
+    pipeline = Pipeline(pipeline_steps)
 
     task = PipelineTask(
         pipeline,

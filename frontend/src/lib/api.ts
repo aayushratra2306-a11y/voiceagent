@@ -52,6 +52,38 @@ export async function deleteBot(id: string): Promise<void> {
   return request(`/bots/${id}`, { method: 'DELETE' })
 }
 
+// ── Documents ───────────────────────────────────────────────────────────────
+export interface BotDocument {
+  id: string
+  filename: string
+  chunk_count: number
+  created_at: string
+}
+
+export async function listDocuments(botId: string): Promise<BotDocument[]> {
+  return request(`/bots/${botId}/documents`)
+}
+
+export async function uploadDocument(botId: string, file: File): Promise<BotDocument> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const token = localStorage.getItem('token')
+  const res = await fetch(`/bots/${botId}/documents`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail ?? 'Upload failed')
+  }
+  return res.json()
+}
+
+export async function deleteDocument(docId: string): Promise<void> {
+  return request(`/documents/${docId}`, { method: 'DELETE' })
+}
+
 // ── WebRTC connect ──────────────────────────────────────────────────────────
 export async function connectBot(
   botId: string, sdp: string, type: string, pcId?: string
