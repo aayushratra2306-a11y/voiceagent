@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Voice Agent — Test Page</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 32px;
+      width: 440px;
+    }
+    h1 { font-size: 18px; font-weight: 600; margin-bottom: 24px; color: #fff; }
+    label { display: block; font-size: 13px; color: #888; margin-bottom: 6px; }
+    input, select {
+      width: 100%;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #e0e0e0;
+      padding: 10px 12px;
+      font-size: 14px;
+      margin-bottom: 16px;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: #555; }
+    button {
+      width: 100%;
+      padding: 11px;
+      border-radius: 8px;
+      border: none;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.4; cursor: default; }
+    #btn-login { background: #3b82f6; color: #fff; }
+    #btn-start { background: #22c55e; color: #fff; margin-top: 8px; }
+    #btn-stop  { background: #ef4444; color: #fff; margin-top: 8px; display: none; }
+    #voice-section { display: none; margin-top: 0; }
+    .log {
+      margin-top: 20px;
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+      font-family: monospace;
+      max-height: 180px;
+      overflow-y: auto;
+      line-height: 1.8;
+    }
+    .log .ok   { color: #4ade80; }
+    .log .err  { color: #f87171; }
+    .log .info { color: #94a3b8; }
+    .status-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #334155;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .status-dot.active { background: #22c55e; animation: pulse 1.2s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+    #status-label { font-size: 13px; color: #888; margin-top: 12px; display: flex; align-items: center; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>🎙 Voice Agent — Test</h1>
+
+  <!-- Step 1: Login -->
+  <div id="login-section">
+    <label>Email</label>
+    <input id="email" type="email" placeholder="you@example.com" />
+    <label>Password</label>
+    <input id="password" type="password" placeholder="••••••••" />
+    <button id="btn-login">Log In</button>
+  </div>
+
+  <!-- Step 2: Pick bot + start session -->
+  <div id="voice-section">
+    <label>Choose Bot</label>
+    <select id="bot-select"></select>
+    <button id="btn-start">▶ Start Voice Session</button>
+    <button id="btn-stop">■ Stop Session</button>
+    <div id="status-label">
+      <span class="status-dot" id="dot"></span>
+      <span id="status-text">Ready</span>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+</div>
+
+<audio id="remote-audio" autoplay></audio>
+
+<script>
+  const API = 'http://localhost:8080';
+  let token = null;
+  let pc = null;
+  let localStream = null;
+
+  function log(msg, type = 'info') {
+    const el = document.getElementById('log');
+    const line = document.createElement('div');
+    line.className = type;
+    line.textContent = `${new Date().toLocaleTimeString()} — ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function setStatus(text, active = false) {
+    document.getElementById('status-text').textContent = text;
+    document.getElementById('dot').classList.toggle('active', active);
+  }
+
+  // ── Login ──────────────────────────────────────────────
+  document.getElementById('btn-login').addEventListener('click', async () => {
+    const email    = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    if (!email || !password) { log('Enter email and password', 'err'); return; }
+
+    log('Logging in…');
+    try {
+      const res = await fetch(`${API}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      token = data.access_token;
+      log('Logged in ✓', 'ok');
+      await loadBots();
+      document.getElementById('login-section').style.display = 'none';
+      document.getElementById('voice-section').style.display = 'block';
+    } catch (e) {
+      log(`Login failed: ${e.message}`, 'err');
+    }
+  });
+
+  // ── Load bots ──────────────────────────────────────────
+  async function loadBots() {
+    const res = await fetch(`${API}/bots/`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const bots = await res.json();
+    const sel = document.getElementById('bot-select');
+    sel.innerHTML = '';
+    if (bots.length === 0) {
+      sel.innerHTML = '<option disabled>No bots found — create one first</option>';
+      document.getElementById('btn-start').disabled = true;
+      log('No bots found. Create one at /docs first.', 'err');
+      return;
+    }
+    bots.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = b.name;
+      sel.appendChild(opt);
+    });
+    log(`Loaded ${bots.length} bot(s) ✓`, 'ok');
+  }
+
+  // ── Start voice session ────────────────────────────────
+  document.getElementById('btn-start').addEventListener('click', async () => {
+    const botId = document.getElementById('bot-select').value;
+    document.getElementById('btn-start').disabled = true;
+    document.getElementById('btn-stop').style.display = 'block';
+    setStatus('Requesting microphone…', true);
+
+    try {
+      // 1. Get mic
+      log('Requesting microphone access…');
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      log('Microphone granted ✓', 'ok');
+
+      // 2. Create peer connection
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+
+      // 3. Add outgoing audio track (your mic → server)
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      // 4. Handle incoming audio (bot voice → your speaker)
+      pc.ontrack = (event) => {
+        log('Receiving bot audio ✓', 'ok');
+        document.getElementById('remote-audio').srcObject = event.streams[0];
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        log(`ICE state: ${pc.iceConnectionState}`, 'info');
+        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+          setStatus('Connected — speak now', true);
+          log('WebRTC connected! You can speak now.', 'ok');
+        }
+        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+          setStatus('Disconnected');
+          log('Connection lost.', 'err');
+        }
+      };
+
+      // 5. Create offer
+      setStatus('Creating WebRTC offer…', true);
+      log('Creating SDP offer…');
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // 6. Wait for ICE gathering to finish (so all candidates are baked into SDP)
+      log('Gathering ICE candidates…');
+      await new Promise(resolve => {
+        if (pc.iceGatheringState === 'complete') { resolve(); return; }
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') resolve();
+        };
+        // Fallback timeout in case gathering stalls
+        setTimeout(resolve, 5000);
+      });
+      log('ICE gathering complete ✓', 'ok');
+
+      // 7. Send offer to backend
+      setStatus('Sending offer to server…', true);
+      log(`Connecting to bot: ${document.getElementById('bot-select').options[document.getElementById('bot-select').selectedIndex].text}`);
+      const res = await fetch(`${API}/connect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          bot_id: botId,
+          sdp: pc.localDescription.sdp,
+          type: pc.localDescription.type,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Server error ${res.status}: ${err}`);
+      }
+      const answer = await res.json();
+      log(`Got SDP answer (pc_id: ${answer.pc_id}) ✓`, 'ok');
+
+      // 8. Apply answer
+      await pc.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
+      setStatus('Connecting…', true);
+      log('Set remote description — waiting for ICE connection…');
+
+    } catch (e) {
+      log(`Error: ${e.message}`, 'err');
+      setStatus('Error — see log');
+      stopSession();
+    }
+  });
+
+  // ── Stop ──────────────────────────────────────────────
+  document.getElementById('btn-stop').addEventListener('click', stopSession);
+
+  function stopSession() {
+    if (pc) { pc.close(); pc = null; }
+    if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+    document.getElementById('remote-audio').srcObject = null;
+    document.getElementById('btn-start').disabled = false;
+    document.getElementById('btn-stop').style.display = 'none';
+    setStatus('Session ended');
+    log('Session stopped.', 'info');
+  }
+</script>
+</body>
+</html>
