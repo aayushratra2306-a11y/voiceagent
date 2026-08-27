@@ -70,8 +70,12 @@ export default function BotSettingsPage() {
   }
 
   async function handleDeleteDoc(docId: string) {
-    await deleteDocument(docId)
-    setDocs(prev => prev.filter(d => d.id !== docId))
+    try {
+      await deleteDocument(docId)
+      setDocs(prev => prev.filter(d => d.id !== docId))
+    } catch (err: any) {
+      setUploadError(`Delete failed: ${err.message}`)
+    }
   }
 
   function set(field: keyof typeof form, value: string) {

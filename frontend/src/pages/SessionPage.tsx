@@ -35,7 +35,13 @@ export default function SessionPage() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
       streamRef.current = stream
 
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] })
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ],
+      })
       pcRef.current = pc
 
       stream.getTracks().forEach(t => pc.addTrack(t, stream))
@@ -43,6 +49,11 @@ export default function SessionPage() {
       pc.ontrack = e => {
         if (audioRef.current) audioRef.current.srcObject = e.streams[0]
         addLog('Bot audio connected ✓')
+      }
+
+      pc.onicecandidate = e => {
+        if (e.candidate) addLog(`Candidate: ${e.candidate.type} ${e.candidate.address ?? ''}`)
+        else addLog('ICE gathering complete')
       }
 
       pc.oniceconnectionstatechange = () => {

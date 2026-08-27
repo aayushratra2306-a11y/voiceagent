@@ -10,6 +10,7 @@ export default defineConfig({
       '/auth': 'http://localhost:8080',
       '/bots': 'http://localhost:8080',
       '/connect': 'http://localhost:8080',
+      '/documents': 'http://localhost:8080',
     },
   },
 })

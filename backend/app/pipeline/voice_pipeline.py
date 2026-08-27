@@ -1,12 +1,13 @@
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import Frame, TranscriptionFrame, TTSSpeakFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
@@ -16,6 +17,19 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core.config import settings
 from app.pipeline.rag_processor import RAGContextProcessor
+
+
+class AudioDebugger(FrameProcessor):
+    """Logs every transcription frame so we can confirm STT is working."""
+    async def process_frame(self, frame: Frame, direction):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, UserStartedSpeakingFrame):
+            logger.info("[AUDIO] VAD: user started speaking")
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            logger.info("[AUDIO] VAD: user stopped speaking")
+        elif isinstance(frame, TranscriptionFrame):
+            logger.info(f"[AUDIO] STT transcript: '{frame.text}'")
+        await self.push_frame(frame, direction)
 
 
 async def run_voice_pipeline(
@@ -35,9 +49,9 @@ async def run_voice_pipeline(
             audio_in_enabled=True,
             audio_out_enabled=True,
             vad_analyzer=SileroVADAnalyzer(params=VADParams(
-                confidence=0.7,
-                min_volume=0.35,
-                start_secs=0.3,
+                confidence=0.6,
+                min_volume=0.25,
+                start_secs=0.2,
                 stop_secs=0.8,
             )),
         ),
@@ -50,7 +64,7 @@ async def run_voice_pipeline(
     context = LLMContext(messages=[{"role": "system", "content": system_prompt}])
     context_aggregator = LLMContextAggregatorPair(context)
 
-    pipeline_steps = [transport.input(), stt]
+    pipeline_steps = [transport.input(), stt, AudioDebugger()]
 
     if bot_id:
         pipeline_steps.append(RAGContextProcessor(bot_id, context, system_prompt))
