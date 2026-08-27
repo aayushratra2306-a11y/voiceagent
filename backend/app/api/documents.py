@@ -23,11 +23,11 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
     content = await file.read()
-    text = parse_pdf(content)
-    if not text.strip():
+    pages = parse_pdf(content)
+    if not any(text.strip() for _, text in pages):
         raise HTTPException(status_code=400, detail="Could not extract text from PDF")
 
-    chunks = chunk_text(text)
+    chunks = chunk_text(pages)
 
     doc = Document(
         bot_id=bot_id,

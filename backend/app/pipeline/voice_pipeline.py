@@ -20,15 +20,18 @@ from app.pipeline.rag_processor import RAGContextProcessor
 
 
 class AudioDebugger(FrameProcessor):
-    """Logs every transcription frame so we can confirm STT is working."""
+    """Logs every frame so we can see what types flow through the pipeline."""
     async def process_frame(self, frame: Frame, direction):
         await super().process_frame(frame, direction)
+        name = type(frame).__name__
         if isinstance(frame, UserStartedSpeakingFrame):
             logger.info("[AUDIO] VAD: user started speaking")
         elif isinstance(frame, UserStoppedSpeakingFrame):
             logger.info("[AUDIO] VAD: user stopped speaking")
         elif isinstance(frame, TranscriptionFrame):
-            logger.info(f"[AUDIO] STT transcript: '{frame.text}'")
+            logger.info(f"[AUDIO] TranscriptionFrame: '{frame.text}'")
+        elif any(k in name for k in ("Transcri", "STT", "Speech", "Word", "Text")):
+            logger.info(f"[AUDIO] {name}: text={getattr(frame, 'text', getattr(frame, 'content', '?'))!r}")
         await self.push_frame(frame, direction)
 
 

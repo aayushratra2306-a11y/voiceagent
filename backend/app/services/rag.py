@@ -1,7 +1,9 @@
 import asyncio
 import io
+import re
 
 import pypdf
+from loguru import logger
 from openai import AsyncOpenAI
 from pinecone import Pinecone
 
@@ -23,22 +25,28 @@ def _get_index():
 
 # ── PDF parsing ────────────────────────────────────────────────────────────────
 
-def parse_pdf(file_bytes: bytes) -> str:
+def parse_pdf(file_bytes: bytes) -> list[tuple[int, str]]:
+    """Returns list of (page_number, text) tuples, 1-indexed."""
     reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    return [(i + 1, page.extract_text() or "") for i, page in enumerate(reader.pages)]
 
 
 # ── Chunking ───────────────────────────────────────────────────────────────────
 
-def chunk_text(text: str, chunk_size: int = 400, overlap: int = 80) -> list[str]:
-    words = text.split()
+def chunk_text(pages: list[tuple[int, str]], chunk_size: int = 400, overlap: int = 80) -> list[dict]:
+    """Returns list of {text, page} dicts. Text is prefixed with [Page N] so embeddings capture page context."""
     chunks = []
-    start = 0
-    while start < len(words):
-        chunk = " ".join(words[start : start + chunk_size])
-        if len(chunk.strip()) > 50:
-            chunks.append(chunk)
-        start += chunk_size - overlap
+    for page_num, text in pages:
+        words = text.split()
+        start = 0
+        while start < len(words):
+            chunk = " ".join(words[start : start + chunk_size])
+            if len(chunk.strip()) > 50:
+                chunks.append({
+                    "text": f"[Page {page_num}] {chunk}",
+                    "page": page_num,
+                })
+            start += chunk_size - overlap
     return chunks
 
 
@@ -54,16 +62,17 @@ async def _embed(texts: list[str]) -> list[list[float]]:
 
 # ── Pinecone upsert ────────────────────────────────────────────────────────────
 
-async def upsert_document(bot_id: str, doc_id: str, chunks: list[str]) -> int:
+async def upsert_document(bot_id: str, doc_id: str, chunks: list[dict]) -> int:
     if not chunks:
         return 0
 
-    embeddings = await _embed(chunks)
+    texts = [c["text"] for c in chunks]
+    embeddings = await _embed(texts)
     vectors = [
         {
             "id": f"{doc_id}_{i}",
             "values": emb,
-            "metadata": {"text": chunk, "doc_id": doc_id},
+            "metadata": {"text": chunk["text"], "doc_id": doc_id, "page": chunk["page"]},
         }
         for i, (chunk, emb) in enumerate(zip(chunks, embeddings))
     ]
@@ -80,10 +89,43 @@ async def upsert_document(bot_id: str, doc_id: str, chunks: list[str]) -> int:
 
 # ── Pinecone query ─────────────────────────────────────────────────────────────
 
-async def query_context(bot_id: str, query: str, top_k: int = 3) -> str:
+_WORD_NUMS = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+    'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15,
+    'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19, 'twenty': 20,
+    'twenty-one': 21, 'twenty-two': 22, 'twenty-three': 23, 'twenty-four': 24,
+    'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60,
+    'seventy': 70, 'eighty': 80, 'ninety': 90, 'hundred': 100,
+}
+
+
+def _extract_page_num(query: str) -> int | None:
+    # "page 50" — digit form
+    m = re.search(r'\bpage\s+(\d+)\b', query, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    # "page fifty" / "page twenty three" — word form
+    m = re.search(r'\bpage\s+((?:[a-z]+-?[a-z]*\s*){1,3})', query, re.IGNORECASE)
+    if m:
+        words = m.group(1).lower().strip().split()
+        total = 0
+        for w in words:
+            val = _WORD_NUMS.get(w.rstrip(',.:?!'))
+            if val:
+                total += val
+        if total > 0:
+            return total
+    return None
+
+
+async def query_context(bot_id: str, query: str, top_k: int = 5) -> str:
     embeddings = await _embed([query])
     index = _get_index()
     loop = asyncio.get_event_loop()
+
+    page_num = _extract_page_num(query)
+    filter_dict = {"page": {"$eq": page_num}} if page_num else None
 
     results = await loop.run_in_executor(
         None,
@@ -92,14 +134,19 @@ async def query_context(bot_id: str, query: str, top_k: int = 3) -> str:
             top_k=top_k,
             namespace=bot_id,
             include_metadata=True,
+            filter=filter_dict,
         ),
     )
+
+    for m in results.matches:
+        logger.debug(f"[RAG] match score={m.score:.3f} page={m.metadata.get('page')} text={m.metadata.get('text','')[:80]}")
 
     matches = [
         m.metadata["text"]
         for m in results.matches
-        if m.score > 0.65 and "text" in m.metadata
+        if m.score > 0.2 and "text" in m.metadata
     ]
+    logger.info(f"[RAG] {len(matches)}/{len(results.matches)} matches passed threshold (page_filter={page_num})")
     return "\n\n".join(matches)
 
 
