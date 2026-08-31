@@ -373,11 +373,23 @@ async def run_voice_pipeline(
 
     pipeline = Pipeline(pipeline_steps)
 
+    # Task 2.7: enable_metrics/enable_usage_metrics turn on pipecat's
+    # built-in per-stage timing (TTFB per service, etc.) — pipecat's own
+    # CLI-generated bot templates set these too.
+    #
+    # audio_in_enabled/audio_out_enabled used to be passed here instead —
+    # found and fixed while adding the line above: PipelineParams has no
+    # such fields (they belong to TransportParams, already set correctly
+    # on the transport itself, above), so pydantic's default extra="ignore"
+    # was silently discarding both — the exact same dead-config pattern
+    # Task 1.1 found on VAD. Harmless here (the transport's own
+    # TransportParams already does the real job), but worth removing
+    # rather than leaving misleading no-op code in place.
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
+            enable_metrics=True,
+            enable_usage_metrics=True,
         ),
     )
 

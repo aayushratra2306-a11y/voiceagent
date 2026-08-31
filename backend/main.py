@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -11,6 +12,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.api import auth, bots, connect, documents
 from app.api.connect import reap_dead_calls_loop
+from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.mongo import init_db
 from app.db.seed import seed_fake_orders
@@ -21,6 +23,15 @@ from app.models.document import Document
 from app.models.order import Order
 from app.models.revoked_token import RevokedRefreshToken
 from app.models.user import User
+
+# Task 2.7 — error tracking. A blank DSN (the default — see config.py) makes
+# this a confirmed no-op, verified live: no account, no behavior change,
+# nothing to set up until settings.sentry_dsn is actually configured.
+sentry_sdk.init(
+    dsn=settings.sentry_dsn,
+    traces_sample_rate=0.1,  # 10% of requests get full performance tracing
+    send_default_pii=False,  # a voice-agent backend handles real customer data
+)
 
 
 @asynccontextmanager

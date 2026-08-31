@@ -74,6 +74,23 @@ class Settings(BaseSettings):
     # own separate index, queried alongside the dense one and merged.
     pinecone_sparse_index_name: str = "voiceagent-sparse"
 
+    # Task 2.7 — error tracking. Blank by default: sentry_sdk.init(dsn="")
+    # is a confirmed-safe no-op (verified live 2026-08-31), so this stays
+    # completely dormant — zero behavior change — until a real DSN is set.
+    # Needs a Sentry account (sentry.io free tier, or self-hosted) to get
+    # one; that account creation isn't something this session can do.
+    sentry_dsn: str = ""
+
+    # Task 2.7 — self-hosted Langfuse (AI call cost/latency dashboard).
+    # Points at a local Langfuse instance per deploy/docker-compose.langfuse.yml
+    # — needs Docker, which isn't installed in this environment, so the
+    # instrumentation code is wired in but genuinely unverified end-to-end.
+    # Blank host/keys means the OpenTelemetry exporter below is never
+    # configured, so this is equally dormant by default.
+    langfuse_host: str = ""
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
