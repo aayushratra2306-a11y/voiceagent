@@ -6,7 +6,13 @@ import BotSettingsPage from './pages/BotSettingsPage'
 import SessionPage from './pages/SessionPage'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const { token } = useAuth()
+  const { token, ready } = useAuth()
+  // Task 2.5 — wait for the on-load silent-refresh attempt to resolve
+  // before deciding: `token` can still be null for a moment on a fresh
+  // tab even for someone with a perfectly valid session (their access
+  // token lives in an httpOnly cookie the app hasn't exchanged yet), and
+  // bouncing to /login during that window would just be a wrong flicker.
+  if (!ready) return null
   return token ? <>{children}</> : <Navigate to="/" replace />
 }
 

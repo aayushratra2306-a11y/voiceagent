@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, FormEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument } from '../lib/api'
 import type { Bot, BotDocument } from '../lib/api'

@@ -37,9 +37,10 @@ async def _test_db():
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
+    from app.models.revoked_token import RevokedRefreshToken
     from app.models.user import User
 
-    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn])
+    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn, RevokedRefreshToken])
     yield
     await database.client.drop_database(database.name)
 
@@ -59,14 +60,38 @@ async def _register_and_login(client: AsyncClient, email: str, password: str = "
     return resp.json()["access_token"]
 
 
-@pytest_asyncio.fixture(loop_scope="session")
-async def user_a_token(client):
-    return await _register_and_login(client, "user-a@voiceagent-test.com")
+# Task 2.5 added a 5/minute rate limit to /auth/login and /auth/register —
+# real and correct in production, but this test file alone would otherwise
+# call login() once per test function (each needing a fresh access token),
+# which blows through that limit in seconds and starts failing tests with
+# 429s that have nothing to do with what's actually being tested. Logging
+# in once per test SESSION (cached here) instead of once per TEST is also
+# just better test design regardless of the rate limit — there's no reason
+# to re-authenticate for every single test.
+_token_cache: dict[str, str] = {}
 
 
-@pytest_asyncio.fixture(loop_scope="session")
-async def user_b_token(client):
-    return await _register_and_login(client, "user-b@voiceagent-test.com")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def _session_client():
+    from main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def user_a_token(_session_client):
+    if "a" not in _token_cache:
+        _token_cache["a"] = await _register_and_login(_session_client, "user-a@voiceagent-test.com")
+    return _token_cache["a"]
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def user_b_token(_session_client):
+    if "b" not in _token_cache:
+        _token_cache["b"] = await _register_and_login(_session_client, "user-b@voiceagent-test.com")
+    return _token_cache["b"]
 
 
 def auth_headers(token: str) -> dict:

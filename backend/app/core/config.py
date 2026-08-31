@@ -11,7 +11,12 @@ class Settings(BaseSettings):
     # JWT
     secret_key: str
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    # Task 2.5 — shortened from 60. A leaked/stolen access token used to be
+    # live for an hour with no way to cut it off; now it's live for 15
+    # minutes, and the refresh token that replaces it (below) can be
+    # revoked instantly on logout.
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
 
     # OpenAI
     openai_api_key: str
