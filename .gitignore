@@ -1,6 +1,7 @@
 # Environment variables - never commit these
 .env
 *.env
+deploy/.env
 
 # Python
 __pycache__/
