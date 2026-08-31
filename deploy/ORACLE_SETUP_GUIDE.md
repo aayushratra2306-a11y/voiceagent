@@ -19,13 +19,33 @@ GitHub either way.
 
 ---
 
-## Part 1 — Make your SSH key FIRST
+## Part 1 — Your SSH key
 
-Do this before signing up. An SSH key is how you prove it's you when
-connecting to the server — like a house key, but a file. Oracle asks for
-it *during* server creation, and it's much easier to already have it.
+An SSH key is how you prove it's you when connecting to the server — like
+a house key, but a file. Oracle asks for it *during* server creation, so
+have it ready first.
 
-Open **PowerShell** on your Windows machine and run:
+### First: do you already have one?
+
+```powershell
+Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub"
+```
+
+**If that prints a line starting with `ssh-ed25519 AAAA...` — you already
+have a key. Skip the rest of Part 1 and go to Part 2.** That line is what
+you'll paste into Oracle. One key works for everything; you don't need a
+separate one per server.
+
+> ⚠️ **If `ssh-keygen` ever asks *"id_ed25519 already exists. Overwrite
+> (y/n)?"* — answer `n`.** Overwriting permanently destroys your existing
+> private key. If you use SSH with GitHub (this project does), that key is
+> almost certainly your GitHub key, and overwriting it breaks your ability
+> to push until you register a new one. There is no reason to overwrite.
+>
+> To check whether it's your GitHub key: `ssh -T git@github.com` — if it
+> greets you by username, that's the one.
+
+### Only if you got an error above (no key yet)
 
 ```powershell
 ssh-keygen -t ed25519 -C "voiceagent-server"
