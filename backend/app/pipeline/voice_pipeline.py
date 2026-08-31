@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime, timezone
 
 from loguru import logger
-from websockets.protocol import State
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -28,61 +27,15 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.groq.llm import GroqLLMService
-from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core.config import settings
 from app.models.conversation import ConversationTurn
+from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
 from app.pipeline.tools import TOOLS
-
-
-class ResilientCartesiaTTSService(CartesiaTTSService):
-    """CartesiaTTSService.start() calls _connect_websocket() exactly once,
-    with no retry — confirmed by reading pipecat's source directly. Pipecat's
-    own WebsocketService reconnect-on-error logic only covers a connection
-    that drops AFTER being established; it does not cover this first attempt.
-
-    In practice, this project's network path to Cartesia has been
-    intermittently slow enough (hit repeatedly on 2026-08-30, 4 separate
-    times in one session — confirmed via direct connection timing tests
-    ranging 0.15s to 6+s) to exceed the handshake timeout on a single try.
-    Since the greeting is the very first thing every session does, one slow
-    attempt meant total silence with no recovery — this is what fixes that.
-
-    Retries only the initial connection a few times with a short backoff.
-    Does not touch pipecat's own mid-session reconnect behaviour at all.
-    """
-    async def _connect_websocket(self):
-        if self._websocket and self._websocket.state is State.OPEN:
-            return
-
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            try:
-                logger.debug(f"Connecting to Cartesia TTS (attempt {attempt}/{max_attempts})")
-                self._websocket = await self._websocket_connect(
-                    f"{self._url}?api_key={self._api_key}&cartesia_version={self._cartesia_version}"
-                )
-                await self._call_event_handler("on_connected")
-                return
-            except Exception as e:
-                self._websocket = None
-                if attempt == max_attempts:
-                    logger.warning(f"Cartesia TTS: all {max_attempts} connection attempts failed: {e}")
-                    await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
-                    await self._call_event_handler("on_connection_error", f"{e}")
-                else:
-                    logger.warning(
-                        f"Cartesia TTS connect attempt {attempt}/{max_attempts} failed "
-                        f"({e}), retrying…"
-                    )
-                    await asyncio.sleep(0.5 * attempt)
 
 
 class AudioDebugger(FrameProcessor):
@@ -310,37 +263,13 @@ async def run_voice_pipeline(
     # though Deepgram's own docs suggest it for noisy environments.
     # 300ms is a standard middle-ground for voice agents — long enough to not
     # cut off a mid-sentence breath, short enough not to sit waiting.
-    stt = DeepgramSTTService(
-        api_key=settings.deepgram_api_key,
-        language=language,
-        endpointing=300,
-        interim_results=True,
-    )
-
-    # Task 1.2: Groq if a key is configured (much lower reply latency — real
-    # ~80ms TTFB vs OpenAI's ~400ms), otherwise fall back to OpenAI. The
-    # bot's stored `llm_model` is an OpenAI-specific model name, so it only
-    # applies on the OpenAI path; Groq uses its own model from settings.
-    if settings.groq_api_key:
-        # reasoning_effort="low": gpt-oss-120b is a reasoning model — without
-        # this it can burn its whole token budget "thinking" before writing
-        # any reply text (verified directly against Groq's API: default
-        # effort returned empty content on a short max_tokens budget, purely
-        # reasoning tokens). "low" keeps replies fast, which is the entire
-        # point of using Groq here.
-        llm = GroqLLMService(
-            api_key=settings.groq_api_key,
-            settings=GroqLLMService.Settings(
-                model=settings.groq_model,
-                extra={"reasoning_effort": "low"},
-            ),
-        )
-        logger.info(f"[PIPELINE] LLM provider: Groq ({settings.groq_model}, reasoning_effort=low)")
-    else:
-        llm = OpenAILLMService(api_key=settings.openai_api_key, model=llm_model)
-        logger.info(f"[PIPELINE] LLM provider: OpenAI ({llm_model})")
-
-    tts = ResilientCartesiaTTSService(api_key=settings.cartesia_api_key, voice_id=voice_id, language=language)
+    # (Task 2.1: STT/LLM/TTS construction now goes through the provider
+    # factory in app/pipeline/providers.py — settings.stt_provider etc.
+    # switch cloud vs. local with no code change here. The endpointing=300
+    # reasoning above still applies; it lives inside get_stt_service() now.)
+    stt = get_stt_service(language=language)
+    llm = get_llm_service(llm_model=llm_model)
+    tts = get_tts_service(voice_id=voice_id, language=language)
 
     # Defense #1 against the Markdown-in-speech problem: tell the model
     # outright not to do it. Applied to every bot regardless of what the
@@ -374,10 +303,19 @@ async def run_voice_pipeline(
     #      `pip install "pipecat-ai[local-smart-turn]"`)
     #   3. Interruptions — `enable_interruptions=True` is the default on the
     #      VAD start strategy, so the bot already stops talking when spoken over.
-    # stop_secs=0.2 (not the old 0.8) matches pipecat's own recommended
-    # VAD_STOP_SECS default — Deepgram's ttfs_p99_latency budget assumes this
-    # value, and Smart Turn v3 (not the VAD silence timer) now makes the real
-    # "are they done talking" call.
+    # stop_secs=0.5 (raised from 0.2 on 2026-08-31): live testing showed a
+    # real turn-splitting bug at 0.2s — a self-correction like "page forty...
+    # no wait, twenty" got cut into TWO separate finalized turns on the brief
+    # pause mid-correction (confirmed via logs: two TranscriptionFrames 2ms
+    # apart, 'Page forty.' then 'Two zero. Page', each independently
+    # triggering its own RAG lookup + reply — the bot answered the
+    # pre-correction fragment before the real question ever completed).
+    # This isn't a hearing/accuracy problem — Deepgram transcribed both
+    # fragments correctly — it's VAD declaring "done talking" too eagerly
+    # during a natural mid-thought pause, before Smart Turn's own classifier
+    # gets enough context to call it incomplete. 0.5s gives a real pause room
+    # to exist without users noticing added latency (turn-taking research
+    # generally puts the "feels slow" threshold well above this).
     #
     # confidence/min_volume: mic-specific, tuned live against real hardware —
     # do not "fix" these back to a textbook default without testing first.
@@ -413,7 +351,7 @@ async def run_voice_pipeline(
                 confidence=0.85,
                 min_volume=0.4,
                 start_secs=0.2,
-                stop_secs=0.2,
+                stop_secs=0.5,
             )),
         ),
     )

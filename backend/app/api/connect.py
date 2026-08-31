@@ -1,7 +1,7 @@
 import asyncio
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.request_handler import (
     IceCandidate,
@@ -12,7 +12,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from pydantic import BaseModel
 
 from app.core.auth import get_current_user
-from app.models.bot import Bot
+from app.core.deps import fetch_owned_bot
 from app.models.user import User
 from app.pipeline.voice_pipeline import run_voice_pipeline
 
@@ -41,9 +41,10 @@ class IcePatchBody(BaseModel):
 
 @router.post("/connect")
 async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_user)):
-    bot = await Bot.get(body.bot_id)
-    if not bot or bot.user_id != str(current_user.id):
-        raise HTTPException(status_code=404, detail="Bot not found")
+    # Task 2.6: bot_id here comes from the request body, not the URL path,
+    # so it uses fetch_owned_bot directly rather than the get_owned_bot
+    # FastAPI dependency (which resolves bot_id from a path parameter).
+    bot = await fetch_owned_bot(body.bot_id, current_user)
 
     request = SmallWebRTCRequest(sdp=body.sdp, type=body.type, pc_id=body.pc_id)
 

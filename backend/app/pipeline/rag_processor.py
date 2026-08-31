@@ -3,7 +3,7 @@ from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.processors.aggregators.llm_context import LLMContext
 
-from app.services.rag import query_context
+from app.services.rag import query_context, rewrite_query
 
 try:
     from pipecat.frames.frames import InterimTranscriptionFrame
@@ -34,8 +34,16 @@ class RAGContextProcessor(FrameProcessor):
             is_final = False  # explicitly skip interim
 
         if is_final and hasattr(frame, 'text') and frame.text and frame.text.strip():
-            logger.info(f"[RAG] Final query: '{frame.text}'")
-            retrieved = await query_context(self._bot_id, frame.text)
+            raw_text = frame.text
+            search_query = await rewrite_query(raw_text)
+            # Keep the raw transcript in the log even though search_query is
+            # what actually gets used — per task 1.6, useful for spotting a
+            # rewrite that went wrong without needing to reproduce it live.
+            if search_query != raw_text:
+                logger.info(f"[RAG] Query rewritten: '{raw_text}' -> '{search_query}'")
+            else:
+                logger.info(f"[RAG] Query (unchanged): '{raw_text}'")
+            retrieved = await query_context(self._bot_id, search_query)
             if retrieved:
                 logger.info(f"[RAG] Retrieved {len(retrieved)} chars of context")
                 enriched = (
@@ -47,7 +55,7 @@ class RAGContextProcessor(FrameProcessor):
                 )
                 self._context.messages[0] = {"role": "system", "content": enriched}
             else:
-                logger.warning(f"[RAG] No context found for: '{frame.text}'")
+                logger.warning(f"[RAG] No context found for: '{search_query}'")
                 self._context.messages[0] = {"role": "system", "content": self._base_prompt}
 
         await self.push_frame(frame, direction)
