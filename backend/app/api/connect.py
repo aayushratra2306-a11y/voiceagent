@@ -1,5 +1,4 @@
 import asyncio
-from typing import List
 
 from fastapi import APIRouter, Depends
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
@@ -36,7 +35,7 @@ class IceCandidateBody(BaseModel):
 
 class IcePatchBody(BaseModel):
     pc_id: str
-    candidates: List[IceCandidateBody]
+    candidates: list[IceCandidateBody]
 
 
 @router.post("/connect")

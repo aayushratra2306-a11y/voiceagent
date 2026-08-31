@@ -1,7 +1,6 @@
-import asyncio
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -31,7 +30,6 @@ from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
-from app.core.config import settings
 from app.models.conversation import ConversationTurn
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
@@ -156,12 +154,12 @@ class TranscriptRecorder(FrameProcessor):
 
         if isinstance(frame, UserStoppedSpeakingFrame):
             if self._user_stopped_at is None:
-                self._user_stopped_at = datetime.now(timezone.utc)
+                self._user_stopped_at = datetime.now(UTC)
         elif isinstance(frame, TranscriptionFrame) and frame.text:
             self._user_transcript = frame.text
         elif isinstance(frame, LLMFullResponseStartFrame):
             if self._llm_first_response_at is None:
-                self._llm_first_response_at = datetime.now(timezone.utc)
+                self._llm_first_response_at = datetime.now(UTC)
         elif isinstance(frame, FunctionCallResultFrame):
             self._tool_calls.append({
                 "name": frame.function_name,
@@ -174,7 +172,7 @@ class TranscriptRecorder(FrameProcessor):
             self._assistant_parts.append(frame.text)
         elif isinstance(frame, BotStartedSpeakingFrame):
             if self._bot_started_speaking_at is None:
-                self._bot_started_speaking_at = datetime.now(timezone.utc)
+                self._bot_started_speaking_at = datetime.now(UTC)
         elif isinstance(frame, BotStoppedSpeakingFrame):
             await self._finalize_turn()
 
@@ -197,7 +195,7 @@ class TranscriptRecorder(FrameProcessor):
             user_stopped_speaking_at=self._user_stopped_at,
             llm_first_response_at=self._llm_first_response_at,
             bot_started_speaking_at=self._bot_started_speaking_at,
-            bot_stopped_speaking_at=datetime.now(timezone.utc),
+            bot_stopped_speaking_at=datetime.now(UTC),
         )
         if self._user_stopped_at:
             if self._llm_first_response_at:

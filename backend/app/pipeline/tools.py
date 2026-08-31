@@ -28,10 +28,9 @@ wrong value.
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from loguru import logger
-
 from pipecat.services.llm_service import FunctionCallParams
 
 from app.models.appointment import Appointment
@@ -45,8 +44,8 @@ async def get_current_datetime(params: FunctionCallParams):
     something relative to "today" or "right now" that you would otherwise
     have to guess at — you do not know the current date on your own.
     """
-    now = datetime.now(timezone.utc)
-    logger.info(f"[TOOL] get_current_datetime called")
+    now = datetime.now(UTC)
+    logger.info("[TOOL] get_current_datetime called")
 
     result = {
         "iso_datetime": now.isoformat(),

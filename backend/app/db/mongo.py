@@ -3,7 +3,6 @@ from beanie import init_beanie
 
 from app.core.config import settings
 
-
 client = motor.motor_asyncio.AsyncIOMotorClient(
     settings.mongodb_url,
     serverSelectionTimeoutMS=5000,

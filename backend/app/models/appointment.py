@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from beanie import Document
 from pydantic import Field
@@ -12,7 +12,7 @@ class Appointment(Document):
     time: str  # e.g. "15:00" — 24-hour, normalized before saving
     purpose: str
     booked_by: str = "voice caller"
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     class Settings:
         name = "appointments"

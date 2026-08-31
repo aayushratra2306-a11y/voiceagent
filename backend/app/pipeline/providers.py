@@ -18,14 +18,13 @@ import asyncio
 from pathlib import Path
 
 from loguru import logger
-from websockets.protocol import State
-
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.piper.tts import PiperTTSService
 from pipecat.services.whisper.stt import WhisperSTTService
+from websockets.protocol import State
 
 from app.core.config import settings
 

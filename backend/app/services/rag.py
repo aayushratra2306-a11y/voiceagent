@@ -119,7 +119,7 @@ async def _embed_sparse(texts: list[str], input_type: str) -> list[dict]:
     values are accepted). Returns Pinecone's native sparse-vector shape
     ({"indices": [...], "values": [...]}) ready to pass straight into an
     upsert or query call."""
-    index = _get_index()  # ensures _pc is initialized
+    _get_index()  # ensures _pc is initialized (return value unused here)
     loop = asyncio.get_event_loop()
     out: list[dict] = []
     for i in range(0, len(texts), _SPARSE_EMBED_BATCH):
@@ -154,7 +154,7 @@ async def upsert_document(bot_id: str, doc_id: str, chunks: list[dict]) -> int:
             "values": emb,
             "metadata": {"text": chunk["text"], "doc_id": doc_id, "page": chunk["page"]},
         }
-        for i, (chunk, emb) in enumerate(zip(chunks, embeddings))
+        for i, (chunk, emb) in enumerate(zip(chunks, embeddings, strict=True))
     ]
     # Same ids/metadata as the dense side (Task 1.8) — lets query_context
     # correlate/dedupe hits from both indexes and lets delete_document_vectors
@@ -165,7 +165,7 @@ async def upsert_document(bot_id: str, doc_id: str, chunks: list[dict]) -> int:
             "sparse_values": sparse_emb,
             "metadata": {"text": chunk["text"], "doc_id": doc_id, "page": chunk["page"]},
         }
-        for i, (chunk, sparse_emb) in enumerate(zip(chunks, sparse_embeddings))
+        for i, (chunk, sparse_emb) in enumerate(zip(chunks, sparse_embeddings, strict=True))
     ]
 
     index = _get_index()

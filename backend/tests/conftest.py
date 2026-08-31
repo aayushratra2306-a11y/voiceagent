@@ -6,9 +6,15 @@
 # import time. Runs against a real, separate database on the same Atlas
 # cluster (not mongomock) so tests exercise real Beanie/Motor behavior;
 # the whole database is dropped after the session so nothing lingers.
+#
+# setdefault, not a hard assignment: a local run and a CI run hitting the
+# same "voiceagent_test" database concurrently would drop each other's data
+# mid-test (the session teardown drops the whole database). CI sets its own
+# DB_NAME (see .github/workflows/ci.yml) specifically to avoid that; this is
+# just the fallback for running pytest locally with no override.
 import os
 
-os.environ["DB_NAME"] = "voiceagent_test"
+os.environ.setdefault("DB_NAME", "voiceagent_test")
 
 import pytest
 import pytest_asyncio

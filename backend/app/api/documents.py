@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.core.auth import get_current_user
 from app.core.deps import get_owned_bot, get_owned_document
 from app.models.bot import Bot
 from app.models.document import Document
 from app.models.user import User
-from app.services.rag import parse_pdf, chunk_text, upsert_document, delete_document_vectors
+from app.services.rag import chunk_text, delete_document_vectors, parse_pdf, upsert_document
 
 router = APIRouter(tags=["documents"])
 

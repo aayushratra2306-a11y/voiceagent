@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from beanie import Document, Indexed
@@ -37,7 +37,7 @@ class ConversationTurn(Document):
     time_to_first_token_ms: int | None = None
     time_to_speech_ms: int | None = None
 
-    created_at: Indexed(datetime) = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: Indexed(datetime) = Field(default_factory=lambda: datetime.now(UTC))
 
     class Settings:
         name = "conversation_turns"

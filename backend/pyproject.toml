@@ -1,0 +1,20 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    # FastAPI's own idiom is `param: X = Depends(...)` / `= File(...)` in a
+    # function signature — that's what B008 (function-call-in-default-arg)
+    # flags, but it's correct and required here, not a real bug.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Debug/logging f-strings routinely carry structured data (scores, previews,
+# ids) past the line-length limit — wrapping them hurts grep-ability far
+# more than it helps readability. Left in the default rule set for the rest
+# of the codebase.
+"app/services/rag.py" = ["E501"]
+"app/db/seed.py" = ["E501"]

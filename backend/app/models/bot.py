@@ -1,6 +1,4 @@
 from beanie import Document
-from pydantic import Field
-from bson import ObjectId
 
 
 class Bot(Document):

@@ -1,7 +1,7 @@
 from loguru import logger
 from pipecat.frames.frames import Frame, TranscriptionFrame
-from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frame_processor import FrameProcessor
 
 from app.services.rag import query_context, rewrite_query
 
@@ -48,7 +48,8 @@ class RAGContextProcessor(FrameProcessor):
                 logger.info(f"[RAG] Retrieved {len(retrieved)} chars of context")
                 enriched = (
                     f"{self._base_prompt}\n\n"
-                    f"IMPORTANT: You have access to the following content extracted from the user's uploaded documents. "
+                    f"IMPORTANT: You have access to the following content extracted from "
+                    f"the user's uploaded documents. "
                     f"Use this content to answer their question directly. "
                     f"Do NOT say you cannot access files — the text below IS the document content:\n\n"
                     f"{retrieved}"
