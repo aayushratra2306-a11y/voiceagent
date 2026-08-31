@@ -76,7 +76,25 @@ async def _worker_main(
     # target), and voice_pipeline.py pulls in the entire pipecat pipeline
     # stack (Silero VAD, Smart Turn's ONNX model, etc.) — no reason to pay
     # that import cost in the parent, which never runs a pipeline itself.
+    # BUG FOUND 2026-08-31 (live test, first real call through this new
+    # per-process path): every database write inside a call — saved
+    # transcripts, order lookups, appointment booking — was silently
+    # failing (TranscriptRecorder threw on every single turn:
+    # beanie/odm/documents.py:1105, "Error processing frame"). Root cause:
+    # multiprocessing uses 'spawn' on Windows, so this child is a genuinely
+    # fresh interpreter — it never inherited the parent's init_beanie()
+    # call from main.py's lifespan, which only ever ran in the parent.
+    # Every Document.insert()/.find_one() in here (TranscriptRecorder,
+    # get_order_status, book_appointment) needs its own init in THIS
+    # process. This is exactly the kind of gap Task 2.4's own "verified the
+    # mechanism, not the WebRTC-specific path live" caveat was flagging.
+    from app.db.mongo import init_db
+    from app.models.appointment import Appointment
+    from app.models.conversation import ConversationTurn
+    from app.models.order import Order
     from app.pipeline.voice_pipeline import run_voice_pipeline
+
+    await init_db([Order, Appointment, ConversationTurn])
 
     handler = SmallWebRTCRequestHandler()
     pipeline_started = asyncio.Event()
