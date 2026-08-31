@@ -15,9 +15,8 @@ threshold by feel before this suite existed.
 import asyncio
 import sys
 
-from tests.rag_eval.qa_set import BOT_ID, RAG_TEST_CASES
-
 from app.services.rag import query_context, rewrite_query
+from tests.rag_eval.qa_set import BOT_ID, RAG_TEST_CASES
 
 
 async def run() -> tuple[int, int, list[dict]]:

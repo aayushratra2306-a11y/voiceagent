@@ -84,3 +84,15 @@ async def test_connect_rejects_another_users_bot_id(client, user_a_token, user_b
         headers=auth_headers(user_b_token),
     )
     assert resp.status_code == 404
+
+
+async def test_connect_ice_requires_authentication(client):
+    # Task 2.4's rewrite of connect.py briefly dropped this route's auth
+    # dependency while restructuring around per-call worker processes —
+    # caught in review before it shipped, and locked in here so it can't
+    # silently regress again.
+    resp = await client.post(
+        "/connect/ice",
+        json={"pc_id": "does-not-matter", "candidates": []},
+    )
+    assert resp.status_code == 401

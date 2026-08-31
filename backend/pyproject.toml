@@ -18,3 +18,4 @@ ignore = [
 # of the codebase.
 "app/services/rag.py" = ["E501"]
 "app/db/seed.py" = ["E501"]
+"tests/rag_eval/qa_set.py" = ["E501"]

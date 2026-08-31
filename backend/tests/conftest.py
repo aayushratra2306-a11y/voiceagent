@@ -31,14 +31,13 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 @pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
 async def _test_db():
-    from app.db.mongo import database
+    from app.db.mongo import database, init_db
     from app.models.appointment import Appointment
     from app.models.bot import Bot
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
     from app.models.user import User
-    from app.db.mongo import init_db
 
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn])
     yield

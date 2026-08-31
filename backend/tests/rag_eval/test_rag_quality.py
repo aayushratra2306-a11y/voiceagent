@@ -10,7 +10,6 @@
 # breaks retrieval), not chasing every point of natural fluctuation.
 import pytest
 
-from tests.rag_eval.qa_set import RAG_TEST_CASES
 from tests.rag_eval.run_eval import run
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
