@@ -15,6 +15,19 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
 
+    # Groq — optional, faster/cheaper LLM alternative to OpenAI.
+    # If set, the voice pipeline uses Groq for the LLM step instead of
+    # OpenAI. Leave blank to keep using OpenAI (no other change needed —
+    # this is the "switch back" the manual's task 1.2 asked for).
+    groq_api_key: str = ""
+    # Llama 3.3 70B (pipecat's built-in default) has been retired from Groq's
+    # catalog — verified 2026-08-30 via /v1/models. gpt-oss-120b is the
+    # current best tool-capable replacement (needed for function calling,
+    # task 1.3): 131k context, cheap, and it's a reasoning model — see the
+    # reasoning_effort="low" setting in voice_pipeline.py, which keeps it
+    # fast for voice rather than letting it "think" before every reply.
+    groq_model: str = "openai/gpt-oss-120b"
+
     # Deepgram
     deepgram_api_key: str
 

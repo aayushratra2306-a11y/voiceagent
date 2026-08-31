@@ -7,14 +7,19 @@ from fastapi.responses import HTMLResponse
 
 from app.api import auth, bots, connect, documents
 from app.db.mongo import init_db
+from app.db.seed import seed_fake_orders
+from app.models.appointment import Appointment
 from app.models.bot import Bot
+from app.models.conversation import ConversationTurn
 from app.models.document import Document
+from app.models.order import Order
 from app.models.user import User
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db([User, Bot, Document])
+    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn])
+    await seed_fake_orders()
     yield
 
 

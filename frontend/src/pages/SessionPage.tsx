@@ -32,7 +32,22 @@ export default function SessionPage() {
     setLog([])
     addLog('Requesting microphone…')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      // Explicit audio constraints — without these, some browsers/setups
+      // don't reliably apply echo cancellation, so the bot's own voice from
+      // the speakers can bleed back into the mic and get picked up as the
+      // user interrupting it. Root-caused 2026-08-30 via backend logs
+      // showing the bot's own replies getting cut short mid-sentence,
+      // correlated with interruption events — classic echo, not a VAD
+      // tuning issue. echoCancellation is the fix; the other two are
+      // standard companions for voice-agent audio quality.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      })
       streamRef.current = stream
 
       const pc = new RTCPeerConnection({
@@ -103,10 +118,14 @@ export default function SessionPage() {
   }
 
   function stopSession() {
-    pcRef.current?.close()
-    pcRef.current = null
-    streamRef.current?.getTracks().forEach(t => t.stop())
-    streamRef.current = null
+    if (pcRef.current) {
+      pcRef.current.close()
+      pcRef.current = null
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
     if (audioRef.current) audioRef.current.srcObject = null
     setStatus('idle')
     setSpeaking(false)
