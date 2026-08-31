@@ -32,7 +32,7 @@ import asyncio
 import multiprocessing as mp
 
 from loguru import logger
-from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
+from pipecat.transports.smallwebrtc.connection import IceServer, SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.request_handler import (
     IceCandidate,
     SmallWebRTCPatchRequest,
@@ -40,10 +40,43 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
+from app.core.config import settings
+
 # An orphaned process (pipeline stuck, cleanup never fired) must not live
 # forever quietly eating memory — the manual's own explicit warning about
 # this exact failure mode. 1 hour is generously above any real call length.
 MAX_CALL_LIFETIME_SECONDS = 60 * 60
+
+
+def _build_ice_servers() -> list[IceServer]:
+    """Task 2.3 — ICE configuration for this call's peer connection.
+
+    STUN alone (what this returns without TURN configured) handles most
+    home and office networks. TURN is the relay that makes calls work from
+    genuinely restrictive networks — corporate firewalls, symmetric NAT,
+    some mobile carriers — where the two sides can never reach each other
+    directly. Without it, those callers simply fail to connect, and there's
+    nothing they can do about it on their end.
+
+    Both are settings-driven so adding a TURN server later is a .env change,
+    not a code change.
+    """
+    servers = [IceServer(urls=url.strip()) for url in settings.stun_servers.split(",") if url.strip()]
+
+    if settings.turn_url:
+        servers.append(
+            IceServer(
+                urls=settings.turn_url,
+                username=settings.turn_username or None,
+                credential=settings.turn_credential or None,
+            )
+        )
+        logger.info(f"[CALL WORKER] ICE: {len(servers) - 1} STUN + TURN relay ({settings.turn_url})")
+    else:
+        logger.info(f"[CALL WORKER] ICE: {len(servers)} STUN, no TURN relay configured "
+                    f"(callers behind restrictive networks may fail to connect — see Task 2.3)")
+
+    return servers
 
 
 def call_worker_main(
@@ -96,7 +129,7 @@ async def _worker_main(
 
     await init_db([Order, Appointment, ConversationTurn])
 
-    handler = SmallWebRTCRequestHandler()
+    handler = SmallWebRTCRequestHandler(ice_servers=_build_ice_servers())
     pipeline_started = asyncio.Event()
     pipeline_task: asyncio.Task | None = None
 

@@ -74,6 +74,25 @@ class Settings(BaseSettings):
     # own separate index, queried alongside the dense one and merged.
     pinecone_sparse_index_name: str = "voiceagent-sparse"
 
+    # Task 2.3 — WebRTC connectivity.
+    #
+    # STUN lets each side discover its own public address; it's enough for
+    # most home/office networks. Found 2026-08-31: the BACKEND was passing
+    # no ICE servers at all (SmallWebRTCRequestHandler() with no arguments)
+    # — only the frontend had STUN configured, so the two sides weren't
+    # symmetric. These defaults fix that at no cost.
+    stun_servers: str = "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"
+    #
+    # TURN is the actual relay — the piece that makes calls work from
+    # genuinely restrictive networks (corporate firewalls, some mobile
+    # carriers, symmetric NAT) where STUN alone fails. This is what task
+    # 2.3 exists to solve. Blank by default; fill these in once a TURN
+    # server exists (self-hosted coturn, or a managed provider) and it
+    # takes effect with no code change.
+    turn_url: str = ""          # e.g. "turn:203.0.113.10:3478"
+    turn_username: str = ""
+    turn_credential: str = ""
+
     # Task 2.7 — error tracking. Blank by default: sentry_sdk.init(dsn="")
     # is a confirmed-safe no-op (verified live 2026-08-31), so this stays
     # completely dormant — zero behavior change — until a real DSN is set.
