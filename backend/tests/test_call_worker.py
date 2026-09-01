@@ -13,6 +13,15 @@
 # in-process: the whole bug was specific to process boundaries (spawn
 # re-imports everything fresh) — an in-process call would never have
 # caught it, same as it wasn't caught by any earlier test.
+#
+# The context is pinned to 'spawn' rather than left to the platform
+# default, because the default is exactly what differs: spawn on Windows,
+# fork on Linux. app/api/connect.py forces spawn everywhere in production
+# for that reason. Left on the default, this test forked on Linux, the
+# child inherited the parent's already-connected Motor client (bound to an
+# event loop that no longer exists in the child), and the write hung until
+# the queue timed out — so it passed on a laptop and failed in CI while
+# testing something production never actually does.
 import multiprocessing as mp
 import os
 
@@ -56,8 +65,9 @@ def _child_writes_to_db(result_queue: mp.Queue) -> None:
 
 
 async def test_call_worker_child_process_can_write_to_the_database():
-    result_queue: mp.Queue = mp.Queue()
-    proc = mp.Process(target=_child_writes_to_db, args=(result_queue,), daemon=True)
+    ctx = mp.get_context("spawn")
+    result_queue: mp.Queue = ctx.Queue()
+    proc = ctx.Process(target=_child_writes_to_db, args=(result_queue,), daemon=True)
     proc.start()
     result = result_queue.get(timeout=20)
     proc.join(timeout=5)

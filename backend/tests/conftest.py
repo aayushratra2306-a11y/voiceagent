@@ -16,6 +16,14 @@ import os
 
 os.environ.setdefault("DB_NAME", "voiceagent_test")
 
+# Task 2.7 — deliberately blanked, not setdefault'd: once a real DSN exists
+# in backend/.env, every deliberately-triggered error in this suite (the
+# rate-limit test, the ownership 404s) would otherwise be reported to the
+# production Sentry project as if it were a real incident. A blank DSN makes
+# sentry_sdk.init() a confirmed no-op. Must happen before main.py is
+# imported, which is where init() runs.
+os.environ["SENTRY_DSN"] = ""
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
