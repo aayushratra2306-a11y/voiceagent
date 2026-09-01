@@ -115,15 +115,34 @@ jobs:
   # runs and reports on every push, just doesn't gate anything yet.
   # Promote it to a `needs:` of a branch-protection rule once it's proven
   # stable over a few weeks of real runs.
+  #
+  # Runs pytest, NOT `python -m tests.rag_eval.run_eval`. The CLI exits
+  # non-zero unless all 32 questions pass, but the live baseline is 28/32
+  # and those 4 misses are known, understood limitations — so as a CI step
+  # it failed on every single run and could never have done anything else.
+  # A check that cannot pass reports nothing and teaches you to ignore red.
+  # test_rag_quality.py asserts against a margin (24/32) instead, which is
+  # what actually catches a regression rather than normal retrieval drift.
   rag-eval:
     runs-on: ubuntu-latest
     needs: test
     continue-on-error: true
+    # Retrieval itself never touches MongoDB — only Pinecone, OpenAI and
+    # Groq. The container is here because tests/conftest.py has an autouse,
+    # session-scoped fixture that calls init_db(), and a conftest applies to
+    # every subdirectory beneath it. Without a database to reach, that
+    # fixture errors before a single retrieval question runs.
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
-      # Never actually connected to — this suite only touches Pinecone,
-      # OpenAI and Groq. The value exists purely so Settings() can
-      # construct (mongodb_url is a required field), and Motor connects
-      # lazily, so a URL pointing at nothing is fine here.
       MONGODB_URL: mongodb://localhost:27017
       DB_NAME: voiceagent_ci
       SECRET_KEY: ${{ secrets.SECRET_KEY }}
@@ -140,7 +159,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
-      - run: python -m tests.rag_eval.run_eval
+      - run: pytest tests/rag_eval -v
 
   # --- Deployment: intentionally disabled. -----------------------------
   # Uncomment and fill in once a deploy target is chosen AND the project
