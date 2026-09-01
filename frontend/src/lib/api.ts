@@ -123,6 +123,9 @@ export interface BotDocument {
   filename: string
   chunk_count: number
   created_at: string
+  // Task 2.10 — false for documents uploaded before original files were
+  // stored. They still cite correctly, they just can't be opened.
+  has_file?: boolean
 }
 
 export async function listDocuments(botId: string): Promise<BotDocument[]> {
@@ -147,6 +150,32 @@ export async function uploadDocument(botId: string, file: File): Promise<BotDocu
 
 export async function deleteDocument(docId: string): Promise<void> {
   return request(`/documents/${docId}`, { method: 'DELETE' })
+}
+
+// Task 2.10 — fetch a source PDF as a blob URL so a citation can open it.
+//
+// Deliberately NOT a plain <a href="/documents/x/file"> link: that route
+// requires the Authorization header (it serves a customer's own uploaded
+// documents), and a browser navigation can't send one. Putting the token
+// in the query string instead would leak it into history and server logs.
+// So: fetch it with the header, hand the browser a blob.
+//
+// Doesn't go through request() because the response is binary, not JSON —
+// but it repeats the same 401-refresh-once behavior so a citation clicked
+// after the 15-minute access token expires still opens.
+export async function fetchDocumentBlobUrl(docId: string, _retried = false): Promise<string> {
+  const res = await fetch(`${BASE}/documents/${docId}/file`, { headers: authHeaders() })
+
+  if (res.status === 401 && !_retried) {
+    await refreshAccessToken()
+    return fetchDocumentBlobUrl(docId, true)
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail ?? 'Could not open document')
+  }
+
+  return URL.createObjectURL(await res.blob())
 }
 
 // ── WebRTC connect ──────────────────────────────────────────────────────────

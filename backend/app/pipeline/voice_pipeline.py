@@ -359,7 +359,11 @@ async def run_voice_pipeline(
     pipeline_steps = [transport.input(), stt, AudioDebugger()]
 
     if bot_id:
-        pipeline_steps.append(RAGContextProcessor(bot_id, context, voice_system_prompt))
+        # webrtc_connection is passed so the processor can publish Task 2.10
+        # source citations straight to the browser over the data channel.
+        pipeline_steps.append(
+            RAGContextProcessor(bot_id, context, voice_system_prompt, webrtc_connection)
+        )
 
     pipeline_steps += [
         user_aggregator,

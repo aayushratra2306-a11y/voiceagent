@@ -258,7 +258,17 @@ RERANK_THRESHOLD = 0.15
 RERANK_MODEL = "bge-reranker-v2-m3"
 
 
-async def query_context(bot_id: str, query: str, top_k: int = RETRIEVE_TOP_K) -> str:
+async def query_context(
+    bot_id: str, query: str, top_k: int = RETRIEVE_TOP_K
+) -> tuple[str, list[dict]]:
+    """Returns (context_text, sources).
+
+    Task 2.10 added the second element: one entry per cited (document, page)
+    as {"doc_id", "page", "score"}, ordered best-first. Empty list when
+    nothing passed the rerank threshold — which is the signal the frontend
+    uses to say the answer came from general knowledge rather than from the
+    customer's documents.
+    """
     index = _get_index()
     sparse_index = _get_sparse_index()
     loop = asyncio.get_event_loop()
@@ -311,17 +321,32 @@ async def query_context(bot_id: str, query: str, top_k: int = RETRIEVE_TOP_K) ->
         logger.debug(f"[RAG] sparse candidate score={m.score:.3f} page={m.metadata.get('page')} text={m.metadata.get('text','')[:80]}")
 
     # Dedupe by id — the same chunk very often surfaces on both sides.
+    #
+    # Task 2.10 — each chunk's metadata is kept alongside its text so an
+    # answer can be attributed back to a document and page. Keyed by TEXT
+    # rather than id on purpose: the reranker returns documents by their
+    # text content and drops the ids we sent, so text is the only thing
+    # that survives the round trip.
     seen_ids: set[str] = set()
     candidates: list[str] = []
+    meta_by_text: dict[str, dict] = {}
     for m in list(dense_results.matches) + list(sparse_results.matches):
         if m.id in seen_ids or "text" not in m.metadata:
             continue
         seen_ids.add(m.id)
-        candidates.append(m.metadata["text"])
+        text = m.metadata["text"]
+        candidates.append(text)
+        raw_page = m.metadata.get("page")
+        meta_by_text[text] = {
+            "doc_id": m.metadata.get("doc_id"),
+            # Pinecone returns numeric metadata as float — 7.0 reads badly
+            # as a page number.
+            "page": int(raw_page) if raw_page is not None else None,
+        }
 
     if not candidates:
         logger.info(f"[RAG] 0 candidates retrieved (page_filter={page_num})")
-        return ""
+        return "", []
 
     try:
         reranked = await loop.run_in_executor(
@@ -336,15 +361,33 @@ async def query_context(bot_id: str, query: str, top_k: int = RETRIEVE_TOP_K) ->
         )
         for r in reranked.data:
             logger.debug(f"[RAG] reranked score={r.score:.4f} text={r.document['text'][:80]}")
-        matches = [r.document["text"] for r in reranked.data if r.score > RERANK_THRESHOLD]
-        logger.info(f"[RAG] {len(matches)}/{len(reranked.data)} reranked matches passed threshold (from {len(candidates)} candidates, page_filter={page_num})")
+        scored = [(r.document["text"], r.score) for r in reranked.data if r.score > RERANK_THRESHOLD]
+        logger.info(f"[RAG] {len(scored)}/{len(reranked.data)} reranked matches passed threshold (from {len(candidates)} candidates, page_filter={page_num})")
     except Exception as e:
         # Fail open: a broken reranker call should degrade to the old
         # raw-similarity behavior, never break the whole RAG lookup.
+        # Score is None here rather than the raw cosine value — those sit on
+        # a completely different scale (see RERANK_THRESHOLD) and showing
+        # one to a user beside a reranked score would be actively wrong.
         logger.warning(f"[RAG] Rerank failed, falling back to raw similarity: {e}")
-        matches = candidates[:RERANK_TOP_N]
+        scored = [(t, None) for t in candidates[:RERANK_TOP_N]]
 
-    return "\n\n".join(matches)
+    # One citation per (document, page). Several retrieved chunks landing on
+    # the same page is the common case, and listing it three times reads as
+    # a bug rather than as thoroughness.
+    sources: list[dict] = []
+    seen_pages: set[tuple] = set()
+    for text, score in scored:
+        meta = meta_by_text.get(text)
+        if meta is None:
+            continue
+        key = (meta["doc_id"], meta["page"])
+        if key in seen_pages:
+            continue
+        seen_pages.add(key)
+        sources.append({**meta, "score": score})
+
+    return "\n\n".join(t for t, _ in scored), sources
 
 
 # ── Pinecone delete ────────────────────────────────────────────────────────────

@@ -130,10 +130,15 @@ async def _worker_main(
     from app.db.mongo import init_db
     from app.models.appointment import Appointment
     from app.models.conversation import ConversationTurn
+    from app.models.document import Document
     from app.models.order import Order
     from app.pipeline.voice_pipeline import run_voice_pipeline
 
-    await init_db([Order, Appointment, ConversationTurn])
+    # Document is here for Task 2.10: the RAG processor resolves doc_id ->
+    # filename to cite a source. Beanie raises CollectionWasNotInitialized
+    # for any model missing from this list, so an omission here is the same
+    # failure this whole init_db call exists to fix.
+    await init_db([Order, Appointment, ConversationTurn, Document])
 
     handler = SmallWebRTCRequestHandler(ice_servers=_build_ice_servers())
     pipeline_started = asyncio.Event()

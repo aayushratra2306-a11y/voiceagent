@@ -24,7 +24,7 @@ async def run() -> tuple[int, int, list[dict]]:
     for case in RAG_TEST_CASES:
         question, expected_page = case["question"], case["expected_page"]
         search_query = await rewrite_query(question)
-        retrieved = await query_context(BOT_ID, search_query)
+        retrieved, _sources = await query_context(BOT_ID, search_query)
 
         if expected_page is None:
             passed = retrieved == ""
