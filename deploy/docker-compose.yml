@@ -58,9 +58,28 @@ services:
     # ever sees the private address, so without this coturn advertises
     # relay candidates nobody can reach, and every restrictive-network call
     # keeps failing with no obvious reason why.
+    #
+    # relay-ip matters just as much, and is easier to miss because nothing
+    # errors. FOUND 2026-09-01 on the first live call: with no relay-ip,
+    # coturn auto-discovers EVERY local interface and happily allocates
+    # relay sockets on Docker's bridges (172.17.0.1, 172.18.0.1) as well as
+    # the real NIC. A bare --external-ip then labels all of them with the
+    # public address, so a browser gets a relay candidate that looks
+    # perfectly correct, sends audio to it, and the packets arrive on the
+    # real NIC where nothing is listening. Silent drop, ICE goes
+    # checking -> disconnected, and no log anywhere says why.
+    #
+    # Pinning relay-ip to the real NIC, and using external-ip's PUBLIC/
+    # PRIVATE form so coturn knows which local address the public one maps
+    # to, is the standard cloud-VM configuration.
+    #
+    # Listening addresses are deliberately left on auto-discovery: the
+    # backend container reaches coturn from Docker's network, and
+    # restricting listeners would cut that path.
     command: >
       -c /etc/coturn/turnserver.conf
-      --external-ip=${TURN_PUBLIC_IP}
+      --relay-ip=${TURN_LISTEN_IP}
+      --external-ip=${TURN_PUBLIC_IP}/${TURN_LISTEN_IP}
       --user=${TURN_USER}:${TURN_PASSWORD}
 
 volumes:
