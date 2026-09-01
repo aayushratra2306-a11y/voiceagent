@@ -30,6 +30,7 @@ from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
+from app.core.tracing import setup_call_tracing
 from app.models.conversation import ConversationTurn
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
@@ -389,12 +390,23 @@ async def run_voice_pipeline(
     # Task 1.1 found on VAD. Harmless here (the transport's own
     # TransportParams already does the real job), but worth removing
     # rather than leaving misleading no-op code in place.
+    # Task 2.7 — set up before the task is built, because enable_tracing is
+    # decided at construction. Returns False (and stays completely inert)
+    # unless the langfuse_* settings are filled in, so the default build is
+    # unchanged. Done here rather than at import: each call is its own
+    # process, and OpenTelemetry's provider is per-process global state.
+    tracing_enabled = setup_call_tracing(conversation_id=session_id)
+
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
+        enable_tracing=tracing_enabled,
+        # Ties every span from this call together under one trace, so the
+        # dashboard shows a conversation rather than loose per-stage spans.
+        conversation_id=session_id,
     )
 
     @transport.event_handler("on_client_connected")

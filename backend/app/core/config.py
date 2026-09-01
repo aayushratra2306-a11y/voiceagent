@@ -101,11 +101,13 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
 
     # Task 2.7 — self-hosted Langfuse (AI call cost/latency dashboard).
-    # Points at a local Langfuse instance per deploy/docker-compose.langfuse.yml
-    # — needs Docker, which isn't installed in this environment, so the
-    # instrumentation code is wired in but genuinely unverified end-to-end.
-    # Blank host/keys means the OpenTelemetry exporter below is never
-    # configured, so this is equally dormant by default.
+    # Consumed by app/core/tracing.py, which exports pipecat's per-stage
+    # spans over OTLP. All three must be set for tracing to switch on;
+    # blank (the default) means no exporter is built and pipecat's tracing
+    # stays off entirely, so this is dormant with zero overhead.
+    # Requires Langfuse v3 or Langfuse Cloud — v2 has no OTLP endpoint.
+    # See deploy/docker-compose.langfuse.yml, including its warning about
+    # the RAM this needs relative to the current VM.
     langfuse_host: str = ""
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

@@ -1,0 +1,133 @@
+# Task 2.7 — self-hosted Langfuse (AI call cost/latency dashboard).
+#
+# ⚠ NOT verified end-to-end. Written from Langfuse's documented self-hosting
+# setup; no environment available here could run it. Langfuse's compose
+# changes between releases — if this drifts, their docs are the source of
+# truth: https://langfuse.com/self-hosting/docker-compose
+#
+# ⚠ RESOURCES. This is v3, not v2. v2 was pinned here before and could never
+# have worked: OTLP ingestion — the whole mechanism app/core/tracing.py uses
+# — only exists from v3 onwards. But v3 needs ClickHouse, Redis and S3
+# storage as well as Postgres, so it is roughly 6 containers and wants
+# ~8GB of RAM. The voiceagent VM is an e2-medium with 4GB, already running
+# the backend, Caddy and coturn. Do NOT bring this up on that VM without
+# checking free memory first — the realistic outcome is the OOM killer
+# taking down live calls to make room for a dashboard.
+#
+#   free -h   # before doing anything
+#
+# The alternatives, both of which keep tracing working unchanged because
+# app/core/tracing.py speaks plain OTLP:
+#   - Langfuse Cloud free tier: no VM load at all, but conversation data
+#     leaves infrastructure you control (see the manual's own tip on 2.7).
+#   - A separate small VM for observability, so a dashboard can never
+#     compete for memory with a live call.
+#
+# To use, once you have somewhere with the RAM for it:
+#   1. Replace every changeme-* value below. ENCRYPTION_KEY must be exactly
+#      64 hex chars:  openssl rand -hex 32
+#   2. docker compose -f deploy/docker-compose.langfuse.yml up -d
+#   3. Open http://<host>:3000, create an account and a project
+#   4. Put the generated keys in backend/.env (and the VM's deploy/.env):
+#        LANGFUSE_HOST=http://<host>:3000
+#        LANGFUSE_PUBLIC_KEY=pk-lf-...
+#        LANGFUSE_SECRET_KEY=sk-lf-...
+#   5. Restart the backend. app/core/tracing.py picks them up and pipecat
+#      starts exporting a trace per conversation.
+
+services:
+  langfuse-web:
+    image: langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on: [langfuse-db, clickhouse, minio, redis]
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:changeme-db-password@langfuse-db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: changeme-generate-with-openssl-rand-hex-32
+      SALT: changeme-generate-with-openssl-rand-hex-32
+      ENCRYPTION_KEY: changeme-exactly-64-hex-chars-openssl-rand-hex-32
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: changeme-clickhouse-password
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: changeme-redis-password
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: changeme-minio-password
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+
+  # Ingestion runs in its own process in v3. Without it the UI comes up but
+  # stays permanently empty, which reads as "tracing is broken" when in fact
+  # nothing is consuming the queue.
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on: [langfuse-db, clickhouse, minio, redis]
+    environment:
+      DATABASE_URL: postgresql://langfuse:changeme-db-password@langfuse-db:5432/langfuse
+      SALT: changeme-generate-with-openssl-rand-hex-32
+      ENCRYPTION_KEY: changeme-exactly-64-hex-chars-openssl-rand-hex-32
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: changeme-clickhouse-password
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: changeme-redis-password
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: changeme-minio-password
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+
+  langfuse-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: changeme-db-password
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_db_data:/var/lib/postgresql/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: changeme-clickhouse-password
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: changeme-minio-password
+    volumes:
+      - langfuse_minio_data:/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: --requirepass changeme-redis-password
+
+volumes:
+  langfuse_db_data:
+  langfuse_clickhouse_data:
+  langfuse_minio_data:
