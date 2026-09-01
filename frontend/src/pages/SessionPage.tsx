@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { listBots, connectBot } from '../lib/api'
+import { listBots, connectBot, getIceServers } from '../lib/api'
 import type { Bot } from '../lib/api'
 
 type Status = 'idle' | 'connecting' | 'connected' | 'error'
@@ -50,13 +50,30 @@ export default function SessionPage() {
       })
       streamRef.current = stream
 
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ],
-      })
+      // Task 2.3 — ask the server what ICE servers to use rather than
+      // hardcoding STUN here. STUN alone only tells each side its own public
+      // address; it cannot help when neither side is directly reachable,
+      // which is exactly the case on symmetric NAT and many mobile carriers.
+      // The TURN relay that handles those lives in the backend's config, so
+      // the browser has to be told about it.
+      //
+      // Falls back to public STUN if the lookup fails: that still connects
+      // on ordinary networks, which beats not starting the call at all.
+      let iceServers: RTCIceServer[] = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+      try {
+        iceServers = await getIceServers()
+        const hasTurn = iceServers.some(s =>
+          (Array.isArray(s.urls) ? s.urls : [s.urls]).some(u => u.startsWith('turn:')),
+        )
+        addLog(`ICE config: ${iceServers.length} server(s)${hasTurn ? ', TURN relay available' : ', STUN only'}`)
+      } catch {
+        addLog('ICE config lookup failed — falling back to public STUN')
+      }
+
+      const pc = new RTCPeerConnection({ iceServers })
       pcRef.current = pc
 
       stream.getTracks().forEach(t => pc.addTrack(t, stream))

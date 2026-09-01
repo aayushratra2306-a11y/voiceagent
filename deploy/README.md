@@ -102,8 +102,16 @@ cd voiceagent
 cp deploy/.env.example deploy/.env
 nano deploy/.env          # fill in everything — see comments in the file
 
-# Build the frontend (Caddy serves the static output)
-sudo apt install -y nodejs npm
+# Build the frontend (Caddy serves the static output).
+#
+# NodeSource, not `apt install nodejs`: Ubuntu 22.04's own package is Node
+# 12, and the frontend is on Vite 8, which requires Node >= 20.19. The apt
+# route fails at `npm run build` with a syntax error that looks like broken
+# code rather than a too-old runtime.
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+node -v          # expect v22.x
+
 cd frontend && npm install && npm run build && cd ..
 
 docker compose -f deploy/docker-compose.yml up -d --build

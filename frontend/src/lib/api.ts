@@ -150,6 +150,17 @@ export async function deleteDocument(docId: string): Promise<void> {
 }
 
 // ── WebRTC connect ──────────────────────────────────────────────────────────
+
+// Task 2.3 — ICE config comes from the server, not a hardcoded list here.
+// Until 2026-09-01 this page pinned three Google STUN servers, so the TURN
+// relay the backend deploys was invisible to the browser: the one peer that
+// actually needs a relay never knew there was one. Fetching it means a TURN
+// change is a server-side .env edit, not a frontend rebuild.
+export async function getIceServers(): Promise<RTCIceServer[]> {
+  const data: { iceServers: RTCIceServer[] } = await request('/connect/ice-servers')
+  return data.iceServers
+}
+
 export async function connectBot(
   botId: string, sdp: string, type: string, pcId?: string
 ): Promise<{ sdp: string; type: string; pc_id: string }> {

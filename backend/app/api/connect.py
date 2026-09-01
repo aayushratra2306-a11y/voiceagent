@@ -6,11 +6,36 @@ from loguru import logger
 from pydantic import BaseModel
 
 from app.core.auth import get_current_user
+from app.core.config import settings
 from app.core.deps import fetch_owned_bot
 from app.models.user import User
 from app.pipeline.call_worker import call_worker_main
 
 router = APIRouter(tags=["voice"])
+
+# Task 2.4 — 'spawn', explicitly, on every platform.
+#
+# FOUND 2026-09-01, first Linux deployment: multiprocessing's default start
+# method is 'spawn' on Windows but 'fork' on Linux, and every line of this
+# per-call-process design had only ever run under spawn. Under fork the
+# child inherits the parent's memory, so app/db/mongo.py's module-level
+# Motor client arrives already bound to the PARENT's event loop. The
+# child's own init_db() then dies with "got Future attached to a different
+# loop", the SDP answer is never queued, and connect() below 504s — every
+# call failing before a single audio frame moves, on a code path that works
+# perfectly in Windows dev.
+#
+# Forcing spawn makes Linux behave exactly like the environment this was
+# written and tested in, and sidesteps fork-safety as a category: pymongo
+# is explicitly not fork-safe, and neither are the onnxruntime and aiortc
+# thread pools the pipeline stands up.
+_MP = mp.get_context("spawn")
+
+# A spawned child is a genuinely fresh interpreter, so it re-imports the
+# whole pipecat stack (Silero VAD, Smart Turn's ONNX model, torch) before
+# it can answer. On a small cloud VM with a cold page cache that is well
+# over the 15s this used to allow.
+CALL_SETUP_TIMEOUT_SECONDS = 45
 
 # Task 2.4 — pc_id -> (process, ice_queue) for every currently-live call.
 # Populated in connect(), read by ice_candidate() to route trickle ICE to
@@ -54,6 +79,33 @@ class IcePatchBody(BaseModel):
     candidates: list[IceCandidateBody]
 
 
+@router.get("/connect/ice-servers")
+async def ice_servers(current_user: User = Depends(get_current_user)):
+    """Task 2.3 — ICE configuration for the BROWSER side of the call.
+
+    FOUND 2026-09-01: task 2.3 made the backend's ICE config settings-driven
+    and left the frontend with a hardcoded STUN-only list, so the TURN relay
+    this project stands up was invisible to the one peer that actually needs
+    it — the caller. STUN only tells each side its own public address, which
+    is plenty on an ordinary connection and useless behind symmetric NAT or
+    a carrier-grade-NAT mobile network. Serving this from settings means
+    both peers read one configuration and a TURN change stays a .env edit.
+
+    Authenticated on purpose: TURN credentials are a shared secret, and an
+    open relay is someone else's bandwidth on your bill.
+    """
+    servers: list[dict] = [
+        {"urls": url.strip()} for url in settings.stun_servers.split(",") if url.strip()
+    ]
+    if settings.turn_url:
+        servers.append({
+            "urls": settings.turn_url,
+            "username": settings.turn_username,
+            "credential": settings.turn_credential,
+        })
+    return {"iceServers": servers}
+
+
 @router.post("/connect")
 async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_user)):
     # Task 2.6: bot_id here comes from the request body, not the URL path,
@@ -72,9 +124,10 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         "bot_id": str(bot.id),
     }
 
-    answer_queue: mp.Queue = mp.Queue()
-    ice_queue: mp.Queue = mp.Queue()
-    proc = mp.Process(
+    # Queues must come from the same context as the process that reads them.
+    answer_queue: mp.Queue = _MP.Queue()
+    ice_queue: mp.Queue = _MP.Queue()
+    proc = _MP.Process(
         target=call_worker_main,
         args=(bot_config, body.sdp, body.type, body.pc_id, answer_queue, ice_queue),
         daemon=True,
@@ -86,7 +139,9 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         # answer_queue.get() is a blocking call — run it off the event loop
         # so the API server keeps serving other requests while this call's
         # process negotiates its WebRTC connection.
-        answer = await loop.run_in_executor(None, lambda: answer_queue.get(timeout=15))
+        answer = await loop.run_in_executor(
+            None, lambda: answer_queue.get(timeout=CALL_SETUP_TIMEOUT_SECONDS)
+        )
     except Exception as e:
         proc.terminate()
         raise HTTPException(status_code=504, detail="Call setup timed out") from e

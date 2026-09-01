@@ -114,9 +114,15 @@ async def _worker_main(
     # transcripts, order lookups, appointment booking — was silently
     # failing (TranscriptRecorder threw on every single turn:
     # beanie/odm/documents.py:1105, "Error processing frame"). Root cause:
-    # multiprocessing uses 'spawn' on Windows, so this child is a genuinely
-    # fresh interpreter — it never inherited the parent's init_beanie()
-    # call from main.py's lifespan, which only ever ran in the parent.
+    # this child is a genuinely fresh interpreter — it never inherited the
+    # parent's init_beanie() call from main.py's lifespan, which only ever
+    # ran in the parent.
+    #
+    # That "fresh interpreter" is now guaranteed rather than assumed:
+    # connect.py forces the 'spawn' start method on every platform. It was
+    # only spawn-by-default on Windows, and the fork default on Linux made
+    # this very line fail on the first real deployment — see the long note
+    # at the top of app/api/connect.py.
     # Every Document.insert()/.find_one() in here (TranscriptRecorder,
     # get_order_status, book_appointment) needs its own init in THIS
     # process. This is exactly the kind of gap Task 2.4's own "verified the
