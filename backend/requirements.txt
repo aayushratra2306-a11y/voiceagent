@@ -136,8 +136,21 @@ tokenizers==0.23.1
 toml==0.10.2
 tomli==2.4.1
 tomli_w==1.2.0
-torch==2.13.0
-torchaudio==2.11.0
+# torch/torchaudio deliberately NOT pinned here. They were captured by a
+# `pip freeze` on the Windows dev machine, but nothing actually needs them:
+# `Required-by` is empty, faster-whisper runs on CTranslate2, and the VAD in
+# use is SileroVADAnalyzer, which is onnxruntime. Every package that mentions
+# torch does so behind an optional extra (pipecat-ai[local-smart-turn],
+# transformers[torch], piper-tts[train]) that this project does not install.
+#
+# It mattered because on Linux pip resolves torch to the CUDA build: roughly
+# 10GB of GPU libraries, downloaded into a container running on a 4GB
+# e2-medium that has no GPU and never will. That nearly filled the 30GB disk
+# on a routine rebuild.
+#
+# If local Smart Turn detection is ever adopted, add torch back explicitly
+# AND pin the CPU wheels:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 tqdm==4.70.0
 transformers==5.16.1
 truststore==0.10.4
