@@ -1,0 +1,88 @@
+# Task 2.3 — full deployment: backend + TURN relay + HTTPS reverse proxy.
+#
+# Run from the repo root ON THE SERVER:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Requires deploy/.env (copy deploy/.env.example and fill it in).
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Local Whisper/Piper models (Task 2.2), if you ever switch the
+      # providers to local — persisted so they aren't re-downloaded on
+      # every container restart.
+      - local_models:/app/local_models
+    expose:
+      - "8080"
+    # Not published to the host: only Caddy should reach the backend, so
+    # nothing can bypass HTTPS by hitting the port directly.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The built frontend (npm run build output). Build it locally and
+      # copy frontend/dist to the server, or build on the server.
+      - ../frontend/dist:/srv/frontend:ro
+      - caddy_data:/data      # Let's Encrypt certs — MUST persist, or every
+      - caddy_config:/config  # restart re-requests certs and hits rate limits
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    # host networking on purpose: TURN allocates relay ports across a
+    # range, and Docker's per-port publishing makes that painful and slow.
+    # This is the standard way to run coturn in Docker on Linux.
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    # Environment-specific values come in as CLI flags, NOT through the
+    # config file — coturn reads turnserver.conf literally and does not
+    # expand ${VARS}, whereas docker-compose substitutes these here.
+    #
+    # external-ip is the one people miss: on a cloud VM the interface only
+    # ever sees the private address, so without this coturn advertises
+    # relay candidates nobody can reach, and every restrictive-network call
+    # keeps failing with no obvious reason why.
+    #
+    # relay-ip matters just as much, and is easier to miss because nothing
+    # errors. FOUND 2026-09-01 on the first live call: with no relay-ip,
+    # coturn auto-discovers EVERY local interface and happily allocates
+    # relay sockets on Docker's bridges (172.17.0.1, 172.18.0.1) as well as
+    # the real NIC. A bare --external-ip then labels all of them with the
+    # public address, so a browser gets a relay candidate that looks
+    # perfectly correct, sends audio to it, and the packets arrive on the
+    # real NIC where nothing is listening. Silent drop, ICE goes
+    # checking -> disconnected, and no log anywhere says why.
+    #
+    # Pinning relay-ip to the real NIC, and using external-ip's PUBLIC/
+    # PRIVATE form so coturn knows which local address the public one maps
+    # to, is the standard cloud-VM configuration.
+    #
+    # Listening addresses are deliberately left on auto-discovery: the
+    # backend container reaches coturn from Docker's network, and
+    # restricting listeners would cut that path.
+    command: >
+      -c /etc/coturn/turnserver.conf
+      --relay-ip=${TURN_LISTEN_IP}
+      --external-ip=${TURN_PUBLIC_IP}/${TURN_LISTEN_IP}
+      --user=${TURN_USER}:${TURN_PASSWORD}
+
+volumes:
+  caddy_data:
+  caddy_config:
+  local_models:

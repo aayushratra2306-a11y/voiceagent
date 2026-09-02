@@ -1,0 +1,44 @@
+# Task 2.3 — reverse proxy + automatic HTTPS.
+#
+# HTTPS is not optional here: browsers refuse microphone access
+# (getUserMedia) on any non-HTTPS origin except localhost. A phone on
+# mobile data hitting a plain http:// address simply cannot grant mic
+# permission, so the call can never start. Caddy gets and renews a real
+# Let's Encrypt certificate automatically — just point a domain at this
+# VM and set DOMAIN below.
+#
+# Serving frontend and backend from ONE origin is deliberate:
+#   - the frontend's existing relative API paths (/auth, /bots, ...) keep
+#     working unchanged, exactly as they do behind Vite's dev proxy
+#   - CORS stops being a concern entirely (same origin)
+#   - the refresh-token cookie stays same-site, no cross-origin cookie
+#     rules to fight (Task 2.5)
+
+{$DOMAIN} {
+	encode gzip
+
+	# API routes -> backend. Everything else falls through to the SPA.
+	handle /auth/* {
+		reverse_proxy backend:8080
+	}
+	handle /bots/* {
+		reverse_proxy backend:8080
+	}
+	handle /connect* {
+		reverse_proxy backend:8080
+	}
+	handle /documents/* {
+		reverse_proxy backend:8080
+	}
+	handle /health {
+		reverse_proxy backend:8080
+	}
+
+	# Static frontend build (vite's dist/), with SPA fallback so client-side
+	# routes like /dashboard survive a hard refresh.
+	handle {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
+	}
+}
