@@ -42,7 +42,14 @@ def setup_call_tracing(conversation_id: str | None = None) -> bool:
 
         exporter = OTLPSpanExporter(
             endpoint=f"{settings.langfuse_host.rstrip('/')}/api/public/otel/v1/traces",
-            headers={"Authorization": f"Basic {auth}"},
+            headers={
+                "Authorization": f"Basic {auth}",
+                # Without this, Langfuse v4 batches ingestion and a trace can
+                # take up to ten minutes to appear. That delay reads exactly
+                # like a broken integration, which is a bad way to spend an
+                # afternoon when the setup is in fact correct.
+                "x-langfuse-ingestion-version": "4",
+            },
         )
 
         ok = setup_tracing(service_name="voice-agent", exporter=exporter)
