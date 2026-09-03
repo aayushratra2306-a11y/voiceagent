@@ -34,6 +34,9 @@ export default function SessionPage() {
   const streamRef = useRef<MediaStream | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const dcRef = useRef<RTCDataChannel | null>(null)
+  // Set the instant a start begins, cleared only by stopSession(). See the
+  // comment at the top of startSession() for why `status` cannot do this.
+  const startingRef = useRef(false)
   // Blob URLs stay alive while their tab is open — revoking one immediately
   // after window.open() gives the user a blank viewer. Held here and
   // released together when the session ends.
@@ -51,6 +54,23 @@ export default function SessionPage() {
   }
 
   async function startSession() {
+    // Re-entrancy guard. `status` cannot do this job: setStatus is async, so
+    // two clicks landing in the same React batch both read status==='idle'
+    // and both proceed. The second run then overwrites pcRef.current, which
+    // strands the FIRST RTCPeerConnection — still live, still sending the
+    // mic, but no longer referenced anywhere the page can reach, so
+    // stopSession() cannot close it and the user cannot see it exists.
+    // Root-caused 2026-09-03 from a call where exactly that happened: the
+    // server ran two pipelines for one caller and the two bots talked over
+    // each other. A ref is checked and set synchronously, so it actually
+    // closes the window that `status` leaves open.
+    if (startingRef.current) return
+    startingRef.current = true
+    // Belt and braces — never build a second connection on top of a live
+    // one, whatever route got us here. closeConnection() rather than
+    // stopSession() on purpose: stopSession clears the guard we just set,
+    // which would hand the very race above back to the second click.
+    closeConnection()
     setStatus('connecting')
     setLog([])
     setSources(null)
@@ -198,6 +218,18 @@ export default function SessionPage() {
   }
 
   function stopSession() {
+    // Every route out of a live/connecting session comes through here — the
+    // Stop button, the error path, and unmount — so this is the one place
+    // the start guard is released. While connected it deliberately stays
+    // set, which also blocks a second Start on top of a live call.
+    startingRef.current = false
+    closeConnection()
+    setStatus('idle')
+    setSpeaking(false)
+  }
+
+  /** Pure teardown of whatever is currently open. No status, no guard. */
+  function closeConnection() {
     if (dcRef.current) {
       dcRef.current.close()
       dcRef.current = null
@@ -214,8 +246,6 @@ export default function SessionPage() {
       streamRef.current = null
     }
     if (audioRef.current) audioRef.current.srcObject = null
-    setStatus('idle')
-    setSpeaking(false)
   }
 
   // Task 2.10 — open a cited document at the page the answer came from.

@@ -40,14 +40,63 @@ _MP = mp.get_context("spawn")
 # over the 15s this used to allow.
 CALL_SETUP_TIMEOUT_SECONDS = 45
 
-# Task 2.4 — pc_id -> (process, ice_queue) for every currently-live call.
-# Populated in connect(), read by ice_candidate() to route trickle ICE to
-# the right process, cleaned up by _reap_dead_calls() (started in main.py's
+# Task 2.4 — pc_id -> the currently-live call for it. Populated in
+# connect(), read by ice_candidate() to route trickle ICE to the right
+# process, cleaned up by _reap_dead_calls() (started in main.py's
 # lifespan). In-memory and single-process-API-server only — fine for now
 # (matches the rest of this project's current scale), but if the API layer
 # itself is ever run as multiple replicas, this registry needs to move to
 # something shared (Redis) so any replica can route to any call's worker.
-_active_calls: dict[str, tuple[mp.Process, mp.Queue]] = {}
+@dataclass
+class _ActiveCall:
+    process: mp.Process
+    ice_queue: mp.Queue
+    user_id: str
+
+
+_active_calls: dict[str, _ActiveCall] = {}
+
+
+def _end_previous_calls_for(user_id: str) -> None:
+    """Enforce one live call per user, killing any earlier one.
+
+    FOUND 2026-09-03, from a call the user reported as "not a proper call".
+    The backend had no such rule, and the logs showed the consequence
+    plainly: two pipelines, two conversation IDs, two turn counters
+    (5->6->7->8 alongside 4->5->6), both transcribing the same spoken words
+    within milliseconds of each other, each running its own RAG lookup and
+    its own LLM completion against its own private history, and each
+    speaking its own answer into the same call. The caller heard two bots at
+    once — one replying in Hindi that it could hear them, the other in
+    English that it was "just sending you text responses, so you won't
+    actually hear a voice from me".
+
+    The stale pipeline is not idle in this state, which is what makes it so
+    disruptive: it still holds a live inbound media track, so it keeps
+    hearing the caller and keeps answering. It also does not clean itself up
+    promptly — the orphan in that log sat on an open Deepgram stream for 209
+    seconds and was only reaped when aiortc's own no-audio timeout finally
+    fired, minutes after the caller had hung up.
+
+    A browser is not required to misbehave badly for this to happen: any
+    path that reaches startSession() twice leaves the first RTCPeerConnection
+    live but unreachable from the page's own ref, so the browser can neither
+    close it nor even know it exists. That is fixed on the frontend too, but
+    the rule belongs here as well — the server should not be willing to run
+    two pipelines for one caller no matter what the client does, and this
+    side is the one that still holds when the client is a stale tab, a
+    reloaded page, or a network that dropped without a close handshake.
+    """
+    stale = [pc_id for pc_id, call in _active_calls.items() if call.user_id == user_id]
+    for pc_id in stale:
+        call = _active_calls.pop(pc_id)
+        if call.process.is_alive():
+            call.process.terminate()
+            logger.warning(
+                f"[CALL] Ending previous live call pc_id={pc_id} pid={call.process.pid} "
+                f"— same user started a new one"
+            )
+        call.process.join(timeout=1)
 
 
 # Latency (2026-09-03) — the pre-warmed worker pool.
@@ -132,11 +181,16 @@ async def reap_dead_calls_loop(interval_seconds: int = 10) -> None:
     and finished child processes are never actually reaped."""
     while True:
         await asyncio.sleep(interval_seconds)
-        dead_pc_ids = [pc_id for pc_id, (proc, _) in _active_calls.items() if not proc.is_alive()]
+        dead_pc_ids = [
+            pc_id for pc_id, call in _active_calls.items() if not call.process.is_alive()
+        ]
         for pc_id in dead_pc_ids:
-            proc, _ice_queue = _active_calls.pop(pc_id)
-            proc.join(timeout=1)
-            logger.info(f"[CALL] Cleaned up finished call pc_id={pc_id} (exitcode={proc.exitcode})")
+            call = _active_calls.pop(pc_id)
+            call.process.join(timeout=1)
+            logger.info(
+                f"[CALL] Cleaned up finished call pc_id={pc_id} "
+                f"(exitcode={call.process.exitcode})"
+            )
 
 
 class WebRTCOffer(BaseModel):
@@ -202,6 +256,11 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         "bot_id": str(bot.id),
     }
 
+    # Before anything else: this caller gets exactly one live pipeline. A
+    # previous one still running would otherwise keep hearing them and keep
+    # answering over the new one — see _end_previous_calls_for().
+    _end_previous_calls_for(str(current_user.id))
+
     loop = asyncio.get_event_loop()
 
     # Take a warm worker if one is waiting. The pool is topped up straight
@@ -245,7 +304,7 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         proc.terminate()
         raise HTTPException(status_code=504, detail="Call setup timed out") from e
 
-    _active_calls[answer["pc_id"]] = (proc, ice_queue)
+    _active_calls[answer["pc_id"]] = _ActiveCall(proc, ice_queue, str(current_user.id))
     logger.info(f"[CALL] Started call worker pid={proc.pid} pc_id={answer['pc_id']} bot={bot.name}")
     return answer
 
@@ -260,8 +319,7 @@ async def ice_candidate(body: IcePatchBody, current_user: User = Depends(get_cur
         logger.debug(f"[CALL] ICE candidate for unknown/ended pc_id={body.pc_id}, ignoring")
         return {"status": "ok"}
 
-    _proc, ice_queue = entry
-    ice_queue.put({
+    entry.ice_queue.put({
         "pc_id": body.pc_id,
         "candidates": [c.model_dump() for c in body.candidates],
     })
