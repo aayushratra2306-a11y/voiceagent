@@ -87,23 +87,83 @@ def call_worker_main(
     answer_queue: mp.Queue,
     ice_queue: mp.Queue,
 ) -> None:
-    """Process entry point (the `target=` of multiprocessing.Process) — runs
-    in the child, start to finish. Never raises back into the parent; any
-    failure here is logged and simply ends this one process."""
+    """Process entry point for a worker spawned FOR a specific call. Still
+    used when the pool is empty — a burst of simultaneous calls degrades to
+    the original behaviour rather than queueing behind the pool.
+
+    Never raises back into the parent; any failure here is logged and simply
+    ends this one process.
+    """
+    async def _run():
+        run_voice_pipeline = await _prepare_worker()
+        await _handle_call(
+            run_voice_pipeline, bot_config, sdp, sdp_type, pc_id, answer_queue, ice_queue
+        )
+
     try:
-        asyncio.run(_worker_main(bot_config, sdp, sdp_type, pc_id, answer_queue, ice_queue))
+        asyncio.run(_run())
     except Exception:
         logger.exception(f"[CALL WORKER pid={mp.current_process().pid}] fatal error")
 
 
-async def _worker_main(
-    bot_config: dict,
-    sdp: str,
-    sdp_type: str,
-    pc_id: str | None,
+def pooled_worker_main(
+    job_queue: mp.Queue,
     answer_queue: mp.Queue,
     ice_queue: mp.Queue,
+    ready_event,
 ) -> None:
+    """Process entry point for a POOLED worker: do the expensive startup
+    first, then wait for a call to be assigned.
+
+    Still exactly one call per process. That is deliberate — Task 2.4's whole
+    point is that a crash, including a native fault in onnxruntime, can only
+    ever take down the call it happened in. Reusing a process for a second
+    call would trade that away for nothing, since the parent simply spawns a
+    replacement the moment this one is claimed. The only thing pooling
+    changes is WHEN the startup cost is paid: before the caller arrives
+    rather than while they wait.
+
+    The queues are created by the parent and passed at Process construction
+    because a multiprocessing.Queue cannot itself be sent through a queue —
+    which is why each pooled worker owns a private set rather than sharing
+    one job queue across the pool.
+    """
+    async def _run():
+        run_voice_pipeline = await _prepare_worker()
+        ready_event.set()
+        logger.info(f"[POOL] Worker pid={mp.current_process().pid} warm, waiting for a call")
+
+        loop = asyncio.get_event_loop()
+        # Blocks a thread, not the loop. No timeout: an idle worker should
+        # wait indefinitely, and the parent kills it on shutdown (daemon).
+        job = await loop.run_in_executor(None, job_queue.get)
+        if job is None:  # shutdown sentinel
+            return
+
+        await _handle_call(
+            run_voice_pipeline,
+            job["bot_config"], job["sdp"], job["sdp_type"], job["pc_id"],
+            answer_queue, ice_queue,
+        )
+
+    try:
+        asyncio.run(_run())
+    except Exception:
+        logger.exception(f"[POOL WORKER pid={mp.current_process().pid}] fatal error")
+
+
+async def _prepare_worker():
+    """The expensive half of starting a worker: importing the pipeline stack
+    and connecting to the database. Split out from handling a call so a
+    pooled worker can do all of it BEFORE a call arrives — see
+    pooled_worker_main below and the pool in app/api/connect.py.
+
+    Measured on the deployed VM: this is 6.8s warm and 13.7s cold, and
+    before pooling every caller waited through it after pressing Start.
+
+    Returns run_voice_pipeline, because importing it is most of the cost and
+    the caller should not pay for that import twice.
+    """
     # Imported here, not at module top level: this module is imported by
     # the PARENT process too (connect.py needs call_worker_main as a spawn
     # target), and voice_pipeline.py pulls in the entire pipecat pipeline
@@ -139,7 +199,20 @@ async def _worker_main(
     # for any model missing from this list, so an omission here is the same
     # failure this whole init_db call exists to fix.
     await init_db([Order, Appointment, ConversationTurn, Document])
+    return run_voice_pipeline
 
+
+async def _handle_call(
+    run_voice_pipeline,
+    bot_config: dict,
+    sdp: str,
+    sdp_type: str,
+    pc_id: str | None,
+    answer_queue: mp.Queue,
+    ice_queue: mp.Queue,
+) -> None:
+    """Everything that is specific to one call. Identical whether the process
+    was spawned for this call or taken warm from the pool."""
     handler = SmallWebRTCRequestHandler(ice_servers=_build_ice_servers())
     pipeline_started = asyncio.Event()
     pipeline_task: asyncio.Task | None = None

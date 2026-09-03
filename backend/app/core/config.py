@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     turn_username: str = ""
     turn_credential: str = ""
 
+    # Latency (2026-09-03) — how many warm call workers to keep idle.
+    # Each holds an imported pipecat stack (roughly 300MB) but has NOT yet
+    # loaded the VAD or turn-detection models, which happens per call. Two
+    # fits comfortably on the 4GB VM alongside the API, Caddy and coturn.
+    # Raise it only with `free -h` in hand: an OOM kill during a live call
+    # costs far more than the startup latency this saves.
+    call_worker_pool_size: int = 2
+
     # Task 2.7 — error tracking. Blank by default: sentry_sdk.init(dsn="")
     # is a confirmed-safe no-op (verified live 2026-08-31), so this stays
     # completely dormant — zero behavior change — until a real DSN is set.

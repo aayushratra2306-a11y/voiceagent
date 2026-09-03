@@ -11,7 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.api import auth, bots, connect, documents
-from app.api.connect import reap_dead_calls_loop
+from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.mongo import init_db
@@ -41,8 +41,13 @@ async def lifespan(app: FastAPI):
     # Task 2.4 — reaps finished/crashed per-call worker processes so the
     # registry and the OS process table don't grow unbounded.
     reaper_task = asyncio.create_task(reap_dead_calls_loop())
+    # Latency — keeps a few call workers warm so a caller does not wait
+    # through a fresh interpreter importing pipecat. See the long note in
+    # app/api/connect.py.
+    pool_task = asyncio.create_task(maintain_worker_pool_loop())
     yield
     reaper_task.cancel()
+    pool_task.cancel()
 
 
 app = FastAPI(title="Voice Agent API", lifespan=lifespan)

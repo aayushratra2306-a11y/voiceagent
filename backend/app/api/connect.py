@@ -1,5 +1,8 @@
 import asyncio
 import multiprocessing as mp
+import time
+from dataclasses import dataclass
+from multiprocessing.synchronize import Event as EventClass
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -9,7 +12,7 @@ from app.core.auth import get_current_user
 from app.core.config import settings
 from app.core.deps import fetch_owned_bot
 from app.models.user import User
-from app.pipeline.call_worker import call_worker_main
+from app.pipeline.call_worker import call_worker_main, pooled_worker_main
 
 router = APIRouter(tags=["voice"])
 
@@ -45,6 +48,81 @@ CALL_SETUP_TIMEOUT_SECONDS = 45
 # itself is ever run as multiple replicas, this registry needs to move to
 # something shared (Redis) so any replica can route to any call's worker.
 _active_calls: dict[str, tuple[mp.Process, mp.Queue]] = {}
+
+
+# Latency (2026-09-03) — the pre-warmed worker pool.
+#
+# Task 2.4 spawns a fresh interpreter per call, and that process has to
+# import the whole pipecat stack and connect to MongoDB before it can even
+# answer the WebRTC offer. Measured on the deployed VM: 6.8s warm, 13.7s
+# cold, and the caller sat through all of it after pressing Start.
+#
+# The work has to happen; it does not have to happen while someone waits. So
+# a few workers do it in advance and idle until a call arrives.
+#
+# Still ONE CALL PER PROCESS. That is the point of Task 2.4 and pooling does
+# not weaken it: a claimed worker is replaced immediately, so a crash still
+# only ever takes down the call it happened in. The only thing that changes
+# is when the startup cost is paid.
+#
+# Each worker owns a private set of queues rather than sharing one job queue,
+# because a multiprocessing.Queue cannot be sent through another queue — it
+# has to be handed over at Process construction. That also means the parent
+# always knows exactly which process took which call, which the ICE routing
+# and the reaper both depend on.
+@dataclass
+class _PooledWorker:
+    process: mp.Process
+    job_queue: mp.Queue
+    answer_queue: mp.Queue
+    ice_queue: mp.Queue
+    ready: EventClass
+    spawned_at: float
+
+
+_idle_pool: list[_PooledWorker] = []
+
+
+def _spawn_pooled_worker() -> _PooledWorker:
+    job_queue: mp.Queue = _MP.Queue()
+    answer_queue: mp.Queue = _MP.Queue()
+    ice_queue: mp.Queue = _MP.Queue()
+    ready = _MP.Event()
+    proc = _MP.Process(
+        target=pooled_worker_main,
+        args=(job_queue, answer_queue, ice_queue, ready),
+        daemon=True,
+    )
+    proc.start()
+    return _PooledWorker(proc, job_queue, answer_queue, ice_queue, ready, time.monotonic())
+
+
+def _top_up_pool() -> None:
+    """Bring the pool back to size. Blocking (Process.start forks a process),
+    so callers on the event loop run it in an executor."""
+    while len(_idle_pool) < settings.call_worker_pool_size:
+        _idle_pool.append(_spawn_pooled_worker())
+
+
+async def maintain_worker_pool_loop(interval_seconds: int = 15) -> None:
+    """Background loop (started from main.py's lifespan). Fills the pool at
+    startup and replaces workers that die while idle — a worker that fails
+    during import would otherwise silently shrink the pool to nothing and
+    every call would quietly fall back to the slow path."""
+    loop = asyncio.get_event_loop()
+    while True:
+        dead = [w for w in _idle_pool if not w.process.is_alive()]
+        for w in dead:
+            _idle_pool.remove(w)
+            w.process.join(timeout=1)
+            logger.warning(f"[POOL] Idle worker pid={w.process.pid} died before use, replacing")
+
+        before = len(_idle_pool)
+        await loop.run_in_executor(None, _top_up_pool)
+        if len(_idle_pool) != before:
+            logger.info(f"[POOL] {len(_idle_pool)} warm worker(s) ready")
+
+        await asyncio.sleep(interval_seconds)
 
 
 async def reap_dead_calls_loop(interval_seconds: int = 10) -> None:
@@ -124,17 +202,38 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         "bot_id": str(bot.id),
     }
 
-    # Queues must come from the same context as the process that reads them.
-    answer_queue: mp.Queue = _MP.Queue()
-    ice_queue: mp.Queue = _MP.Queue()
-    proc = _MP.Process(
-        target=call_worker_main,
-        args=(bot_config, body.sdp, body.type, body.pc_id, answer_queue, ice_queue),
-        daemon=True,
-    )
-    proc.start()
-
     loop = asyncio.get_event_loop()
+
+    # Take a warm worker if one is waiting. The pool is topped up straight
+    # afterwards, off the event loop, so the replacement is already importing
+    # while this call negotiates.
+    worker = _idle_pool.pop(0) if _idle_pool else None
+
+    if worker is not None:
+        proc, answer_queue, ice_queue = worker.process, worker.answer_queue, worker.ice_queue
+        worker.job_queue.put({
+            "bot_config": bot_config,
+            "sdp": body.sdp,
+            "sdp_type": body.type,
+            "pc_id": body.pc_id,
+        })
+        warm = "warm" if worker.ready.is_set() else "still starting"
+        logger.info(f"[POOL] Claimed {warm} worker pid={proc.pid} ({len(_idle_pool)} left)")
+        loop.run_in_executor(None, _top_up_pool)
+    else:
+        # Pool exhausted — a burst of simultaneous calls. Fall back to the
+        # original behaviour: spawn a worker for this call. Slower to answer,
+        # but it answers, which beats making the caller queue behind the pool.
+        logger.warning("[POOL] Empty, spawning a cold worker for this call")
+        answer_queue = _MP.Queue()
+        ice_queue = _MP.Queue()
+        proc = _MP.Process(
+            target=call_worker_main,
+            args=(bot_config, body.sdp, body.type, body.pc_id, answer_queue, ice_queue),
+            daemon=True,
+        )
+        proc.start()
+
     try:
         # answer_queue.get() is a blocking call — run it off the event loop
         # so the API server keeps serving other requests while this call's
