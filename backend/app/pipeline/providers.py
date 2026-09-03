@@ -124,11 +124,42 @@ def get_stt_service(language: str = "en"):
     # endpointing/interim_results explicit rather than left at Deepgram's
     # undocumented default — see voice_pipeline.py's original Task 1.1 note
     # for the full story (a final transcript never arrived without this).
+    #
+    # endpointing=500, not 300 (found 2026-09-03 from live transcripts).
+    # This is the silence duration, in ms, before Deepgram closes a chunk
+    # out as `is_final` and pipecat pushes it downstream as its own
+    # TranscriptionFrame. Pipecat 1.7.0's Deepgram wrapper does this
+    # unconditionally for every is_final result — confirmed by reading
+    # _on_message directly — with no merging and no handler for Deepgram's
+    # own UtteranceEnd event (utterance_end_ms is accepted and forwarded,
+    # but nothing consumes the event it produces in this version). So a
+    # pause anywhere above the endpointing threshold splits one spoken
+    # sentence into multiple separate "final" transcripts — confirmed live:
+    # "this today's date and time, I mean," and "I just" arrived as two
+    # unrelated user turns for what was one continuous sentence with a
+    # mid-thought pause.
+    #
+    # 300ms was more aggressive than the turn-detector already tolerates:
+    # the VAD's own stop_secs is 500ms (raised deliberately on 2026-08-31,
+    # see the long note in voice_pipeline.py, after live testing showed the
+    # bot cutting people off before that change). Deepgram closing a chunk
+    # at 300ms while the rest of the system already accepts a pause up to
+    # 500ms as still-mid-turn meant Deepgram was fragmenting sentences the
+    # turn-detector itself would have waited through. Matching the two
+    # numbers doesn't eliminate the risk — a pause longer than 500ms still
+    # splits — but it stops Deepgram being the MORE trigger-happy of the
+    # two systems making this decision.
+    #
+    # What this does NOT fix: RAGContextProcessor sits before the user
+    # aggregator and reacts to every TranscriptionFrame it sees, so even a
+    # single still-fragmented turn is handled as if it were complete. That
+    # is a bigger, riskier pipeline-ordering change and was deliberately
+    # left alone here rather than restructured blind.
     logger.info("[PROVIDERS] STT: Deepgram (cloud)")
     return DeepgramSTTService(
         api_key=settings.deepgram_api_key,
         language=language,
-        endpointing=300,
+        endpointing=500,
         interim_results=True,
     )
 
