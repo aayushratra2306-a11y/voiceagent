@@ -22,11 +22,18 @@ from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.piper.tts import PiperTTSService
-from pipecat.services.whisper.stt import WhisperSTTService
 from websockets.protocol import State
 
 from app.core.config import settings
+
+# The LOCAL providers (Whisper, Piper) are imported inside their factory
+# branches, not here. Task 2.4 spawns a fresh interpreter per call, so every
+# module imported at this level is re-imported on every single call before
+# the caller hears anything. faster-whisper pulls in CTranslate2 and costs
+# about 2s of that startup — paid on every call even when stt_provider is
+# 'deepgram', which is the default and what the deployed server actually
+# runs. Measured 2026-09-03: 3.75s to import with it, 1.71s without.
+
 
 # Task 2.2 — where local model files (Whisper weights via faster-whisper's
 # own cache, Piper .onnx voices) get stored. Keeping this inside the repo
@@ -105,6 +112,9 @@ def get_stt_service(language: str = "en"):
     'deepgram' (cloud, default) or 'whisper' (local, free, via faster-whisper).
     """
     if settings.stt_provider == "whisper":
+        # Imported here, not at module level — see the note by the imports.
+        from pipecat.services.whisper.stt import WhisperSTTService
+
         logger.info(f"[PROVIDERS] STT: local Whisper ({settings.whisper_model}, cpu)")
         return WhisperSTTService(
             model=settings.whisper_model,
@@ -164,6 +174,9 @@ def get_tts_service(voice_id: str, language: str = "en"):
     project's distribution plans ever need it.
     """
     if settings.tts_provider == "piper":
+        # Imported here, not at module level — see the note by the imports.
+        from pipecat.services.piper.tts import PiperTTSService
+
         voice = _PIPER_VOICES.get(_base_lang(language), _PIPER_VOICES["en"])
         logger.info(f"[PROVIDERS] TTS: local Piper (voice={voice})")
         return PiperTTSService(

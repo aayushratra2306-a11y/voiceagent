@@ -1,3 +1,6 @@
+import re
+import time
+
 from loguru import logger
 from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -10,6 +13,52 @@ try:
     from pipecat.frames.frames import InterimTranscriptionFrame
 except ImportError:
     InterimTranscriptionFrame = None
+
+
+# Latency (2026-09-03). A full retrieval cycle — rewrite, embed, hybrid
+# search, rerank — measures about 2.0s, and it was running on EVERY user
+# turn. Plenty of turns cannot possibly be answered from a document:
+# "hello", "thanks", "sorry, say that again". Those paid the full 2s for a
+# lookup guaranteed to return nothing.
+#
+# Deliberately a fixed word list rather than a classifier. Any model call
+# smart enough to judge this would cost most of the latency being saved,
+# and a wrong "skip" is a silent quality regression — the bot answering from
+# general knowledge while the document sat right there. So this only skips
+# when EVERY word is conversational filler: no nouns, no question words,
+# nothing a document could speak to. Anything else, including anything
+# unrecognised, falls through to full retrieval.
+_FILLER_WORDS = frozenset("""
+hello hi hey yo greetings namaste
+bye goodbye cheers
+thanks thank thankyou ok okay k kk right sure yeah yep yes yup no nope nah
+alright fine cool great good nice perfect got gotcha understood
+please sorry pardon excuse
+um uh er hmm mmm ah oh well so like just really very
+you your me my i am is are was the a an and or but to of it that this
+can could would repeat again say said one moment second wait
+there here morning afternoon evening night doing everyone mate buddy dear
+""".split())
+
+# Question words (what / how / why / when / where / who) are deliberately
+# ABSENT. Under the all-words rule, adding them would let "what is that" or
+# "how does it work" skip retrieval, and those are real follow-up questions
+# about the document. Leaving them out means such a turn pays the 2s and
+# gets a correct answer, which is the right way round to be wrong.
+
+# Guard against a short utterance that IS a real question — "why?", "page 4",
+# "the invoice" — by never skipping when a digit or a question mark is present.
+_MEANINGFUL = re.compile(r"[0-9?]")
+
+
+def needs_retrieval(text: str) -> bool:
+    """False only when every word is conversational filler."""
+    if _MEANINGFUL.search(text):
+        return True
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words:
+        return False
+    return not all(w in _FILLER_WORDS for w in words)
 
 
 class RAGContextProcessor(FrameProcessor):
@@ -101,7 +150,20 @@ class RAGContextProcessor(FrameProcessor):
 
         if is_final and hasattr(frame, 'text') and frame.text and frame.text.strip():
             raw_text = frame.text
+
+            if not needs_retrieval(raw_text):
+                # Nothing to look up. Restore the plain prompt and tell the
+                # UI so it shows "general knowledge" rather than stale
+                # citations from the previous turn.
+                logger.info(f"[RAG] Skipped (conversational): '{raw_text}' — saved ~2s")
+                self._context.messages[0] = {"role": "system", "content": self._base_prompt}
+                await self._publish_sources([])
+                await self.push_frame(frame, direction)
+                return
+
+            t_start = time.perf_counter()
             search_query = await rewrite_query(raw_text)
+            t_rewrite = time.perf_counter() - t_start
             # Keep the raw transcript in the log even though search_query is
             # what actually gets used — per task 1.6, useful for spotting a
             # rewrite that went wrong without needing to reproduce it live.
@@ -109,7 +171,18 @@ class RAGContextProcessor(FrameProcessor):
                 logger.info(f"[RAG] Query rewritten: '{raw_text}' -> '{search_query}'")
             else:
                 logger.info(f"[RAG] Query (unchanged): '{raw_text}'")
+            t = time.perf_counter()
             retrieved, sources = await query_context(self._bot_id, search_query)
+            t_search = time.perf_counter() - t
+
+            # Logged every turn on purpose. Retrieval is the largest single
+            # cost in the reply path, and it is the one that grows quietly as
+            # documents are added — a number in the log is what makes that
+            # visible before a user notices it.
+            logger.info(
+                f"[RAG] timing: rewrite={t_rewrite:.2f}s search={t_search:.2f}s "
+                f"total={t_rewrite + t_search:.2f}s"
+            )
             await self._publish_sources(sources)
             if retrieved:
                 logger.info(f"[RAG] Retrieved {len(retrieved)} chars of context")

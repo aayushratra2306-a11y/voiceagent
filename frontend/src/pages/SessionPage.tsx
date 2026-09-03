@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { listBots, connectBot, getIceServers, fetchDocumentBlobUrl } from '../lib/api'
+import { listBots, connectBot, getIceServers, fetchDocumentBlobUrl, sendIceCandidates } from '../lib/api'
 import type { Bot } from '../lib/api'
 
 type Status = 'idle' | 'connecting' | 'connected' | 'error'
@@ -107,9 +107,17 @@ export default function SessionPage() {
         addLog('Bot audio connected ✓')
       }
 
+      // Trickle ICE. Candidates are discovered over several seconds; the ones
+      // found before the server replies with a pc_id have nowhere to go yet,
+      // so they are buffered here and flushed the moment it arrives.
+      let pcId: string | null = null
+      const pending: RTCIceCandidate[] = []
+
       pc.onicecandidate = e => {
-        if (e.candidate) addLog(`Candidate: ${e.candidate.type} ${e.candidate.address ?? ''}`)
-        else addLog('ICE gathering complete')
+        if (!e.candidate) { addLog('ICE gathering complete'); return }
+        addLog(`Candidate: ${e.candidate.type} ${e.candidate.address ?? ''}`)
+        if (pcId) sendIceCandidates(pcId, [e.candidate])
+        else pending.push(e.candidate)
       }
 
       pc.oniceconnectionstatechange = () => {
@@ -167,15 +175,20 @@ export default function SessionPage() {
       addLog('Creating WebRTC offer…')
       await pc.setLocalDescription(await pc.createOffer())
 
-      await new Promise<void>(resolve => {
-        if (pc.iceGatheringState === 'complete') { resolve(); return }
-        pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') resolve() }
-        setTimeout(resolve, 5000)
-      })
-
+      // Sent immediately, without waiting for ICE gathering to complete.
+      // That wait used to cost up to 5 seconds of dead air at the start of
+      // every call, and was longest precisely when a TURN relay is in play,
+      // since allocating the relay is its own network round trip. The
+      // remaining candidates now follow over /connect/ice while the worker
+      // is already starting up, so the two overlap instead of queueing.
       addLog('Connecting to bot…')
       const answer = await connectBot(id!, pc.localDescription!.sdp, pc.localDescription!.type)
       await pc.setRemoteDescription({ sdp: answer.sdp, type: answer.type as RTCSdpType })
+
+      pcId = answer.pc_id
+      if (pending.length) {
+        sendIceCandidates(pcId, pending.splice(0))
+      }
       addLog('Handshake complete ✓')
     } catch (e: any) {
       addLog(`Error: ${e.message}`)

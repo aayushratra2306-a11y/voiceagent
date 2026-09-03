@@ -190,6 +190,36 @@ export async function getIceServers(): Promise<RTCIceServer[]> {
   return data.iceServers
 }
 
+// Trickle ICE (added 2026-09-03). The browser used to wait for ICE gathering
+// to FINISH before sending its offer — up to a 5 second timeout, paid on every
+// single call before the caller heard anything. Gathering is slowest exactly
+// when a TURN server is configured, because the relay allocation is a network
+// round trip of its own, so the wait was longest for the users who need the
+// relay most.
+//
+// The backend has accepted trickled candidates all along (POST /connect/ice,
+// routed to that call's worker) — the frontend simply never used it. Now the
+// offer goes immediately and candidates follow as they are discovered, which
+// is what trickle ICE is for.
+export async function sendIceCandidates(
+  pcId: string, candidates: RTCIceCandidate[],
+): Promise<void> {
+  if (!candidates.length) return
+  // Best-effort: a dropped candidate degrades connectivity, it does not break
+  // the call, and throwing here would surface as a session failure to the user.
+  await request('/connect/ice', {
+    method: 'POST',
+    body: JSON.stringify({
+      pc_id: pcId,
+      candidates: candidates.map(c => ({
+        candidate: c.candidate,
+        sdp_mid: c.sdpMid ?? '0',
+        sdp_mline_index: c.sdpMLineIndex ?? 0,
+      })),
+    }),
+  }).catch(() => {})
+}
+
 export async function connectBot(
   botId: string, sdp: string, type: string, pcId?: string
 ): Promise<{ sdp: string; type: string; pc_id: string }> {
