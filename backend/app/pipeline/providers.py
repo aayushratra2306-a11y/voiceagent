@@ -25,6 +25,7 @@ from pipecat.services.openai.llm import OpenAILLMService
 from websockets.protocol import State
 
 from app.core.config import settings
+from app.pipeline.language import resolve_voice
 
 # The LOCAL providers (Whisper, Piper) are imported inside their factory
 # branches, not here. Task 2.4 spawns a fresh interpreter per call, so every
@@ -274,5 +275,30 @@ def get_tts_service(voice_id: str, language: str = "en"):
             download_dir=LOCAL_MODELS_DIR,
         )
 
-    logger.info("[PROVIDERS] TTS: Cartesia (cloud)")
-    return ResilientCartesiaTTSService(api_key=settings.cartesia_api_key, voice_id=voice_id, language=language)
+    # The bot's stored voice may predate per-language voices, in which case
+    # it is an English voice about to read Hindi with an English accent.
+    # See language.resolve_voice() — it corrects only a known mismatch.
+    voice_id = resolve_voice(voice_id, language)
+    lang = _base_lang(language)
+
+    # FOUND 2026-09-04, and it is the FOURTH time this exact pattern has bitten
+    # this project (after task 1.1's VAD params, PipelineParams' audio fields,
+    # and Deepgram's language/endpointing in dd5d3a7). `voice_id=` and
+    # `language=` as bare constructor kwargs are not both honoured:
+    # pipecat maps the deprecated voice_id onto settings.voice, but `language`
+    # is silently discarded and left at its 'en' default. Confirmed by direct
+    # inspection — constructing with language="hi" produced
+    # CartesiaTTSSettings(..., language='en').
+    #
+    # So every Hindi call has been synthesised with Cartesia told the text was
+    # ENGLISH. That is a direct cause of the accent the user reported on
+    # 2026-09-04, and separate from which voice is chosen: even a native Hindi
+    # voice would be rendered with English pronunciation rules.
+    #
+    # Routed through settings= per the deprecation warning pipecat itself
+    # emits, which is the documented path for both fields.
+    logger.info(f"[PROVIDERS] TTS: Cartesia (cloud, voice={voice_id}, lang={lang})")
+    return ResilientCartesiaTTSService(
+        api_key=settings.cartesia_api_key,
+        settings=ResilientCartesiaTTSService.Settings(voice=voice_id, language=lang),
+    )

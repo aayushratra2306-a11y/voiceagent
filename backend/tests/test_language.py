@@ -107,3 +107,117 @@ def test_pipeline_uses_the_helpers_rather_than_hardcoded_english():
         "the model is no longer told what language to reply in"
     )
     assert "Hello! I'm ready" not in source, "hardcoded English greeting is back"
+
+
+# --- Voice selection (added 2026-09-04) --------------------------------------
+#
+# The settings UI offered three voices, all English, to every bot whatever
+# its language. A Hindi bot therefore HAD to be given an English voice, and
+# Cartesia — multilingual — read Hindi words with English mouth-shapes. That
+# is the accent the user asked about, and it is stored in every bot already
+# in the database, so correcting the dropdown alone would leave them wrong.
+
+from app.pipeline.language import VOICES, default_voice_for, resolve_voice  # noqa: E402
+
+HINDI_SNEHA = "6b02ffe5-e3cb-48c0-a023-c72f85953375"
+HINDI_VIKAS = "adf97b9d-905c-41de-9fe9-afb387116d06"
+ENGLISH_GREG = "a0e99841-438c-4a64-b679-ae501e7d6091"
+
+
+def test_an_english_voice_on_a_hindi_bot_is_corrected():
+    """The exact state of every bot saved before per-language voices existed."""
+    assert resolve_voice(ENGLISH_GREG, "hi") == HINDI_SNEHA
+
+
+@pytest.mark.parametrize("code", UI_LANGUAGES)
+def test_every_ui_language_has_native_voices(code):
+    assert VOICES.get(code), f"{code} is selectable but has no voice of its own"
+    assert default_voice_for(code) == VOICES[code][0]["id"]
+
+
+@pytest.mark.parametrize("voice", [HINDI_SNEHA, HINDI_VIKAS])
+def test_a_voice_already_right_for_the_language_is_left_alone(voice):
+    """Both Hindi voices are valid choices — picking the male one must not be
+    silently reset to the female default on every call."""
+    assert resolve_voice(voice, "hi") == voice
+
+
+def test_an_unknown_voice_is_never_second_guessed():
+    """A custom or cloned voice has no language recorded here. Overriding it
+    with a default would break a deliberate choice — worse than the bug."""
+    custom = "00000000-1111-2222-3333-444444444444"
+    assert resolve_voice(custom, "hi") == custom
+
+
+def test_a_bot_with_no_voice_at_all_still_gets_one():
+    assert resolve_voice(None, "hi") == HINDI_SNEHA
+    assert resolve_voice("", "fr") == default_voice_for("fr")
+
+
+def test_regional_language_codes_resolve_voices_too():
+    assert resolve_voice(ENGLISH_GREG, "hi-IN") == HINDI_SNEHA
+
+
+def test_unknown_language_falls_back_to_english_voices():
+    assert default_voice_for("klingon") == VOICES["en"][0]["id"]
+
+
+def test_no_voice_id_is_registered_under_two_languages():
+    """A duplicated id would make _VOICE_LANGUAGE ambiguous and could bounce
+    a voice between languages depending on dict order."""
+    ids = [v["id"] for vs in VOICES.values() for v in vs]
+    assert len(ids) == len(set(ids)), "a voice id appears under two languages"
+
+
+def test_backend_and_frontend_voice_catalogues_agree():
+    """Two hardcoded lists that must not drift: the UI offers these, and the
+    server corrects to them. A voice in one but not the other means a user
+    picks something the server then silently overrides."""
+    import re
+    from pathlib import Path
+
+    tsx = Path(__file__).resolve().parents[2] / "frontend/src/pages/BotSettingsPage.tsx"
+    source = tsx.read_text(encoding="utf-8")
+    block = source[source.index("const VOICES"):source.index("const voicesFor")]
+    frontend_ids = set(re.findall(r"id: '([0-9a-f-]{36})'", block))
+    backend_ids = {v["id"] for vs in VOICES.values() for v in vs}
+
+    assert frontend_ids == backend_ids, (
+        f"only in UI: {frontend_ids - backend_ids}; "
+        f"only in backend: {backend_ids - frontend_ids}"
+    )
+
+
+def test_tts_factory_actually_applies_the_correction():
+    """End of the chain: a Hindi bot holding an English voice must reach
+    Cartesia with the Hindi one, not merely be corrected in a helper."""
+    from app.pipeline.providers import get_tts_service
+
+    svc = get_tts_service(voice_id=ENGLISH_GREG, language="hi")
+    assert svc._settings.voice == HINDI_SNEHA, (
+        "the English voice reached Cartesia — Hindi would be spoken with an "
+        "English accent, which is the bug this exists to prevent"
+    )
+
+
+def test_the_language_itself_reaches_cartesia():
+    """The FOURTH instance of this project's silent-dropped-kwarg pattern.
+    `language=` as a bare kwarg to CartesiaTTSService is discarded and left at
+    'en', so every Hindi call was synthesised with Cartesia told the text was
+    English — an accent problem entirely separate from which voice is picked,
+    and one no log line or error would ever reveal.
+    """
+    from app.pipeline.providers import get_tts_service
+
+    svc = get_tts_service(voice_id=HINDI_SNEHA, language="hi")
+    assert svc._settings.language == "hi", (
+        "Cartesia was told the text is English while being handed Hindi — "
+        "even a native Hindi voice is then pronounced with English rules"
+    )
+
+
+def test_regional_language_codes_reach_cartesia_normalised():
+    """Cartesia wants 'hi', not 'hi-IN'."""
+    from app.pipeline.providers import get_tts_service
+
+    assert get_tts_service(voice_id=HINDI_SNEHA, language="hi-IN")._settings.language == "hi"

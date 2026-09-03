@@ -63,9 +63,85 @@ LANGUAGE_NAMES = {
 }
 
 
+# Cartesia voices, chosen 2026-09-04 from their live catalogue (934 voices;
+# 49 native Hindi, 68 French, 33 German, 79 Spanish) filtered to the ones
+# Cartesia itself describes for customer-support / virtual-assistant work,
+# which is what these bots do. Every id below was verified against the API:
+# it exists, and its `language` field really is the language it is filed
+# under here — a mistyped UUID would otherwise be a silent wrong-voice bug.
+#
+# The user picked the two Hindi voices by listening to them. The other
+# languages are Cartesia's descriptions taken at face value and are the
+# STANDARD regional variant in each case (France French, not Québécois;
+# standard German, not Swiss-German; Spain Spanish, not Latin American) —
+# Cartesia has all of those alternatives if a preference ever emerges.
+#
+# The English three are pre-existing and kept for continuity: bots already
+# in the database point at them. Their old UI labels were wrong, though —
+# "Atlas — Professional, confident male voice" is really Sierra, a Californian
+# woman, and "Aria — Neutral" is really Greg, a man. Names here are the real
+# ones from the API.
+VOICES: dict[str, list[dict[str, str]]] = {
+    "en": [
+        {"id": "a0e99841-438c-4a64-b679-ae501e7d6091", "name": "Greg", "gender": "male"},
+        {"id": "694f9389-aac1-45b6-b726-9d9369183238", "name": "Sarah", "gender": "female"},
+        {"id": "b7d50908-b17c-442d-ad8d-810c63997ed9", "name": "Sierra", "gender": "female"},
+    ],
+    "hi": [
+        {"id": "6b02ffe5-e3cb-48c0-a023-c72f85953375", "name": "Sneha", "gender": "female"},
+        {"id": "adf97b9d-905c-41de-9fe9-afb387116d06", "name": "Vikas", "gender": "male"},
+    ],
+    "fr": [
+        {"id": "e2ab5462-e7c8-492d-a244-41f39444af6e", "name": "Audrey", "gender": "female"},
+        {"id": "cc4276e6-1ebc-429a-8c7d-930993d51abc", "name": "Julien", "gender": "male"},
+    ],
+    "de": [
+        {"id": "38aabb6a-f52b-4fb0-a3d1-988518f4dc06", "name": "Alina", "gender": "female"},
+        {"id": "e00dd3df-19e7-4cd4-827a-7ff6687b6954", "name": "Lukas", "gender": "male"},
+    ],
+    "es": [
+        {"id": "de38f545-c574-44e8-9b54-a7d6fec1c6b1", "name": "Marta", "gender": "female"},
+        {"id": "b0689631-eee7-4a6c-bb86-195f1d267c2e", "name": "Emilio", "gender": "male"},
+    ],
+}
+
+# id -> the language that voice actually speaks. Built from VOICES so the two
+# can never drift apart.
+_VOICE_LANGUAGE = {v["id"]: lang for lang, vs in VOICES.items() for v in vs}
+
+
 def _base(language: str | None) -> str:
     """Same normalisation as providers._base_lang — 'hi-IN' -> 'hi'."""
     return (language or "en").split("-")[0].lower()
+
+
+def default_voice_for(language: str | None) -> str:
+    """The voice a bot in this language should use if it has no better one."""
+    return VOICES.get(_base(language), VOICES["en"])[0]["id"]
+
+
+def resolve_voice(voice_id: str | None, language: str | None) -> str:
+    """Correct a voice that speaks the wrong language.
+
+    Until now the bot settings UI offered exactly three voices, all English,
+    to every bot regardless of language. So a Hindi bot was necessarily
+    assigned an English voice, and Cartesia — being multilingual — dutifully
+    read Hindi words with English mouth-shapes. That is the accent the user
+    asked about on 2026-09-04, and it is stored in every existing bot's
+    voice_id right now, so fixing only the dropdown would leave every bot
+    already in the database still wrong.
+
+    The rule is deliberately narrow: correct a voice only when it is KNOWN to
+    speak a different language. A voice_id absent from the catalogue is left
+    exactly as it is — it may be a custom or cloned voice whose language this
+    module has no business guessing at, and silently swapping someone's
+    deliberate choice for a default would be a worse bug than the one being
+    fixed.
+    """
+    spoken = _VOICE_LANGUAGE.get(voice_id or "")
+    if spoken is None or spoken == _base(language):
+        return voice_id or default_voice_for(language)
+    return default_voice_for(language)
 
 
 def greeting_for(language: str | None) -> str:

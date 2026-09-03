@@ -4,11 +4,44 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument } from '../lib/api'
 import type { Bot, BotDocument } from '../lib/api'
 
-const VOICES = [
-  { id: 'a0e99841-438c-4a64-b679-ae501e7d6091', label: 'Aria — Neutral', desc: 'Clear, balanced tone' },
-  { id: '694f9389-aac1-45b6-b726-9d9369183238', label: 'Luna — Friendly', desc: 'Warm female voice' },
-  { id: 'b7d50908-b17c-442d-ad8d-810c63997ed9', label: 'Atlas — Professional', desc: 'Confident male voice' },
-]
+// Voices per language. Until 2026-09-04 this was three English voices shown
+// to every bot whatever its language, so a Hindi bot was necessarily given
+// an English voice and Cartesia — which is multilingual — read Hindi words
+// with an English accent. Voices are now native to the language selected.
+//
+// The English three are unchanged in id (existing bots point at them) but
+// their labels were simply wrong: 'Atlas — Professional, confident male
+// voice' is really Sierra, a Californian woman, and 'Aria — Neutral' is
+// really Greg, a man. Verified against Cartesia's API; names are the real
+// ones now.
+//
+// Must stay in sync with VOICES in backend/app/pipeline/language.py, which
+// applies the same mapping server-side for bots saved before this existed.
+const VOICES: Record<string, { id: string; label: string; desc: string }[]> = {
+  en: [
+    { id: 'a0e99841-438c-4a64-b679-ae501e7d6091', label: 'Greg — Supportive', desc: 'Clear, balanced male voice' },
+    { id: '694f9389-aac1-45b6-b726-9d9369183238', label: 'Sarah — Mindful', desc: 'Warm female voice' },
+    { id: 'b7d50908-b17c-442d-ad8d-810c63997ed9', label: 'Sierra — Bright', desc: 'Upbeat female voice' },
+  ],
+  hi: [
+    { id: '6b02ffe5-e3cb-48c0-a023-c72f85953375', label: 'Sneha — Empathetic', desc: 'Gentle, reassuring female voice' },
+    { id: 'adf97b9d-905c-41de-9fe9-afb387116d06', label: 'Vikas — Approachable', desc: 'Polite, friendly male voice' },
+  ],
+  fr: [
+    { id: 'e2ab5462-e7c8-492d-a244-41f39444af6e', label: 'Audrey — Customer Service', desc: 'Clear, attentive female voice' },
+    { id: 'cc4276e6-1ebc-429a-8c7d-930993d51abc', label: 'Julien — Polished', desc: 'Professional, warm male voice' },
+  ],
+  de: [
+    { id: '38aabb6a-f52b-4fb0-a3d1-988518f4dc06', label: 'Alina — Engaging', desc: 'Warm female voice for assistants' },
+    { id: 'e00dd3df-19e7-4cd4-827a-7ff6687b6954', label: 'Lukas — Professional', desc: 'Confident male voice' },
+  ],
+  es: [
+    { id: 'de38f545-c574-44e8-9b54-a7d6fec1c6b1', label: 'Marta — Friendly Guide', desc: 'Approachable female voice' },
+    { id: 'b0689631-eee7-4a6c-bb86-195f1d267c2e', label: 'Emilio — Optimistic', desc: 'Upbeat male voice' },
+  ],
+}
+
+const voicesFor = (lang: string) => VOICES[lang] ?? VOICES.en
 
 const LANGUAGES = [
   { code: 'en', label: 'English', flag: '🇺🇸' },
@@ -26,7 +59,7 @@ const MODELS = [
 const DEFAULTS = {
   name: '',
   system_prompt: 'You are a helpful voice assistant.',
-  voice_id: VOICES[0].id,
+  voice_id: VOICES.en[0].id,
   llm_model: 'gpt-4o-mini',
   language: 'en',
 }
@@ -81,6 +114,19 @@ export default function BotSettingsPage() {
 
   function set(field: keyof typeof form, value: string) {
     setForm(prev => ({ ...prev, [field]: value }))
+  }
+
+  // Changing language has to move the voice with it, otherwise the form
+  // keeps a voice that speaks the old language and the radio list shows
+  // nothing selected — the state that produced Hindi in an English accent.
+  // Kept in one updater rather than two set() calls so language and voice
+  // can never be briefly inconsistent with each other.
+  function setLanguage(value: string) {
+    setForm(prev => {
+      const allowed = voicesFor(value)
+      const keep = allowed.some(v => v.id === prev.voice_id)
+      return { ...prev, language: value, voice_id: keep ? prev.voice_id : allowed[0].id }
+    })
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -155,7 +201,7 @@ export default function BotSettingsPage() {
           <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
             <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Voice</label>
             <div className="space-y-2">
-              {VOICES.map(v => (
+              {voicesFor(form.language).map(v => (
                 <label
                   key={v.id}
                   className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
@@ -187,7 +233,7 @@ export default function BotSettingsPage() {
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Language</label>
               <select
                 value={form.language}
-                onChange={e => set('language', e.target.value)}
+                onChange={e => setLanguage(e.target.value)}
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
               >
                 {LANGUAGES.map(l => (
