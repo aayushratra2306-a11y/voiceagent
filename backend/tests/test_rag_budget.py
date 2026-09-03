@@ -1,18 +1,21 @@
 """Guards the retrieval budget (found live 2026-09-03).
 
-RAGContextProcessor sits BEFORE the user aggregator and does not push the
-transcript frame until retrieval finishes. The aggregator has its own
-`user_turn_stop_timeout` (5.0s in pipecat), after which it concludes no
-transcript is coming and makes the bot say "Sorry, I didn't catch that".
+Originally existed because RAGContextProcessor sat BEFORE the user
+aggregator and held the raw transcript frame while it searched — a slow
+lookup let the aggregator's own `user_turn_stop_timeout` (5.0s) fire
+believing no transcript had arrived, and the bot apologised for mishearing
+a caller it had heard perfectly. Measured live: retrieval 7.03s, aggregator
+gave up at 4.1s.
 
-So a slow lookup produced exactly the wrong behaviour: the bot had heard the
-caller perfectly, was still searching, and apologised for mishearing while
-discarding the turn. Measured live: retrieval 7.03s, aggregator gave up at
-4.1s.
-
-The budget must therefore stay meaningfully BELOW the aggregator's timeout.
-These tests pin that relationship, because the failure it prevents is
-invisible in code review — the two numbers live in different libraries.
+That specific race became structurally impossible the same day, when the
+processor moved to AFTER the aggregator (see rag_processor.py's
+latest_user_text docstring) — the aggregator has already committed the turn
+by the time this processor sees anything, so its timeout can't fire for a
+turn that's already done. The budget stays for a plainer reason: an
+unbounded Pinecone/OpenAI call would still hang the reply indefinitely.
+AGGREGATOR_TURN_STOP_TIMEOUT is kept here as a documented reference point
+for what "meaningfully bounded" means, not because the two are still racing
+each other.
 """
 
 import asyncio

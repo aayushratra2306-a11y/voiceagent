@@ -3,18 +3,12 @@ import re
 import time
 
 from loguru import logger
-from pipecat.frames.frames import Frame, TranscriptionFrame
+from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from app.models.document import Document
 from app.services.rag import query_context, rewrite_query
-
-try:
-    from pipecat.frames.frames import InterimTranscriptionFrame
-except ImportError:
-    InterimTranscriptionFrame = None
-
 
 # Latency (2026-09-03). A full retrieval cycle — rewrite, embed, hybrid
 # search, rerank — measures about 2.0s, and it was running on EVERY user
@@ -51,25 +45,31 @@ there here morning afternoon evening night doing everyone mate buddy dear
 # "the invoice" — by never skipping when a digit or a question mark is present.
 _MEANINGFUL = re.compile(r"[0-9?]")
 
-# How long retrieval may hold a transcript frame before we give up and let it
-# through uncited.
+# How long retrieval may hold an LLMContextFrame before we give up and let
+# the reply through uncited.
 #
-# BUG FOUND 2026-09-03 from live logs. This processor sits BEFORE the user
-# aggregator in the pipeline and does not push the frame until retrieval
-# finishes. The aggregator has its own `user_turn_stop_timeout`, 5.0s by
-# default, after which it decides no transcript is coming and fires
-# on_user_turn_stop_timeout — which makes the bot say "Sorry, I didn't catch
-# that". So a lookup slower than 5s produced exactly the wrong behaviour: the
-# bot had heard the caller perfectly and was still searching, but apologised
-# for mishearing and threw the turn away. Measured instance: retrieval took
-# 7.03s, the aggregator gave up at 4.1s, the frame arrived 2.9s after that.
+# BUG FOUND 2026-09-03 from live logs, ORIGINALLY fixed here on the same
+# day. At the time this processor sat BEFORE the user aggregator, holding
+# the raw transcript frame while it searched. The aggregator's own
+# `user_turn_stop_timeout` (5.0s) would fire believing no transcript had
+# arrived at all, and the bot said "Sorry, I didn't catch that" to a caller
+# it had heard perfectly — measured instance: retrieval took 7.03s, the
+# aggregator gave up at 4.1s.
 #
-# 3.5s leaves headroom under the aggregator's 5.0s. Raising one without the
-# other reintroduces the bug, which is why both numbers are named here.
+# STILL RELEVANT, DIFFERENT REASON, as of the 2026-09-03 move to AFTER the
+# aggregator (see latest_user_text's docstring): that specific race is now
+# structurally impossible, because the aggregator has already committed the
+# turn and moved on by the time this processor ever sees a frame — its own
+# timeout can't fire for a turn it already finished. The budget stays
+# because an unbounded Pinecone/OpenAI call would still hang the reply
+# indefinitely otherwise; it's now a plain latency ceiling rather than a fix
+# for a specific timing race. AGGREGATOR_TURN_STOP_TIMEOUT is kept as a
+# documented reference point, not because this budget still races against
+# it.
 #
 # Exceeding the budget degrades to answering from general knowledge — a
-# slightly worse answer. Blowing the aggregator timeout discards the turn
-# entirely and blames the caller. The first is plainly the better failure.
+# slightly worse answer than a cited one, but far better than an unbounded
+# wait.
 RETRIEVAL_BUDGET_SECONDS = 3.5
 AGGREGATOR_TURN_STOP_TIMEOUT = 5.0  # pipecat LLMUserAggregatorParams default
 
@@ -84,11 +84,61 @@ def needs_retrieval(text: str) -> bool:
     return not all(w in _FILLER_WORDS for w in words)
 
 
+def latest_user_text(messages: list[dict]) -> str | None:
+    """The text of the most recent user-role message, or None if there
+    isn't one.
+
+    Bug found 2026-09-03 from live logs, root-caused by reading pipecat's
+    aggregator source rather than guessing. This processor used to sit
+    BEFORE the user aggregator and react to every raw TranscriptionFrame
+    from Deepgram directly — but Deepgram closes a "final" chunk out on
+    any pause past its endpointing threshold, and pipecat pushes each of
+    those unconditionally as its own frame with no merging. A single
+    spoken sentence with one mid-thought pause could arrive as two or more
+    separate fragments, each triggering its own document search and its
+    own rewrite of the system prompt — searching on half a sentence, then
+    doing it again for the other half.
+
+    The aggregator (`LLMUserAggregator`) already solves exactly this: it
+    buffers fragments and only commits real text to the conversation once
+    pipecat's own turn-detector (VAD + the Smart Turn model) decides the
+    user has actually finished. So this processor now moves to AFTER that
+    aggregator and reacts to the `LLMContextFrame` it emits — the same
+    signal that is about to trigger the LLM — and reads back whatever text
+    the aggregator just committed, rather than a raw, possibly-partial
+    transcript fragment.
+
+    This does not guarantee a fully complete sentence every time — the
+    turn-detector's own judgment about "are they done" is a separate,
+    genuine limitation (see the note above RETRIEVAL_BUDGET_SECONDS's
+    sibling in providers.py) — but it does guarantee this processor never
+    searches on LESS text than the LLM itself is about to see, which is
+    the part that was structurally broken.
+    """
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            # Some LLM context implementations represent a message as a
+            # list of typed parts (multimodal-style) rather than a plain
+            # string. Join whatever text parts exist rather than silently
+            # returning nothing for a message that does have real content.
+            parts = [p.get("text", "") for p in content if isinstance(p, dict)]
+            joined = " ".join(p for p in parts if p)
+            return joined or None
+        return None
+    return None
+
+
 class RAGContextProcessor(FrameProcessor):
     """
-    Sits between STT and the LLM context aggregator.
-    Only fires on FINAL TranscriptionFrames (not interim partials)
-    so the query is complete before Pinecone is called.
+    Sits between the user context aggregator and the LLM service.
+    Fires once per real, aggregator-confirmed user turn (an
+    `LLMContextFrame`) rather than on every raw STT fragment — see
+    `latest_user_text`'s docstring for why that distinction matters.
     """
 
     def __init__(
@@ -184,21 +234,29 @@ class RAGContextProcessor(FrameProcessor):
     async def process_frame(self, frame: Frame, direction):
         await super().process_frame(frame, direction)
 
-        # Only run RAG on final transcriptions — interim frames are partial
-        # and produce low-quality queries that pollute the context
-        is_final = isinstance(frame, TranscriptionFrame)
-        if not is_final and InterimTranscriptionFrame:
-            is_final = False  # explicitly skip interim
+        # Only the aggregator's own downstream commit — direction guard is
+        # cheap insurance against reacting to an LLMContextFrame flowing the
+        # other way (e.g. from the assistant-side aggregator further down
+        # the pipeline), which this processor was never meant to see.
+        is_real_turn = (
+            isinstance(frame, LLMContextFrame) and direction == FrameDirection.DOWNSTREAM
+        )
+        raw_text = latest_user_text(frame.context.messages) if is_real_turn else None
 
-        if is_final and hasattr(frame, 'text') and frame.text and frame.text.strip():
-            raw_text = frame.text
+        if raw_text and raw_text.strip():
+            # Mutated on the frame's own context object, not self._context.
+            # In this pipeline they are the same object (both processors
+            # were handed the one LLMContext), but writing through the
+            # frame is correct regardless of that — it's what the LLM
+            # service downstream is about to read.
+            messages = frame.context.messages
 
             if not needs_retrieval(raw_text):
                 # Nothing to look up. Restore the plain prompt and tell the
                 # UI so it shows "general knowledge" rather than stale
                 # citations from the previous turn.
                 logger.info(f"[RAG] Skipped (conversational): '{raw_text}' — saved ~2s")
-                self._context.messages[0] = {"role": "system", "content": self._base_prompt}
+                messages[0] = {"role": "system", "content": self._base_prompt}
                 await self._publish_sources([])
                 await self.push_frame(frame, direction)
                 return
@@ -218,7 +276,7 @@ class RAGContextProcessor(FrameProcessor):
                     f"'{raw_text}' — answering without document context so the "
                     f"turn is not discarded"
                 )
-                self._context.messages[0] = {"role": "system", "content": self._base_prompt}
+                messages[0] = {"role": "system", "content": self._base_prompt}
                 await self._publish_sources([])
                 await self.push_frame(frame, direction)
                 return
@@ -242,9 +300,9 @@ class RAGContextProcessor(FrameProcessor):
                     f"Do NOT say you cannot access files — the text below IS the document content:\n\n"
                     f"{retrieved}"
                 )
-                self._context.messages[0] = {"role": "system", "content": enriched}
+                messages[0] = {"role": "system", "content": enriched}
             else:
                 logger.warning(f"[RAG] No context found for: '{search_query}'")
-                self._context.messages[0] = {"role": "system", "content": self._base_prompt}
+                messages[0] = {"role": "system", "content": self._base_prompt}
 
         await self.push_frame(frame, direction)

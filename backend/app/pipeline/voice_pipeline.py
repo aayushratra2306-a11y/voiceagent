@@ -360,8 +360,21 @@ async def run_voice_pipeline(
 
     user_aggregator = context_aggregator.user()
 
-    pipeline_steps = [transport.input(), stt, AudioDebugger()]
+    pipeline_steps = [transport.input(), stt, AudioDebugger(), user_aggregator]
 
+    # Bug found 2026-09-03: this used to sit BEFORE user_aggregator and react
+    # to every raw TranscriptionFrame straight from Deepgram. Deepgram closes
+    # a "final" chunk out on any pause past its endpointing threshold, and
+    # pipecat pushes each one downstream unconditionally with no merging —
+    # so one spoken sentence with a mid-thought pause could search on half a
+    # sentence, then search again for the other half. user_aggregator already
+    # solves this correctly: it buffers fragments and only commits real text
+    # once pipecat's own turn-detector (VAD + Smart Turn) decides the user is
+    # actually done. Moving this processor to AFTER the aggregator, keyed off
+    # the LLMContextFrame it emits at that point, means it only ever fires
+    # once per real turn, on whatever text the LLM is about to see — never
+    # less. See rag_processor.py's latest_user_text() docstring for the full
+    # story, including the separate, genuine limitation this does NOT fix.
     if bot_id:
         # webrtc_connection is passed so the processor can publish Task 2.10
         # source citations straight to the browser over the data channel.
@@ -370,7 +383,6 @@ async def run_voice_pipeline(
         )
 
     pipeline_steps += [
-        user_aggregator,
         llm,
         MarkdownStripper(),
         TranscriptRecorder(session_id=session_id, bot_id=bot_id, bot_name=bot_name),
