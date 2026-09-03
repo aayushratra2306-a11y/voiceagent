@@ -1,4 +1,6 @@
+import asyncio
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -35,6 +37,7 @@ from app.models.conversation import ConversationTurn
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
 from app.pipeline.tools import TOOLS
+from app.services.rag import query_context
 
 
 class AudioDebugger(FrameProcessor):
@@ -431,6 +434,31 @@ async def run_voice_pipeline(
     async def on_user_turn_stop_timeout(aggregator):
         logger.warning("[PIPELINE] User turn timed out with no transcript — prompting caller to repeat")
         await task.queue_frame(TTSSpeakFrame("Sorry, I didn't catch that — could you say it again?"))
+
+    # Latency (2026-09-03). Task 2.4 gives every call a fresh process, so a
+    # worker starts with NO open connections to anything. The first retrieval
+    # of a call therefore pays a cold TLS handshake to OpenAI, to both
+    # Pinecone indexes, and to the reranker, one after another. Measured on
+    # the server: the first lookup in a call took 7.0s and 11.0s, while a
+    # later lookup in the same call took 3.4s. That gap is almost entirely
+    # connection setup, and the caller pays it on their very first question.
+    #
+    # The greeting takes two to three seconds to speak and nothing else is
+    # happening during it, so the handshakes are done there instead. By the
+    # time anyone finishes their first sentence the sockets are open.
+    #
+    # Fire-and-forget on purpose: it must never delay the pipeline starting,
+    # and a failure here is a missed optimisation, not a broken call.
+    if bot_id:
+        async def _warm_retrieval():
+            try:
+                t = time.perf_counter()
+                await query_context(bot_id, "warm up")
+                logger.info(f"[PIPELINE] Retrieval connections warmed in {time.perf_counter() - t:.2f}s")
+            except Exception as e:
+                logger.debug(f"[PIPELINE] Retrieval warm-up skipped: {e}")
+
+        asyncio.create_task(_warm_retrieval())
 
     logger.info("[PIPELINE] Running…")
     runner = PipelineRunner(handle_sigint=False)
