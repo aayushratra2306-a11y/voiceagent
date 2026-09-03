@@ -1,3 +1,4 @@
+import asyncio
 import re
 import time
 
@@ -49,6 +50,28 @@ there here morning afternoon evening night doing everyone mate buddy dear
 # Guard against a short utterance that IS a real question — "why?", "page 4",
 # "the invoice" — by never skipping when a digit or a question mark is present.
 _MEANINGFUL = re.compile(r"[0-9?]")
+
+# How long retrieval may hold a transcript frame before we give up and let it
+# through uncited.
+#
+# BUG FOUND 2026-09-03 from live logs. This processor sits BEFORE the user
+# aggregator in the pipeline and does not push the frame until retrieval
+# finishes. The aggregator has its own `user_turn_stop_timeout`, 5.0s by
+# default, after which it decides no transcript is coming and fires
+# on_user_turn_stop_timeout — which makes the bot say "Sorry, I didn't catch
+# that". So a lookup slower than 5s produced exactly the wrong behaviour: the
+# bot had heard the caller perfectly and was still searching, but apologised
+# for mishearing and threw the turn away. Measured instance: retrieval took
+# 7.03s, the aggregator gave up at 4.1s, the frame arrived 2.9s after that.
+#
+# 3.5s leaves headroom under the aggregator's 5.0s. Raising one without the
+# other reintroduces the bug, which is why both numbers are named here.
+#
+# Exceeding the budget degrades to answering from general knowledge — a
+# slightly worse answer. Blowing the aggregator timeout discards the turn
+# entirely and blames the caller. The first is plainly the better failure.
+RETRIEVAL_BUDGET_SECONDS = 3.5
+AGGREGATOR_TURN_STOP_TIMEOUT = 5.0  # pipecat LLMUserAggregatorParams default
 
 
 def needs_retrieval(text: str) -> bool:
@@ -139,6 +162,25 @@ class RAGContextProcessor(FrameProcessor):
         except Exception as e:
             logger.warning(f"[RAG] Could not send sources to client: {e}")
 
+    async def _retrieve(self, raw_text: str):
+        """Rewrite then search. Separated so the pair can share one deadline —
+        a budget on the search alone would still let a slow rewrite blow it."""
+        t0 = time.perf_counter()
+        search_query = await rewrite_query(raw_text)
+        t_rewrite = time.perf_counter() - t0
+
+        # Keep the raw transcript in the log even though search_query is what
+        # actually gets used — per task 1.6, useful for spotting a rewrite that
+        # went wrong without needing to reproduce it live.
+        if search_query != raw_text:
+            logger.info(f"[RAG] Query rewritten: '{raw_text}' -> '{search_query}'")
+        else:
+            logger.info(f"[RAG] Query (unchanged): '{raw_text}'")
+
+        t1 = time.perf_counter()
+        retrieved, sources = await query_context(self._bot_id, search_query)
+        return search_query, retrieved, sources, t_rewrite, time.perf_counter() - t1
+
     async def process_frame(self, frame: Frame, direction):
         await super().process_frame(frame, direction)
 
@@ -162,18 +204,24 @@ class RAGContextProcessor(FrameProcessor):
                 return
 
             t_start = time.perf_counter()
-            search_query = await rewrite_query(raw_text)
-            t_rewrite = time.perf_counter() - t_start
-            # Keep the raw transcript in the log even though search_query is
-            # what actually gets used — per task 1.6, useful for spotting a
-            # rewrite that went wrong without needing to reproduce it live.
-            if search_query != raw_text:
-                logger.info(f"[RAG] Query rewritten: '{raw_text}' -> '{search_query}'")
-            else:
-                logger.info(f"[RAG] Query (unchanged): '{raw_text}'")
-            t = time.perf_counter()
-            retrieved, sources = await query_context(self._bot_id, search_query)
-            t_search = time.perf_counter() - t
+            try:
+                search_query, retrieved, sources, t_rewrite, t_search = (
+                    await asyncio.wait_for(
+                        self._retrieve(raw_text), timeout=RETRIEVAL_BUDGET_SECONDS
+                    )
+                )
+            except TimeoutError:
+                # Over budget. Let the turn through uncited rather than let
+                # the aggregator time out and apologise for mishearing.
+                logger.warning(
+                    f"[RAG] Retrieval exceeded {RETRIEVAL_BUDGET_SECONDS}s budget for "
+                    f"'{raw_text}' — answering without document context so the "
+                    f"turn is not discarded"
+                )
+                self._context.messages[0] = {"role": "system", "content": self._base_prompt}
+                await self._publish_sources([])
+                await self.push_frame(frame, direction)
+                return
 
             # Logged every turn on purpose. Retrieval is the largest single
             # cost in the reply path, and it is the one that grows quietly as
@@ -181,7 +229,7 @@ class RAGContextProcessor(FrameProcessor):
             # visible before a user notices it.
             logger.info(
                 f"[RAG] timing: rewrite={t_rewrite:.2f}s search={t_search:.2f}s "
-                f"total={t_rewrite + t_search:.2f}s"
+                f"total={time.perf_counter() - t_start:.2f}s"
             )
             await self._publish_sources(sources)
             if retrieved:
