@@ -19,7 +19,7 @@ from pathlib import Path
 
 from loguru import logger
 from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.deepgram.stt import DeepgramSTTService, DeepgramSTTSettings
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from websockets.protocol import State
@@ -150,17 +150,76 @@ def get_stt_service(language: str = "en"):
     # splits — but it stops Deepgram being the MORE trigger-happy of the
     # two systems making this decision.
     #
-    # What this does NOT fix: RAGContextProcessor sits before the user
-    # aggregator and reacts to every TranscriptionFrame it sees, so even a
-    # single still-fragmented turn is handled as if it were complete. That
-    # is a bigger, riskier pipeline-ordering change and was deliberately
-    # left alone here rather than restructured blind.
+    # (What this alone didn't fix — RAGContextProcessor reacting to every
+    # fragment instead of a real completed turn — was addressed separately
+    # in rag_processor.py's latest_user_text(), 2026-09-03.)
+    #
+    # ttfs_p99_latency=0.7 (found 2026-09-03, following pipecat's own
+    # documented remedy, not a guess). Deepgram's built-in default here is
+    # 0.35s — but pipecat's stt_latency.py states plainly that figure was
+    # benchmarked at their recommended stop_secs=0.2, and says explicitly:
+    # "If you change stop_secs, re-run the benchmark ... and pass the
+    # measured value to your STT service constructor." We changed stop_secs
+    # to 0.5 (see the note above) and never did that — the result, logged on
+    # every single call: "STT wait timeout collapsed to 0s, which may cause
+    # delayed turn detection". Confirmed by reading
+    # turn_analyzer_user_turn_stop_strategy.py directly: once
+    # stt_timeout <= stop_secs, the safety-net window that's supposed to
+    # wait a little extra for a transcript to actually arrive computes to
+    # zero and stops doing its job.
+    #
+    # 0.7 is a deliberately conservative margin above 0.5, not a re-run
+    # benchmark result — this environment has no way to run pipecat's own
+    # https://github.com/pipecat-ai/stt-benchmark tool against this specific
+    # network path. It's large enough to guarantee the collapse condition
+    # never triggers, small enough to add at most ~200ms over the minimum
+    # that would satisfy it. Re-running the real benchmark would give a
+    # more precise number; this removes the defect without needing to.
+    #
+    # This is NOT a fix for Smart Turn's own COMPLETE/INCOMPLETE judgment —
+    # checked directly: BaseSmartTurn and LocalSmartTurnV3 expose no
+    # confidence threshold or similar tunable, only stop_secs (already set
+    # above). Smart Turn misjudging a genuine pause is a separate, real
+    # model-accuracy limit this change does not touch.
+    # BUG FOUND 2026-09-03, and it's a serious one: language, endpointing and
+    # interim_results were being passed as bare keyword arguments to
+    # DeepgramSTTService(...) — which silently drops every one of them. This
+    # is the SAME silent-extra-field-drop pattern already found twice before
+    # in this project (Task 1.1's VAD params, and PipelineParams' audio
+    # fields) — a fourth occurrence would have been worth a project-wide
+    # sweep on its own, but three is already the pattern to watch for.
+    #
+    # Confirmed directly by constructing the real service and inspecting
+    # `_settings` afterward: a bare `language="hi"` produced `_settings.
+    # language == "en"` — the class's own hardcoded default, completely
+    # unaffected by what we passed. Concretely, this means every Hindi-
+    # configured bot has been transcribed as if it were English on this,
+    # the DEFAULT cloud path, for as long as this code has existed. The
+    # earlier "faster-whisper verified live in English and Hindi" note in
+    # project memory is real but describes the LOCAL provider path
+    # (stt_provider="whisper") — a different code path from this one, which
+    # is what every bot actually uses unless explicitly switched over.
+    # `endpointing=500` (this session's earlier fix, commit 55059c7) never
+    # took effect either, for the same reason — Deepgram has been running
+    # on its own undocumented server-side default the whole time regardless
+    # of what number was written here.
+    #
+    # The Deepgram service's docstring names the fix directly: these three
+    # are "runtime-updatable fields" that belong on `settings=Deepgram
+    # STTService.Settings(...)`, not passed as init kwargs — init kwargs are
+    # for "connection-level config" only (api_key, ttfs_p99_latency, and the
+    # like). Verified the corrected form actually lands: constructing with
+    # `settings=DeepgramSTTSettings(language="hi", ...)` produces
+    # `_settings.language == "hi"`, matching what was intended all along.
     logger.info("[PROVIDERS] STT: Deepgram (cloud)")
     return DeepgramSTTService(
         api_key=settings.deepgram_api_key,
-        language=language,
-        endpointing=500,
-        interim_results=True,
+        ttfs_p99_latency=0.7,
+        settings=DeepgramSTTSettings(
+            language=language,
+            endpointing=500,
+            interim_results=True,
+        ),
     )
 
 
