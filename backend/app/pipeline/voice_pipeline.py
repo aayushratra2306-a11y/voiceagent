@@ -34,6 +34,7 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core.tracing import setup_call_tracing
 from app.models.conversation import ConversationTurn
+from app.pipeline.language import didnt_catch_for, greeting_for, system_language_note
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
 from app.pipeline.tools import TOOLS
@@ -285,6 +286,13 @@ async def run_voice_pipeline(
         "(**/*), no tables (|), no bullet points, no horizontal rules (---), "
         "no code blocks. Speak in plain, natural spoken sentences and "
         "paragraphs, the way a person would say it out loud."
+        # The bot's language reached STT and TTS but never the model itself,
+        # so a Hindi bot heard Hindi and could speak Hindi while still
+        # THINKING in English — and duly answered a Hindi question in
+        # English until the caller explicitly asked it to switch. Confirmed
+        # live 2026-09-04. Appended after the Markdown rules, not before, so
+        # it sits closest to the turn and is the last thing the model reads.
+        + system_language_note(language)
     )
 
     # Task 1.3: pass the tool functions straight into `tools=` — pipecat 1.7.0
@@ -427,7 +435,7 @@ async def run_voice_pipeline(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("[PIPELINE] Client connected — sending greeting")
-        await task.queue_frame(TTSSpeakFrame("Hello! I'm ready. How can I help you?"))
+        await task.queue_frame(TTSSpeakFrame(greeting_for(language)))
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
@@ -445,7 +453,7 @@ async def run_voice_pipeline(
     @user_aggregator.event_handler("on_user_turn_stop_timeout")
     async def on_user_turn_stop_timeout(aggregator):
         logger.warning("[PIPELINE] User turn timed out with no transcript — prompting caller to repeat")
-        await task.queue_frame(TTSSpeakFrame("Sorry, I didn't catch that — could you say it again?"))
+        await task.queue_frame(TTSSpeakFrame(didnt_catch_for(language)))
 
     # Latency (2026-09-03). Task 2.4 gives every call a fresh process, so a
     # worker starts with NO open connections to anything. The first retrieval
