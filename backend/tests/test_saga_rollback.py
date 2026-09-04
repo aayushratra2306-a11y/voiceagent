@@ -56,7 +56,8 @@ def _patch_calls(monkeypatch, recorder):
 
 async def test_a_success_beside_a_failure_is_undone(monkeypatch):
     """The case the whole task exists for."""
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     said = []
     saga = TurnSaga(announce=lambda s: said.append(s) or _noop())
 
@@ -73,7 +74,8 @@ async def test_a_tool_with_no_declared_undo_is_left_alone(monkeypatch):
     """Two lookups where one fails must not "roll back" the other — there is
     nothing to roll back, and inventing one would be worse than doing
     nothing."""
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     said = []
     saga = TurnSaga(announce=lambda s: said.append(s) or _noop())
 
@@ -87,7 +89,8 @@ async def test_a_tool_with_no_declared_undo_is_left_alone(monkeypatch):
 
 
 async def test_nothing_is_rolled_back_when_everything_worked(monkeypatch):
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     said = []
     saga = TurnSaga(announce=lambda s: said.append(s) or _noop())
 
@@ -102,7 +105,8 @@ async def test_nothing_is_rolled_back_when_everything_worked(monkeypatch):
 async def test_steps_are_undone_in_reverse_order(monkeypatch):
     """Later steps may depend on earlier ones — the hotel booked against the
     flight has to go before the flight does."""
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     saga = TurnSaga(announce=lambda s: _noop())
 
     saga.begin(3)
@@ -116,7 +120,8 @@ async def test_steps_are_undone_in_reverse_order(monkeypatch):
 async def test_the_undo_call_sees_the_original_arguments(monkeypatch):
     """So a cancel URL can be written /bookings/{booking_id} using the same
     placeholders the booking used."""
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     saga = TurnSaga(announce=lambda s: _noop())
 
     saga.begin(2)
@@ -142,7 +147,8 @@ async def test_the_undo_carries_the_same_credential():
 async def test_a_failed_undo_is_escalated_not_glossed_over(monkeypatch):
     """The one case here that genuinely needs a human: something real
     happened and could not be taken back."""
-    rec = _Recorder(fail=True); _patch_calls(monkeypatch, rec)
+    rec = _Recorder(fail=True)
+    _patch_calls(monkeypatch, rec)
     errors, said = [], []
     monkeypatch.setattr("app.pipeline.saga.logger.error", lambda m: errors.append(m))
     saga = TurnSaga(announce=lambda s: said.append(s) or _noop())
@@ -158,7 +164,8 @@ async def test_a_failed_undo_is_escalated_not_glossed_over(monkeypatch):
 
 async def test_the_caller_is_told_what_still_stands(monkeypatch):
     """The manual is explicit: do not pretend. A sent message stays sent."""
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     said = []
     saga = TurnSaga(announce=lambda s: said.append(s) or _noop())
 
@@ -197,7 +204,8 @@ async def test_a_rollback_never_raises_into_a_live_call(monkeypatch):
 async def test_a_new_turn_cannot_roll_back_the_previous_one(monkeypatch):
     """Undoing a booking made two turns ago because something unrelated
     failed now would be its own kind of disaster."""
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     saga = TurnSaga(announce=lambda s: _noop())
 
     saga.begin(1)
@@ -212,7 +220,8 @@ async def test_a_new_turn_cannot_roll_back_the_previous_one(monkeypatch):
 async def test_an_incomplete_batch_does_nothing(monkeypatch):
     """If one tool never reports, the saga stays idle rather than acting on
     half a picture or hanging the turn."""
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     saga = TurnSaga(announce=lambda s: _noop())
 
     saga.begin(3)
@@ -223,7 +232,8 @@ async def test_an_incomplete_batch_does_nothing(monkeypatch):
 
 
 async def test_a_batch_is_acted_on_only_once(monkeypatch):
-    rec = _Recorder(); _patch_calls(monkeypatch, rec)
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
     saga = TurnSaga(announce=lambda s: _noop())
 
     saga.begin(2)
