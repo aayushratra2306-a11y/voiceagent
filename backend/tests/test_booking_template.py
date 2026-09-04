@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+import pytest_asyncio
 
 from app.models.appointment import Appointment
 from app.models.bot import Bot
@@ -56,7 +57,7 @@ def _future_date(days: int = 3) -> str:
     return (datetime.now(KOLKATA) + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def _a_bot_on_a_call():
     """A bot with known booking settings, and a clean calendar.
 
@@ -94,7 +95,12 @@ async def test_a_local_time_is_stored_as_the_right_utc_instant(_a_bot_on_a_call)
 
     assert result["booked"] is True, result
     saved = await Appointment.find_one(Appointment.reference == result["reference"])
-    assert saved.starts_at_utc.astimezone(UTC).strftime("%H:%M") == "03:30"
+    # .replace(tzinfo=UTC), not .astimezone(UTC): PyMongo hands this back
+    # NAIVE (no tz_aware=True on this Motor client), and it already means
+    # UTC — .astimezone() on a naive value assumes the OS's own local zone
+    # instead and would silently shift the instant rather than just label it.
+    stored_utc = saved.starts_at_utc.replace(tzinfo=UTC)
+    assert stored_utc.strftime("%H:%M") == "03:30"
     # And the local wall clock is kept alongside it for speaking back.
     assert saved.time == "09:00"
     assert saved.timezone == "Asia/Kolkata"

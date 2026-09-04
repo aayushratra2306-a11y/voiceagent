@@ -15,7 +15,7 @@ from app.models.approval import PendingApproval
 from app.models.bot_tool import BotTool
 from app.pipeline import call_context
 from app.services import tool_registry
-from app.services.tool_registry import APPROVAL_RULE, call_http_tool
+from app.services.tool_registry import APPROVAL_RULE, to_function_schema
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -39,6 +39,27 @@ class _Client:
     async def request(self, method, url, **kw):
         self.calls += 1
         return self.response
+
+
+class _HandlerParams:
+    """Stands in for pipecat's FunctionCallParams — the approval gate
+    lives in the generated HANDLER (_http_handler's closure), not in
+    call_http_tool itself, precisely so approvals.py's approve() can call
+    call_http_tool directly to bypass it. Testing the gate means going
+    through this same entry point, the way pipecat actually would."""
+
+    def __init__(self, arguments):
+        self.arguments = arguments
+        self.result = None
+
+    async def result_callback(self, result):
+        self.result = result
+
+
+async def _call_gated(tool: BotTool, args: dict) -> dict:
+    params = _HandlerParams(args)
+    await to_function_schema(tool).handler(params)
+    return params.result
 
 
 def _gated_tool(**over) -> BotTool:
@@ -65,7 +86,7 @@ async def test_an_amount_under_the_threshold_runs_normally(monkeypatch):
     client = _Client()
     monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
 
-    result = await call_http_tool(_gated_tool(), {"amount": 50})
+    result = await _call_gated(_gated_tool(), {"amount": 50})
 
     assert result["ok"] is True
     assert "pending_approval" not in result
@@ -77,7 +98,7 @@ async def test_an_amount_over_the_threshold_never_reaches_the_customers_api(monk
     monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
     call_context.set_call(bot_id="bot-1", user_id="user-1")
 
-    result = await call_http_tool(_gated_tool(), {"amount": 500})
+    result = await _call_gated(_gated_tool(), {"amount": 500})
 
     assert result["ok"] is True
     assert result["pending_approval"] is True
@@ -92,7 +113,7 @@ async def test_an_amount_exactly_at_the_threshold_does_not_require_approval(monk
     monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
     call_context.set_call(bot_id="bot-1", user_id="user-1")
 
-    result = await call_http_tool(_gated_tool(), {"amount": 100})
+    result = await _call_gated(_gated_tool(), {"amount": 100})
 
     assert "pending_approval" not in result
 
@@ -102,7 +123,7 @@ async def test_a_disabled_gate_never_creates_an_approval(monkeypatch):
     monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
     tool = _gated_tool(approval={"enabled": False, "amount_parameter": "amount", "threshold": 0})
 
-    result = await call_http_tool(tool, {"amount": 999999})
+    result = await _call_gated(tool, {"amount": 999999})
 
     assert "pending_approval" not in result
     assert client.calls == 1
@@ -116,7 +137,7 @@ async def test_an_unparseable_amount_requires_approval_rather_than_skipping_it(m
     monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
     call_context.set_call(bot_id="bot-1", user_id="user-1")
 
-    result = await call_http_tool(_gated_tool(), {"amount": "not-a-number"})
+    result = await _call_gated(_gated_tool(), {"amount": "not-a-number"})
 
     assert result["pending_approval"] is True
     assert client.calls == 0
@@ -124,7 +145,7 @@ async def test_an_unparseable_amount_requires_approval_rather_than_skipping_it(m
 
 async def test_a_missing_amount_argument_requires_approval():
     call_context.set_call(bot_id="bot-1", user_id="user-1")
-    result = await call_http_tool(_gated_tool(), {})  # no "amount" key at all
+    result = await _call_gated(_gated_tool(), {})  # no "amount" key at all
     assert result.get("pending_approval") is True
 
 
@@ -132,7 +153,7 @@ async def test_the_pending_approval_is_recorded_against_the_right_bot_and_call()
     call_context.set_call(bot_id="bot-42", user_id="user-9", pc_id="pc-live-1")
     tool = _gated_tool(bot_id="bot-42")
 
-    result = await call_http_tool(tool, {"amount": 250})
+    result = await _call_gated(tool, {"amount": 250})
 
     approval = await PendingApproval.find_one(PendingApproval.amount == 250)
     assert approval is not None
@@ -146,7 +167,7 @@ async def test_the_pending_approval_is_recorded_against_the_right_bot_and_call()
 
 async def test_the_model_is_told_not_to_promise_it_is_done():
     call_context.set_call(bot_id="bot-1", user_id="user-1")
-    result = await call_http_tool(_gated_tool(), {"amount": 500})
+    result = await _call_gated(_gated_tool(), {"amount": 500})
     assert "do not" in result["message"].lower()
     assert "sign-off" in result["message"].lower() or "person" in result["message"].lower()
 
@@ -219,7 +240,7 @@ async def test_approving_runs_the_action_for_the_first_time(client, user_a_token
     tool = _gated_tool(bot_id="bot-api-1")
     await tool.insert()
     approval = PendingApproval(
-        tool_id=str(tool.id), bot_id="bot-api-1", user_id=str(
+        tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-1", user_id=str(
             await _user_id(client, user_a_token)
         ),
         arguments={"amount": 500}, amount=500, threshold=100,
@@ -244,7 +265,7 @@ async def test_denying_never_runs_the_action(client, user_a_token, monkeypatch):
     tool = _gated_tool(bot_id="bot-api-2")
     await tool.insert()
     approval = PendingApproval(
-        tool_id=str(tool.id), bot_id="bot-api-2",
+        tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-2",
         user_id=str(await _user_id(client, user_a_token)),
         arguments={"amount": 500}, amount=500, threshold=100,
     )
@@ -264,7 +285,7 @@ async def test_an_already_decided_approval_cannot_be_decided_again(client, user_
     tool = _gated_tool(bot_id="bot-api-3")
     await tool.insert()
     approval = PendingApproval(
-        tool_id=str(tool.id), bot_id="bot-api-3",
+        tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-3",
         user_id=str(await _user_id(client, user_a_token)),
         arguments={}, amount=500, threshold=100, status="approved",
     )
@@ -278,7 +299,7 @@ async def test_a_user_cannot_decide_someone_elses_approval(client, user_a_token,
     tool = _gated_tool(bot_id="bot-api-4")
     await tool.insert()
     approval = PendingApproval(
-        tool_id=str(tool.id), bot_id="bot-api-4",
+        tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-4",
         user_id=str(await _user_id(client, user_a_token)),
         arguments={}, amount=500, threshold=100,
     )
@@ -290,7 +311,7 @@ async def test_a_user_cannot_decide_someone_elses_approval(client, user_a_token,
 
 async def test_approving_when_the_tool_was_deleted_denies_automatically(client, user_a_token):
     approval = PendingApproval(
-        tool_id="a-tool-id-that-was-deleted", bot_id="bot-api-5",
+        tool_id="a-tool-id-that-was-deleted", tool_name="issue_refund", bot_id="bot-api-5",
         user_id=str(await _user_id(client, user_a_token)),
         arguments={}, amount=500, threshold=100,
     )
@@ -307,7 +328,7 @@ async def test_the_list_endpoint_only_shows_the_users_own_approvals(client, user
     tool = _gated_tool(bot_id="bot-api-6")
     await tool.insert()
     mine = PendingApproval(
-        tool_id=str(tool.id), bot_id="bot-api-6",
+        tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-6",
         user_id=str(await _user_id(client, user_a_token)),
         arguments={}, amount=500, threshold=100,
     )

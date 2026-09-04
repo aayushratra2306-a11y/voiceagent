@@ -607,22 +607,17 @@ async def reschedule_appointment(params: FunctionCallParams, reference: str, dat
 
 
 async def _emit(event: str, appointment: Appointment) -> None:
-    """Tell the customer's own system that this happened.
+    """Tell the customer's own system that this happened, via task 3.8's
+    webhook system.
 
-    The delivery mechanism is task 3.8, which is not built yet — hence the
-    ImportError branch, which is a deliberate no-op rather than a warning:
-    until webhooks exist, having nothing to notify is the correct state and
-    should not put a line in the log on every booking. The call sites are
-    written now so 3.8 is a wiring change in one file rather than a hunt
-    through this one.
-
-    Once it does exist it stays wrapped, because a webhook is a
-    notification: a notification failing must never turn into a booking
-    failing.
+    Wrapped because a webhook is a notification: a notification failing
+    must never turn into a booking failing.
     """
     try:
         from app.services.webhooks import emit  # noqa: PLC0415
     except ImportError:
+        # Only reachable if 3.8 is ever removed/renamed — kept so this
+        # call site degrades to a no-op rather than breaking a booking.
         return
 
     try:
@@ -635,9 +630,7 @@ async def _emit(event: str, appointment: Appointment) -> None:
                 "date": appointment.date,
                 "time": appointment.time,
                 "timezone": appointment.timezone,
-                "starts_at_utc": (
-                    appointment.starts_at_utc.isoformat() if appointment.starts_at_utc else None
-                ),
+                "starts_at_utc": _utc_isoformat(appointment.starts_at_utc),
                 "purpose": appointment.purpose,
                 "caller_name": appointment.caller_name,
                 "bot_id": appointment.bot_id,
@@ -646,6 +639,26 @@ async def _emit(event: str, appointment: Appointment) -> None:
         )
     except Exception as e:
         logger.warning(f"[BOOKING] Could not emit {event}: {type(e).__name__}: {e}")
+
+
+def _utc_isoformat(dt: datetime | None) -> str | None:
+    """A datetime that definitely means UTC, as an ISO string that says so.
+
+    `appointment.starts_at_utc` is aware when it's the object this process
+    just built (book_appointment), but PyMongo hands back a NAIVE datetime
+    for one re-fetched from the database (cancel/reschedule both load the
+    booking first) — confirmed directly against bson's own codec: this
+    Motor client has no tz_aware=True. A naive value's own .isoformat()
+    would silently drop the "+00:00", handing a customer's webhook receiver
+    a timestamp with no zone attached — this is the fix, not `.astimezone`,
+    which would be actively wrong: called on a naive value it assumes the
+    OS's local zone and shifts the instant, rather than just labelling it.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.isoformat()
 
 
 BOOKING_TOOLS = [
