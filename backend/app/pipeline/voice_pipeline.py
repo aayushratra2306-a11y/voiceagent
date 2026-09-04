@@ -46,8 +46,8 @@ from app.pipeline.language import (
 )
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
-from app.pipeline.tools import TOOLS
 from app.services.rag import query_context
+from app.services.tool_registry import load_tools_for_bot
 
 
 class AudioDebugger(FrameProcessor):
@@ -462,9 +462,21 @@ async def run_voice_pipeline(
     # type hints and docstring, and auto-registers the handler since these
     # are plain async functions (a "direct function" in pipecat's terms).
     # No manual FunctionSchema or register_function call needed.
+    #
+    # Task 3.1: which tools, though, is now this bot's own configuration
+    # rather than one global list. load_tools_for_bot returns a mix pipecat
+    # accepts as-is — plain functions for the built-ins, FunctionSchema
+    # objects carrying a generated handler for tools defined in the
+    # database. A bot with nothing configured still gets the built-ins, so
+    # every bot that predates this keeps working unchanged.
+    #
+    # Loaded per call rather than cached: a customer editing a tool expects
+    # their next call to use it, and this costs one indexed query against a
+    # handful of rows while the greeting is still playing.
+    tools = await load_tools_for_bot(bot_id)
     context = LLMContext(
         messages=[{"role": "system", "content": voice_system_prompt}],
-        tools=TOOLS,
+        tools=tools,
     )
 
     # In 1.7.0, VAD + end-of-turn detection live on the user context

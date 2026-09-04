@@ -189,6 +189,7 @@ async def _prepare_worker():
     # mechanism, not the WebRTC-specific path live" caveat was flagging.
     from app.db.mongo import init_db
     from app.models.appointment import Appointment
+    from app.models.bot_tool import BotTool
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
@@ -198,7 +199,7 @@ async def _prepare_worker():
     # filename to cite a source. Beanie raises CollectionWasNotInitialized
     # for any model missing from this list, so an omission here is the same
     # failure this whole init_db call exists to fix.
-    await init_db([Order, Appointment, ConversationTurn, Document])
+    await init_db([Order, Appointment, ConversationTurn, Document, BotTool])
     return run_voice_pipeline
 
 

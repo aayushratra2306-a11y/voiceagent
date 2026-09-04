@@ -42,13 +42,14 @@ async def _test_db():
     from app.db.mongo import database, init_db
     from app.models.appointment import Appointment
     from app.models.bot import Bot
+    from app.models.bot_tool import BotTool
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
     from app.models.revoked_token import RevokedRefreshToken
     from app.models.user import User
 
-    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn, RevokedRefreshToken])
+    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn, RevokedRefreshToken, BotTool])
     yield
     await database.client.drop_database(database.name)
 
