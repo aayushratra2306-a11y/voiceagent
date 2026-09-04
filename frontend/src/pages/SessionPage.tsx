@@ -147,8 +147,22 @@ export default function SessionPage() {
           addLog('Ready — speak now')
         }
         if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          setStatus('error')
           addLog('Connection lost')
+          // Release the start guard here, or the Start button this error
+          // state puts back on screen is dead. The guard is otherwise
+          // cleared only by stopSession(), and nothing in this path calls
+          // it: the connection dropped on its own rather than being
+          // stopped. startSession() would then return immediately on a
+          // guard nothing can clear, and the only way back would be a page
+          // reload. This path matters — a dropped network, a failed ICE
+          // negotiation, or the server ending a stale call all land here.
+          //
+          // Teardown is deliberately left to startSession()'s own
+          // closeConnection(): 'disconnected' can recover to 'connected' on
+          // its own, and closing the peer here would make a recoverable
+          // blip permanent.
+          startingRef.current = false
+          setStatus('error')
         }
       }
 
