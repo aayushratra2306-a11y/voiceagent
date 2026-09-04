@@ -240,6 +240,29 @@ export default function BotSettingsPage() {
             </div>
           </div>
 
+          {/* Tools — Task 3.1. A separate page rather than a section here:
+              a tool has a dozen fields of its own, and burying that inside an
+              already-long settings form would make both harder to use. New
+              bots have no id to hang tools off yet, so it appears after the
+              first save. */}
+          {!isNew && (
+            <button
+              type="button"
+              onClick={() => navigate(`/bots/${id}/tools`)}
+              className="w-full bg-white/4 border border-white/8 rounded-2xl p-5 flex items-center gap-4 text-left hover:border-violet-500/40 hover:bg-white/6 transition-all"
+            >
+              <div className="flex-1">
+                <p className="font-semibold text-white text-sm">Tools</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Let this bot look things up, book slots, or call your own systems
+                </p>
+              </div>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-slate-500">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          )}
+
           {/* Language + Model */}
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-white/4 border border-white/8 rounded-2xl p-5">

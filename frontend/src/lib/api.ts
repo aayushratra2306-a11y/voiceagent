@@ -117,6 +117,69 @@ export async function deleteBot(id: string): Promise<void> {
   return request(`/bots/${id}`, { method: 'DELETE' })
 }
 
+// ── Bot tools (Task 3.1) ────────────────────────────────────────────────────
+// A tool is a database record rather than code: a name, a description the AI
+// reads to decide when to use it, the inputs it must supply, and where to send
+// them. The credential is write-only across this API — it goes out in `secret`
+// and comes back only as `secret_masked`.
+export interface ToolParameter {
+  name: string
+  type: 'string' | 'number' | 'integer' | 'boolean'
+  description: string
+  required: boolean
+}
+
+export interface BotTool {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  kind: 'http' | 'builtin'
+  builtin: string
+  method: string
+  url: string
+  headers: Record<string, string>
+  query: Record<string, string>
+  body: Record<string, unknown>
+  parameters: ToolParameter[]
+  auth: { kind: string; name: string; secret_masked: string; has_secret: boolean }
+}
+
+/** What the form sends. Omitting `auth.secret` means "keep the stored one",
+ *  which is what lets the URL be edited without re-typing the API key. */
+export type BotToolInput = Omit<BotTool, 'id' | 'auth'> & {
+  auth: { kind: string; name: string; secret?: string }
+}
+
+export async function listTools(botId: string): Promise<BotTool[]> {
+  return request(`/bots/${botId}/tools/`)
+}
+
+export async function createTool(botId: string, data: BotToolInput): Promise<BotTool> {
+  return request(`/bots/${botId}/tools/`, { method: 'POST', body: JSON.stringify(data) })
+}
+
+export async function updateTool(botId: string, toolId: string, data: BotToolInput): Promise<BotTool> {
+  return request(`/bots/${botId}/tools/${toolId}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+
+export async function deleteTool(botId: string, toolId: string): Promise<void> {
+  return request(`/bots/${botId}/tools/${toolId}`, { method: 'DELETE' })
+}
+
+/** Run a tool once, now, without placing a call — so a wrong URL or key is
+ *  found at configuration time rather than mid-conversation. */
+export async function testTool(
+  botId: string,
+  toolId: string,
+  args: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  return request(`/bots/${botId}/tools/${toolId}/test`, {
+    method: 'POST',
+    body: JSON.stringify(args),
+  })
+}
+
 // ── Documents ───────────────────────────────────────────────────────────────
 export interface BotDocument {
   id: string

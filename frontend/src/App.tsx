@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import BotSettingsPage from './pages/BotSettingsPage'
+import BotToolsPage from './pages/BotToolsPage'
 import SessionPage from './pages/SessionPage'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/" element={<LoginPage />} />
           <Route path="/dashboard" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
           <Route path="/bots/:id" element={<PrivateRoute><BotSettingsPage /></PrivateRoute>} />
+          <Route path="/bots/:id/tools" element={<PrivateRoute><BotToolsPage /></PrivateRoute>} />
           <Route path="/session/:id" element={<PrivateRoute><SessionPage /></PrivateRoute>} />
         </Routes>
       </BrowserRouter>
