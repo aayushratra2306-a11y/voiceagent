@@ -89,7 +89,31 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
       # Excludes tests/rag_eval — see the rag-eval job below for why.
-      - run: pytest tests/ --ignore=tests/rag_eval -v
+      #
+      # Piped through `set +e` + explicit exit-code capture, NOT through
+      # `tee`/`| tail` directly — a plain pipe's exit status is the LAST
+      # command in it, which already bit this project once (aa46f93 shipped
+      # with 10 lint errors because `ruff ... | tail -1` reported tail's
+      # exit code, not ruff's). The point of the extra step below is
+      # surfacing WHY a run failed without needing the Actions log-download
+      # permission this repo doesn't have configured — the job summary is
+      # readable through the plain API.
+      - name: Run tests
+        run: |
+          set +e
+          pytest tests/ --ignore=tests/rag_eval -v > pytest_output.txt 2>&1
+          code=$?
+          cat pytest_output.txt
+          exit $code
+      - name: Show failure details in the job summary
+        if: failure()
+        run: |
+          {
+            echo '## Test failures'
+            echo '```'
+            grep -B 2 -A 40 "^FAILED\|^ERROR\|Error:\|Traceback" pytest_output.txt | tail -400
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   dependency-scan:
     runs-on: ubuntu-latest
