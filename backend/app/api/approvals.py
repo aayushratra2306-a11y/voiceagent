@@ -79,7 +79,14 @@ async def approve(approval_id: str, current_user: User = Depends(get_current_use
     if approval.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already {approval.status}")
 
-    tool = await BotTool.get(PydanticObjectId(approval.tool_id)) if approval.tool_id else None
+    # A malformed or non-ObjectId tool_id must land in the same "deny"
+    # branch as a genuinely deleted tool, not raise into a 500 — the
+    # underlying config is equally unrunnable either way, and both are
+    # "the tool this pointed at no longer resolves."
+    try:
+        tool = await BotTool.get(PydanticObjectId(approval.tool_id)) if approval.tool_id else None
+    except Exception:
+        tool = None
     if tool is None:
         # The tool itself was edited or deleted since this was queued.
         # Refusing to run something whose configuration no longer exists is
