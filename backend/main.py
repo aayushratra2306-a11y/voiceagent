@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api import auth, bot_tools, bots, connect, documents, payments
+from app.api import auth, bot_tools, bots, connect, documents, payments, webhooks
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
 from app.core.config import settings
 from app.core.rate_limit import limiter
@@ -25,6 +25,8 @@ from app.models.order import Order
 from app.models.payment import PaymentSession
 from app.models.revoked_token import RevokedRefreshToken
 from app.models.user import User
+from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
+from app.services.webhooks import webhook_delivery_loop
 
 # Task 2.7 — error tracking. A blank DSN (the default — see config.py) makes
 # this a confirmed no-op, verified live: no account, no behavior change,
@@ -39,7 +41,8 @@ sentry_sdk.init(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
-                   RevokedRefreshToken, BotTool, PaymentSession])
+                   RevokedRefreshToken, BotTool, PaymentSession,
+                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem])
     await seed_fake_orders()
     # Task 2.4 — reaps finished/crashed per-call worker processes so the
     # registry and the OS process table don't grow unbounded.
@@ -48,9 +51,16 @@ async def lifespan(app: FastAPI):
     # through a fresh interpreter importing pipecat. See the long note in
     # app/api/connect.py.
     pool_task = asyncio.create_task(maintain_worker_pool_loop())
+    # Task 3.8 — durable webhook delivery. Lives in the long-lived API
+    # process deliberately: an event queued from inside a call's own
+    # short-lived worker process (task 2.4) needs a retry schedule that
+    # can span minutes, which cannot safely live in a process that can
+    # exit within seconds of the caller hanging up.
+    webhook_task = asyncio.create_task(webhook_delivery_loop())
     yield
     reaper_task.cancel()
     pool_task.cancel()
+    webhook_task.cancel()
 
 
 app = FastAPI(title="Voice Agent API", lifespan=lifespan)
@@ -77,6 +87,7 @@ app.include_router(connect.router)
 app.include_router(documents.router)
 app.include_router(bot_tools.router)
 app.include_router(payments.router)
+app.include_router(webhooks.router)
 
 
 @app.get("/health")

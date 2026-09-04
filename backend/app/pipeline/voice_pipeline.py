@@ -405,8 +405,13 @@ async def run_voice_pipeline(
     # task, works exactly as before.
     pc_id: str | None = None,
     payment_queue=None,
+    # Task 3.8 — the bot's OWNER (Bot.user_id), not the caller. A webhook
+    # fires to whichever customer of this platform configured it, so their
+    # own system hears about their own bot's events.
+    user_id: str | None = None,
 ):
     session_id = str(uuid.uuid4())
+    call_started_at = datetime.now(UTC)  # task 3.8 — call.ended's duration
     logger.info(f"[PIPELINE] Starting for bot: {bot_name} (session {session_id})")
 
     # Task 3.5 — the built-in tools are plain module-level functions, so they
@@ -416,7 +421,9 @@ async def run_voice_pipeline(
     # call_context.py for why a module-level value is safe here (one OS
     # process per call). pc_id is here for the same reason — task 3.7's
     # payment tool stamps it onto the PaymentSession it creates.
-    call_context.set_call(bot_id=bot_id, session_id=session_id, language=language, pc_id=pc_id)
+    call_context.set_call(
+        bot_id=bot_id, session_id=session_id, language=language, pc_id=pc_id, user_id=user_id
+    )
 
     # NOTE (Phase 1, task 1.1): pipecat 1.7.0 removed `vad_analyzer` from
     # TransportParams entirely. Passing it here is silently dropped by
@@ -761,6 +768,29 @@ async def run_voice_pipeline(
         jobs.shutdown()
         if payment_forward_task is not None:
             payment_forward_task.cancel()
+
+        # Task 3.8 — the manual's own flagship example event. Wrapped so a
+        # webhook-subsystem failure can never delay or break the actual
+        # teardown below it; emit() itself only queues a durable row (see
+        # services/webhooks.py) so this is a fast insert, not a network call.
+        try:
+            from app.services.webhooks import emit
+
+            await emit(
+                "call.ended",
+                user_id=user_id,
+                payload={
+                    "bot_id": bot_id,
+                    "bot_name": bot_name,
+                    "session_id": session_id,
+                    "started_at": call_started_at.isoformat(),
+                    "ended_at": datetime.now(UTC).isoformat(),
+                    "duration_seconds": (datetime.now(UTC) - call_started_at).total_seconds(),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[PIPELINE] Could not queue call.ended: {type(e).__name__}: {e}")
+
         await task.cancel()
 
     # Fires when a user turn stays open ~5s with no completed transcript —

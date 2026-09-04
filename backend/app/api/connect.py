@@ -265,6 +265,10 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         "llm_model": bot.llm_model,
         "language": bot.language,
         "bot_id": str(bot.id),
+        # Task 3.8 — the bot's owner, not the caller. A webhook fires to
+        # whichever customer of THIS platform configured it (Bot.user_id),
+        # so their own system hears about their own bot's events.
+        "user_id": str(bot.user_id),
     }
 
     # Before anything else: this caller gets exactly one live pipeline. A

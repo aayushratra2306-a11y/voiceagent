@@ -43,12 +43,20 @@ export default function DashboardPage() {
             AURIS
           </span>
         </div>
-        <button
-          onClick={() => { logout(); navigate('/') }}
-          className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => navigate('/webhooks')}
+            className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
+          >
+            Webhooks
+          </button>
+          <button
+            onClick={() => { logout(); navigate('/') }}
+            className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <main className="relative z-10 max-w-3xl mx-auto px-6 py-10">

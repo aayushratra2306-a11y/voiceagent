@@ -322,3 +322,69 @@ export async function connectBot(
     body: JSON.stringify({ bot_id: botId, sdp, type, pc_id: pcId ?? null }),
   })
 }
+
+// ── Webhooks (Task 3.8) ─────────────────────────────────────────────────────
+// Outbound events — this system telling a CUSTOMER's own system when
+// something happened (a call ended, an appointment was booked). The mirror
+// of task 3.7's inbound payment webhook: signed the same way, verified the
+// same way, just in the other direction.
+export interface WebhookSubscription {
+  id: string
+  event: string
+  url: string
+  enabled: boolean
+  secret_masked: string
+  created_at: string
+}
+
+export interface WebhookSubscriptionInput {
+  event: string
+  url: string
+  enabled: boolean
+  /** Write-only, like a tool's API key. Omit to keep the stored secret. */
+  secret?: string
+}
+
+export interface WebhookDeliveryLogEntry {
+  event: string
+  attempt: number
+  ok: boolean
+  status_code: number | null
+  error: string
+  created_at: string
+}
+
+export async function listWebhookEvents(): Promise<string[]> {
+  return (await request<{ events: string[] }>('/webhooks/events')).events
+}
+
+export async function listWebhookSubscriptions(): Promise<WebhookSubscription[]> {
+  return request('/webhooks/')
+}
+
+export async function createWebhookSubscription(
+  data: WebhookSubscriptionInput
+): Promise<WebhookSubscription> {
+  return request('/webhooks/', { method: 'POST', body: JSON.stringify(data) })
+}
+
+export async function updateWebhookSubscription(
+  id: string, data: WebhookSubscriptionInput
+): Promise<WebhookSubscription> {
+  return request(`/webhooks/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+
+export async function deleteWebhookSubscription(id: string): Promise<void> {
+  return request(`/webhooks/${id}`, { method: 'DELETE' })
+}
+
+export async function listWebhookDeliveries(id: string): Promise<WebhookDeliveryLogEntry[]> {
+  return request(`/webhooks/${id}/deliveries`)
+}
+
+/** Sends one real, signed event right now — no queue, no waiting for a
+ *  retry schedule. For proving an endpoint actually works before relying
+ *  on it. */
+export async function testWebhookSubscription(id: string): Promise<Record<string, unknown>> {
+  return request(`/webhooks/${id}/test`, { method: 'POST' })
+}

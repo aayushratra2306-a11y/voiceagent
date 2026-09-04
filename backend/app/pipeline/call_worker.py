@@ -197,15 +197,21 @@ async def _prepare_worker():
     from app.models.document import Document
     from app.models.order import Order
     from app.models.payment import PaymentSession
+    from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
     from app.pipeline.voice_pipeline import run_voice_pipeline
 
     # Document is here for Task 2.10: the RAG processor resolves doc_id ->
     # filename to cite a source. PaymentSession is here for Task 3.7: a
-    # payment-link tool inserts one from inside this same process. Beanie
-    # raises CollectionWasNotInitialized for any model missing from this
-    # list, so an omission here is the same failure this whole init_db call
-    # exists to fix.
-    await init_db([Order, Appointment, ConversationTurn, Document, BotTool, PaymentSession])
+    # payment-link tool inserts one from inside this same process.
+    # WebhookSubscription/Delivery/OutboxItem are here for Task 3.8: booking
+    # a call, or ending it, queues an event from inside this same process.
+    # Beanie raises CollectionWasNotInitialized for any model missing from
+    # this list, so an omission here is the same failure this whole init_db
+    # call exists to fix.
+    await init_db([
+        Order, Appointment, ConversationTurn, Document, BotTool, PaymentSession,
+        WebhookSubscription, WebhookDelivery, WebhookOutboxItem,
+    ])
     return run_voice_pipeline
 
 

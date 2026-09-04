@@ -49,9 +49,11 @@ async def _test_db():
     from app.models.payment import PaymentSession
     from app.models.revoked_token import RevokedRefreshToken
     from app.models.user import User
+    from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
 
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
-                   RevokedRefreshToken, BotTool, PaymentSession])
+                   RevokedRefreshToken, BotTool, PaymentSession,
+                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem])
     yield
     await database.client.drop_database(database.name)
 
