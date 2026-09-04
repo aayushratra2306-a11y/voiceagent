@@ -28,6 +28,7 @@ const BLANK: BotToolInput = {
   name: '', description: '', enabled: true, long_running: false, kind: 'http', builtin: '',
   method: 'GET', url: '', headers: {}, query: {}, body: {},
   parameters: [], auth: { kind: 'none', name: '', secret: '' },
+  field_map: {}, timeout_seconds: 8,
 }
 
 /** Key/value maps are edited as rows so a customer never types JSON. */
@@ -54,6 +55,7 @@ export default function BotToolsPage() {
   const [form, setForm] = useState<BotToolInput>(BLANK)
   const [headerRows, setHeaderRows] = useState<Pair[]>([])
   const [queryRows, setQueryRows] = useState<Pair[]>([])
+  const [fieldMapRows, setFieldMapRows] = useState<Pair[]>([])
   const [secretTouched, setSecretTouched] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -75,7 +77,7 @@ export default function BotToolsPage() {
 
   function startNew() {
     setEditingId('new'); setForm(BLANK)
-    setHeaderRows([]); setQueryRows([])
+    setHeaderRows([]); setQueryRows([]); setFieldMapRows([])
     setSecretTouched(false); setTestArgs({}); setTestResult('')
   }
 
@@ -89,8 +91,10 @@ export default function BotToolsPage() {
       builtin: t.builtin, method: t.method, url: t.url, headers: t.headers,
       query: t.query, body: t.body, parameters: t.parameters,
       auth: { kind: t.auth.kind, name: t.auth.name },
+      field_map: t.field_map, timeout_seconds: t.timeout_seconds,
     })
     setHeaderRows(toPairs(t.headers)); setQueryRows(toPairs(t.query))
+    setFieldMapRows(toPairs(t.field_map))
     setSecretTouched(false); setTestArgs({}); setTestResult('')
   }
 
@@ -111,6 +115,7 @@ export default function BotToolsPage() {
       ...form,
       headers: fromPairs(headerRows),
       query: fromPairs(queryRows),
+      field_map: fromPairs(fieldMapRows),
       auth: secretTouched
         ? form.auth
         : { kind: form.auth.kind, name: form.auth.name },   // omit `secret` → keep stored
@@ -324,6 +329,32 @@ export default function BotToolsPage() {
               )}
             </div>
 
+            {/* Task 3.6 — the lookup template */}
+            <div>
+              <label className={label}>Rename fields for the bot (optional)</label>
+              <p className="text-xs text-slate-500 mb-2.5">
+                If the response is deeply nested, give the bot a plain name for the part it
+                needs — e.g. the field name <code className="font-mono">status</code> could point
+                to <code className="font-mono">data.order.delivery_status</code>. Leave empty to
+                just hand the bot the whole response as-is.
+              </p>
+              <PairEditor rows={fieldMapRows} onChange={setFieldMapRows}
+                placeholderKey="status" placeholderValue="data.order.delivery_status" />
+            </div>
+
+            <div>
+              <label className={label}>Give up after (seconds)</label>
+              <input type="number" min={1} max={30} step={0.5}
+                value={form.timeout_seconds}
+                onChange={e => set('timeout_seconds', Number(e.target.value) || 8)}
+                className={`${field} max-w-[140px]`} />
+              <p className="text-xs text-slate-500 mt-1.5">
+                For a quick lookup, around 3 seconds is best — it's far better for the bot to say
+                "that system isn't responding" than to leave the caller waiting in silence.
+                Slower actions (like a booking) may need longer.
+              </p>
+            </div>
+
             <div className="space-y-3">
               <label className="flex items-center gap-2.5 text-sm text-slate-300">
                 <input type="checkbox" checked={form.enabled}
@@ -393,9 +424,11 @@ export default function BotToolsPage() {
   )
 }
 
-/** Headers and query parameters, edited as rows so nobody has to type JSON. */
+/** Headers, query parameters and field mappings — edited as rows so nobody
+ *  has to type JSON. `title` is omitted where the caller already put a
+ *  fuller explanation in its own label just above. */
 function PairEditor({ title, rows, onChange, placeholderKey, placeholderValue }: {
-  title: string
+  title?: string
   rows: Pair[]
   onChange: (r: Pair[]) => void
   placeholderKey: string
@@ -403,7 +436,7 @@ function PairEditor({ title, rows, onChange, placeholderKey, placeholderValue }:
 }) {
   return (
     <div>
-      <label className={label}>{title}</label>
+      {title && <label className={label}>{title}</label>}
       <div className="space-y-2">
         {rows.map((r, i) => (
           <div key={i} className="flex gap-2">

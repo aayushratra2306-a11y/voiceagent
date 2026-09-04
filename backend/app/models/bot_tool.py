@@ -139,6 +139,26 @@ class BotTool(Document):
     auth: ToolAuth = Field(default_factory=ToolAuth)
     undo: ToolUndo = Field(default_factory=ToolUndo)
 
+    # --- task 3.6, the lookup template --------------------------------
+    # "Where is my order" is the most common support question there is, and
+    # every customer's system answers it in its own shape — one API nests
+    # status three levels deep, another puts it at the top. field_map is
+    # what makes that a form instead of a rewrite: an AI-facing name mapped
+    # to a dotted path into the raw response, e.g. {"status":
+    # "data.order.delivery_status"}. See tool_registry._resolve_path.
+    # Empty means "no mapping configured" — the model still gets the full
+    # raw response under `data`, exactly as every tool has since 3.1.
+    field_map: dict[str, str] = Field(default_factory=dict)
+
+    # The manual's own number for this template: "around three seconds... it
+    # is far better to say their system is not responding than to leave the
+    # caller in silence." Left configurable rather than hardcoded to 3s,
+    # because 3.5's booking calls and other tools may legitimately need
+    # longer — the default here matches the pre-3.6 global constant so nothing
+    # already configured changes behaviour; a lookup tool is the one meant to
+    # be dialled down.
+    timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+
     class Settings:
         name = "bot_tools"
 

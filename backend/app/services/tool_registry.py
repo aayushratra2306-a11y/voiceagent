@@ -21,6 +21,22 @@ a form or a development project, so it supports:
   - a JSON body, and a JSON or text response
 
 which between them cover most REST APIs a small business actually has.
+
+Task 3.6 — "where is my order" is the single most common support question
+there is, and a lookup tool built once has to work against APIs shaped
+however the customer's happens to be shaped. Three things on top of the
+above make that true rather than aspirational:
+
+  - `field_map` normalizes an arbitrary response into names the model can
+    rely on regardless of how deeply the real API nests them — see
+    `_resolve_path`.
+  - a per-tool timeout, because the manual is specific that a lookup needs
+    a much shorter fuse than a booking does: "around three seconds... far
+    better to say their system is not responding than to leave the caller
+    in silence."
+  - a call-scoped cache, so asking the same question twice in one call (a
+    caller circling back, or the model double-checking) does not repeat the
+    network request — see the note on call_context above `_cache_key`.
 """
 
 import asyncio
@@ -34,12 +50,15 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 
 from app.core.crypto import decrypt_secret
 from app.models.bot_tool import BotTool
+from app.pipeline import call_context
 
 # A customer's API is on the far side of a live phone call. Past a few
 # seconds the caller is listening to silence, so a slow API has to become a
 # spoken "that is taking a while" rather than an unbounded wait. Task 3.3
-# will move genuinely slow ones to the background; this is the ceiling
-# until then.
+# moves genuinely slow ones to the background; this is the ceiling for
+# everything that stays in the foreground, and BotTool.timeout_seconds lets
+# one tool set a tighter ceiling than this default (task 3.6's lookup
+# template is meant to use one).
 HTTP_TIMEOUT_SECONDS = 8.0
 
 # Enough for the model to act on, small enough not to flood the prompt. A
@@ -72,6 +91,45 @@ def _render_map(mapping: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]
         else:
             rendered[key] = value
     return rendered
+
+
+def _resolve_path(data: Any, path: str) -> Any:
+    """Walk a dotted path ("data.order.status") into a parsed JSON response.
+
+    Task 3.6's whole point: a customer's API nests things however it nests
+    things, and the model should never have to know that this one buries
+    status three levels deep while another puts it at the top. Missing at
+    any step returns None rather than raising — a field that isn't there
+    for THIS record (no tracking number yet) is a normal, common case, not
+    a bug in the mapping.
+
+    Dict traversal only, deliberately: a list index in the path (order.0.id)
+    would cover a real but rarer shape, and the failure mode without it is
+    legible (that one field comes back None) rather than silent.
+    """
+    current = data
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _apply_field_map(tool: BotTool, payload: Any) -> dict[str, Any] | None:
+    """The AI-facing view of a response, per this tool's field_map.
+
+    None (not {}) when no mapping is configured, so call_http_tool can tell
+    "this tool doesn't use field mapping" apart from "every mapped field
+    happened to resolve to nothing" — the two need different handling.
+    """
+    if not tool.field_map:
+        return None
+    return {name: _resolve_path(payload, path) for name, path in tool.field_map.items()}
+
+
+def _cache_key(tool: BotTool, args: dict[str, Any]) -> str:
+    """Identifies one lookup, for the call-scoped cache below."""
+    return f"{tool.id or tool.name}:{sorted(args.items())}"
 
 
 def _apply_auth(tool: BotTool, headers: dict[str, str], params: dict[str, Any]) -> None:
@@ -107,7 +165,25 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     because an exception here would surface to the caller as dead air or a
     dropped turn, and "I could not reach the order system" is a far better
     outcome than silence.
+
+    Task 3.6 — a cache check opens this function for GET requests. Reusing
+    the same answer to the same question asked twice in one call is safe
+    only when the request has no side effect; a POST/PUT/PATCH/DELETE is
+    never cached; a customer's booking or payment tool re-running because
+    its arguments happened to match an earlier call would be a serious
+    bug, not an optimisation. The cache itself is per-call — see
+    call_context.py — so nothing here can leak between two different calls,
+    let alone two different callers, even on a reused worker process.
     """
+    method = tool.method.upper()
+    cache_key = _cache_key(tool, args) if method == "GET" else None
+    if cache_key is not None:
+        ctx_cache = call_context.current().cache
+        cached = ctx_cache.get(cache_key)
+        if cached is not None:
+            logger.info(f"[TOOL] {tool.name}: served from this call's own cache, not asked again")
+            return cached
+
     # .strip(): BotTool.url is trimmed on save (see models/bot_tool.py) so a
     # pasted-in leading space can't reach here for anything saved from now
     # on — but a tool saved before that validator existed still has the raw
@@ -121,15 +197,23 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     body = _render_map(tool.body, args) if tool.body else None
     _apply_auth(tool, headers, params)
 
+    # Task 3.6: a lookup needs a much shorter fuse than the general default
+    # — the manual's own number is "around three seconds... far better to
+    # say their system is not responding than to leave the caller in
+    # silence." BotTool.timeout_seconds defaults to the old global constant,
+    # so nothing already configured changes behaviour; a lookup tool is the
+    # one meant to be dialled down.
+    timeout = tool.timeout_seconds or HTTP_TIMEOUT_SECONDS
+
     logger.info(f"[TOOL] {tool.name} -> {tool.method} {url}")
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(
                 tool.method, url, headers=headers, params=params,
                 json=body if body else None,
             )
     except httpx.TimeoutException:
-        logger.warning(f"[TOOL] {tool.name}: timed out after {HTTP_TIMEOUT_SECONDS}s")
+        logger.warning(f"[TOOL] {tool.name}: timed out after {timeout}s")
         return {
             "ok": False,
             "error": "timeout",
@@ -151,7 +235,7 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
 
     if response.status_code >= 400:
         logger.warning(f"[TOOL] {tool.name}: HTTP {response.status_code}")
-        return {
+        result = {
             "ok": False,
             "error": f"http_{response.status_code}",
             "status": response.status_code,
@@ -164,8 +248,32 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
                 else "That system reported an error. Tell the caller it is unavailable right now."
             ),
         }
+        # Not cached: a 404 today (order not placed yet) can easily become a
+        # 200 a minute from now, and this call is short enough that saving
+        # one retry isn't worth risking a stale "not found".
+        return result
 
-    return {"ok": True, "status": response.status_code, "data": payload}
+    fields = _apply_field_map(tool, payload)
+    if fields is not None and not any(v is not None for v in fields.values()):
+        # Task 3.6's other not-found case: some APIs answer "no such record"
+        # with a 200 and an empty body rather than a 404 — status-code
+        # handling above can't see that, only the mapping can. Every field
+        # this tool asked for came back missing, so this is that case.
+        logger.info(f"[TOOL] {tool.name}: 200 but every mapped field was empty — treating as not found")
+        result = {
+            "ok": True,
+            "found": False,
+            "status": response.status_code,
+            "message": "Nothing was found for that. Tell the caller plainly and ask them to confirm the details.",
+        }
+    else:
+        result = {"ok": True, "status": response.status_code, "data": payload}
+        if fields is not None:
+            result["fields"] = fields
+
+    if cache_key is not None:
+        call_context.current().cache[cache_key] = result
+    return result
 
 
 def _http_handler(tool: BotTool, jobs=None, saga=None):

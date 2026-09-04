@@ -49,6 +49,14 @@ class ToolIn(BaseModel):
     body: dict[str, Any] = Field(default_factory=dict)
     parameters: list[ToolParameter] = Field(default_factory=list)
     auth: AuthIn = Field(default_factory=AuthIn)
+    # Task 3.6, the lookup template. field_map: AI-facing name -> dotted
+    # path into the raw response, so the model reads a consistent name
+    # regardless of how the real API nests it. timeout_seconds: the manual's
+    # own number for a lookup is "around three seconds" — configurable
+    # rather than hardcoded because a booking call may legitimately need
+    # longer; 8.0 keeps every tool saved before this task unchanged.
+    field_map: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
 
 
 def _out(tool: BotTool) -> dict:
@@ -67,6 +75,8 @@ def _out(tool: BotTool) -> dict:
         "query": tool.query,
         "body": tool.body,
         "parameters": [p.model_dump() for p in tool.parameters],
+        "field_map": tool.field_map,
+        "timeout_seconds": tool.timeout_seconds,
         "auth": {
             "kind": tool.auth.kind,
             "name": tool.auth.name,

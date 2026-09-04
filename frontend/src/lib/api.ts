@@ -145,6 +145,14 @@ export interface BotTool {
   query: Record<string, string>
   body: Record<string, unknown>
   parameters: ToolParameter[]
+  /** Task 3.6 — AI-facing name -> dotted path into the raw response, e.g.
+   *  {"status": "data.order.delivery_status"}, so the model reads a name
+   *  it can rely on regardless of how the customer's API nests things. */
+  field_map: Record<string, string>
+  /** Task 3.6 — the manual's own number for a lookup is "around three
+   *  seconds," far shorter than the 8s default a booking call may
+   *  legitimately need. */
+  timeout_seconds: number
   auth: { kind: string; name: string; secret_masked: string; has_secret: boolean }
 }
 

@@ -24,11 +24,13 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from app.models.bot_tool import BotTool, ToolAuth, ToolParameter
+from app.pipeline import call_context
 from app.services import tool_registry
 from app.services.tool_registry import (
     _apply_auth,
     _render,
     _render_map,
+    _resolve_path,
     call_http_tool,
     to_function_schema,
 )
@@ -497,3 +499,250 @@ async def test_the_test_button_reports_a_real_failure(client, user_a_token, monk
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
     assert resp.json()["error"] == "unreachable"
+
+
+# --- 5. task 3.6, the lookup template ---------------------------------------
+#
+# "Where is my order" is the most common support question there is, and
+# the manual's own tests for this template are: any API shape works with
+# configuration alone, a slow system fails fast rather than freezing the
+# call, and asking the same thing twice in one call doesn't ask the
+# customer's system twice.
+
+@pytest.fixture(autouse=True)
+def _clear_call_context():
+    """The cache lives on call_context's per-call state — start every test
+    from a known-empty one so a leftover cache entry from a previous test
+    can't produce a false pass."""
+    call_context.clear()
+    yield
+    call_context.clear()
+
+
+def test_a_deeply_nested_field_is_pulled_out_by_its_dotted_path():
+    payload = {"data": {"order": {"status": "shipped"}}}
+    assert _resolve_path(payload, "data.order.status") == "shipped"
+
+
+def test_a_field_that_is_not_there_for_this_record_is_none_not_an_error():
+    """A missing tracking number on a not-yet-shipped order is a normal
+    case, not a bug in the mapping."""
+    assert _resolve_path({"data": {}}, "data.order.status") is None
+    assert _resolve_path({"data": None}, "data.order.status") is None
+
+
+async def test_a_response_is_normalised_through_the_configured_field_map(monkeypatch):
+    """The whole point: the model reads a name it can rely on regardless of
+    how the real API nests it."""
+    tool = _http_tool(field_map={"status": "data.order.delivery_status", "eta": "data.order.eta"})
+    monkeypatch.setattr(
+        tool_registry.httpx, "AsyncClient",
+        lambda **k: _Client(response=_Resp(
+            text='{"data": {"order": {"delivery_status": "out_for_delivery", "eta": "today"}}}'
+        )),
+    )
+
+    result = await call_http_tool(tool, {"sku": "X"})
+
+    assert result["fields"] == {"status": "out_for_delivery", "eta": "today"}
+    assert result["data"], "the raw response should still be there for anything not mapped"
+
+
+async def test_a_tool_with_no_field_map_behaves_exactly_as_before(monkeypatch):
+    """Every tool from before 3.6 has an empty field_map. It must not
+    suddenly grow a "fields" key it never asked for."""
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: _Client())
+    result = await call_http_tool(_http_tool(), {"sku": "X"})
+    assert "fields" not in result
+
+
+async def test_a_200_with_every_mapped_field_empty_is_reported_as_not_found(monkeypatch):
+    """Some APIs answer "no such record" with a 200 and an empty body
+    instead of a 404 — the status code alone can't see that, only the
+    mapping can."""
+    tool = _http_tool(field_map={"status": "data.order.status"})
+    monkeypatch.setattr(
+        tool_registry.httpx, "AsyncClient",
+        lambda **k: _Client(response=_Resp(text='{"data": {}}')),
+    )
+
+    result = await call_http_tool(tool, {"sku": "does-not-exist"})
+
+    assert result["ok"] is True  # the HTTP call itself succeeded
+    assert result["found"] is False
+    assert "not" in result["message"].lower()
+
+
+async def test_one_mapped_field_present_is_not_treated_as_not_found(monkeypatch):
+    """Only "every mapped field came back empty" means not-found — a
+    genuinely sparse but real record must not be reported as missing."""
+    tool = _http_tool(field_map={"status": "data.status", "eta": "data.eta"})
+    monkeypatch.setattr(
+        tool_registry.httpx, "AsyncClient",
+        lambda **k: _Client(response=_Resp(text='{"data": {"status": "processing"}}')),
+    )
+
+    result = await call_http_tool(tool, {"sku": "X"})
+
+    assert result.get("found") is not False
+    assert result["fields"]["status"] == "processing"
+
+
+async def test_a_lookup_tool_can_set_a_shorter_timeout_than_the_default(monkeypatch):
+    """The manual's own number for this template: around three seconds,
+    because it is far better to say the system is not responding than to
+    leave the caller in silence."""
+    tool = _http_tool(timeout_seconds=3.0)
+    seen = {}
+
+    def _fake_client(**kw):
+        seen.update(kw)
+        return _Client()
+
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", _fake_client)
+    await call_http_tool(tool, {"sku": "X"})
+
+    assert seen["timeout"] == 3.0
+
+
+async def test_a_tool_saved_before_3_6_keeps_the_old_default_timeout(monkeypatch):
+    seen = {}
+
+    def _fake_client(**kw):
+        seen.update(kw)
+        return _Client()
+
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", _fake_client)
+    await call_http_tool(_http_tool(), {"sku": "X"})  # no timeout_seconds override
+
+    assert seen["timeout"] == tool_registry.HTTP_TIMEOUT_SECONDS
+
+
+async def test_a_repeated_get_in_one_call_is_not_asked_for_twice(monkeypatch):
+    """A caller circling back to the same question, or the model
+    double-checking, must not cost the customer's system a second request."""
+    call_context.set_call(bot_id="b1", session_id="s1")
+
+    class _CountingClient(_Client):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        async def request(self, method, url, **kw):
+            self.n += 1
+            self.seen = {"method": method, "url": url, **kw}
+            return _Resp(text='{"n": 1}')
+
+    client = _CountingClient()
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+
+    first = await call_http_tool(_http_tool(), {"sku": "ABC-1"})
+    second = await call_http_tool(_http_tool(), {"sku": "ABC-1"})
+
+    assert first == second
+    assert client.n == 1, "a second identical GET reached the customer's system"
+
+
+async def test_different_arguments_are_not_served_from_each_others_cache(monkeypatch):
+    call_context.set_call(bot_id="b1", session_id="s1")
+
+    class _VaryingClient(_Client):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        async def request(self, method, url, **kw):
+            self.n += 1
+            self.seen = {"method": method, "url": url, **kw}
+            return _Resp(text='{"call_number": ' + str(self.n) + '}')
+
+    client = _VaryingClient()
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+
+    first = await call_http_tool(_http_tool(), {"sku": "ABC-1"})
+    second = await call_http_tool(_http_tool(), {"sku": "DIFFERENT-SKU"})
+
+    assert first["data"] != second["data"], "a different lookup was served a stale answer"
+    assert client.n == 2
+
+
+async def test_a_write_is_never_served_from_the_cache(monkeypatch):
+    """Caching is safe only for a request with no side effect. A booking or
+    payment tool re-running because its arguments matched an earlier call
+    in the same conversation would be a serious bug, not an optimisation."""
+    call_context.set_call(bot_id="b1", session_id="s1")
+
+    class _CountingClient(_Client):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        async def request(self, method, url, **kw):
+            self.n += 1
+            self.seen = {"method": method, "url": url, **kw}
+            return _Resp(text='{"booked": true}')
+
+    client = _CountingClient()
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+    tool = _http_tool(method="POST")
+
+    await call_http_tool(tool, {"sku": "ABC-1"})
+    await call_http_tool(tool, {"sku": "ABC-1"})
+
+    assert client.n == 2, "a POST was cached — a real action would have been skipped"
+
+
+async def test_a_failed_lookup_is_not_cached(monkeypatch):
+    """A 404 now can become a 200 a moment later (the order gets placed
+    mid-call) — caching a failure risks telling the caller "not found"
+    forever within one call."""
+    call_context.set_call(bot_id="b1", session_id="s1")
+
+    class _RecoveringClient(_Client):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        async def request(self, method, url, **kw):
+            self.n += 1
+            self.seen = {"method": method, "url": url, **kw}
+            if self.n == 1:
+                return _Resp(status=404, text='{"message": "not found"}')
+            return _Resp(text='{"found": true}')
+
+    client = _RecoveringClient()
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+
+    first = await call_http_tool(_http_tool(), {"sku": "ABC-1"})
+    second = await call_http_tool(_http_tool(), {"sku": "ABC-1"})
+
+    assert first["ok"] is False
+    assert second["ok"] is True
+    assert client.n == 2, "the failed first attempt was wrongly cached"
+
+
+async def test_the_cache_does_not_survive_between_two_different_calls(monkeypatch):
+    """The cache is per-call, not global — a value cached for one caller
+    must never answer a different caller's identical-looking question on a
+    reused worker process."""
+    class _CountingClient(_Client):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        async def request(self, method, url, **kw):
+            self.n += 1
+            self.seen = {"method": method, "url": url, **kw}
+            return _Resp(text='{"n": ' + str(self.n) + '}')
+
+    client = _CountingClient()
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+
+    call_context.set_call(bot_id="b1", session_id="call-one")
+    first = await call_http_tool(_http_tool(), {"sku": "ABC-1"})
+
+    call_context.set_call(bot_id="b1", session_id="call-two")  # a fresh call starts
+    second = await call_http_tool(_http_tool(), {"sku": "ABC-1"})
+
+    assert first["data"] != second["data"], "one call's cache leaked into a different call"
+    assert client.n == 2
