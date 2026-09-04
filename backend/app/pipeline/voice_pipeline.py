@@ -46,6 +46,7 @@ from app.pipeline.language import (
 )
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
+from app.pipeline.tool_telemetry import PARTIAL_FAILURE_RULE, ToolCallTimer
 from app.services.rag import query_context
 from app.services.tool_registry import load_tools_for_bot
 
@@ -436,6 +437,16 @@ async def run_voice_pipeline(
     llm = get_llm_service(llm_model=llm_model)
     tts = get_tts_service(voice_id=voice_id, language=language)
 
+    # Task 3.2 — per-tool timing. Pipecat already runs a turn's calls
+    # concurrently; this is how you find out which of them was the slow one,
+    # and it logs the count so "did the model actually use two tools at once"
+    # is answerable from a log rather than by inference.
+    tool_timer = ToolCallTimer()
+
+    @llm.event_handler("on_function_calls_started")
+    async def _on_function_calls_started(service, function_calls):
+        await tool_timer.on_calls_started(service, function_calls)
+
     # Defense #1 against the Markdown-in-speech problem: tell the model
     # outright not to do it. Applied to every bot regardless of what the
     # user wrote in their own prompt, and passed to RAGContextProcessor
@@ -455,6 +466,13 @@ async def run_voice_pipeline(
         # live 2026-09-04. Appended after the Markdown rules, not before, so
         # it sits closest to the turn and is the last thing the model reads.
         + system_language_note(language, speaking_gender)
+        # Task 3.2. Pipecat runs a turn's tool calls concurrently, which makes
+        # a mixed outcome normal rather than rare: one booked, one failed.
+        # Left to itself the model summarises the batch as a single result,
+        # and the manual is blunt about why that matters — "all done" when the
+        # text message failed is how a customer ends up believing they have a
+        # cab they do not have.
+        + PARTIAL_FAILURE_RULE
     )
 
     # Task 1.3: pass the tool functions straight into `tools=` — pipecat 1.7.0
