@@ -108,7 +108,14 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     dropped turn, and "I could not reach the order system" is a far better
     outcome than silence.
     """
-    url = _render(tool.url, args)
+    # .strip(): BotTool.url is trimmed on save (see models/bot_tool.py) so a
+    # pasted-in leading space can't reach here for anything saved from now
+    # on — but a tool saved before that validator existed still has the raw
+    # value on disk, and a URL httpx reads as not starting with "https://"
+    # fails instantly with UnsupportedProtocol rather than ever reaching the
+    # customer's API. Confirmed live 2026-09-05. Stripped here too so an
+    # already-saved tool doesn't need re-editing to pick up the fix.
+    url = _render(tool.url.strip(), args)
     headers = {k: str(v) for k, v in _render_map(tool.headers, args).items()}
     params = _render_map(tool.query, args)
     body = _render_map(tool.body, args) if tool.body else None

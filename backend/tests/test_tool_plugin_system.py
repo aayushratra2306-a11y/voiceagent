@@ -90,6 +90,66 @@ def test_an_unknown_http_method_is_refused():
         _http_tool(method="FETCH")
 
 
+def test_a_pasted_in_leading_space_on_the_url_is_trimmed():
+    """Found live 2026-09-05: a leading space is invisible in the form's
+    text box but not to httpx — a URL that starts with a space no longer
+    starts with "https://" as far as the request library is concerned, and
+    it refuses to send the request at all (UnsupportedProtocol), instantly,
+    before it ever reaches the customer's API. name and method were already
+    trimmed on save; url was the one field that wasn't, and it's the one
+    most often arrived at by copy-paste rather than typing."""
+    tool = _http_tool(url="  https://api.example.com/stock/{sku}  ")
+    assert tool.url == "https://api.example.com/stock/{sku}"
+
+
+def test_the_undo_urls_leading_space_is_also_trimmed():
+    """The same mistake, the same fix, on task 3.4's undo URL — filled in
+    by hand the same way as the main one."""
+    from app.models.bot_tool import ToolUndo
+
+    tool = _http_tool(undo=ToolUndo(url=" https://api.example.com/cancel "))
+    assert tool.undo.url == "https://api.example.com/cancel"
+
+
+async def test_a_tool_saved_before_the_fix_is_still_protected_at_call_time(monkeypatch):
+    """Belt and suspenders: a row written to the database before this
+    validator existed still has the raw leading space sitting in storage.
+    call_http_tool strips it too, so an already-saved tool is fixed the
+    moment this deploys — nobody has to notice and re-edit it."""
+    tool = _http_tool()
+    # Beanie's own validation runs on construction, which is exactly what
+    # would strip it — so the raw value is forced back in afterwards to
+    # simulate a row that predates the fix, the way `Bot.get()` would load
+    # one straight off disk.
+    object.__setattr__(tool, "url", "  https://api.example.com/stock/{sku}")
+
+    captured = {}
+
+    class _FakeResponse:
+        status_code = 200
+        text = "{}"
+
+    async def _fake_request(method, url, **kwargs):
+        captured["url"] = url
+        return _FakeResponse()
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        request = staticmethod(_fake_request)
+
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **kw: _FakeClient())
+
+    result = await call_http_tool(tool, {"sku": "ABC"})
+
+    assert result["ok"] is True
+    assert captured["url"] == "https://api.example.com/stock/ABC"
+
+
 # --- 2. credentials -------------------------------------------------------
 
 def test_a_credential_is_recoverable_but_not_stored_in_the_clear():

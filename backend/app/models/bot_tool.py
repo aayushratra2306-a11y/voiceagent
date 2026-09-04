@@ -95,6 +95,14 @@ class ToolUndo(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     body: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("url")
+    @classmethod
+    def _trimmed_url(cls, v: str) -> str:
+        """Same reason as BotTool.url below — a pasted-in leading space
+        breaks the request before it's sent, and this field is filled in
+        by hand the same way."""
+        return v.strip()
+
 
 class BotTool(Document):
     """One configured tool belonging to one bot."""
@@ -169,6 +177,20 @@ class BotTool(Document):
         if v not in HTTP_METHODS:
             raise ValueError(f"method must be one of {sorted(HTTP_METHODS)}")
         return v
+
+    @field_validator("url")
+    @classmethod
+    def _trimmed_url(cls, v: str) -> str:
+        """A stray leading/trailing space, most often from a copy-paste,
+        is invisible in the form's text box but not to httpx: a URL that
+        starts with a space no longer starts with "https://" as far as the
+        request library is concerned, and it refuses to send it at all —
+        confirmed live 2026-09-05 (UnsupportedProtocol, a request that never
+        left the server). name and method were already trimmed here; url
+        was the one field that wasn't, and it's the one most often pasted
+        in rather than typed.
+        """
+        return v.strip()
 
     def json_schema(self) -> tuple[dict[str, Any], list[str]]:
         """The parameter shape the model is shown, as JSON Schema.
