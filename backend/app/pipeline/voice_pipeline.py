@@ -14,6 +14,7 @@ from pipecat.frames.frames import (
     Frame,
     FunctionCallResultFrame,
     LLMFullResponseStartFrame,
+    LLMMessagesAppendFrame,
     TextFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
@@ -47,6 +48,7 @@ from app.pipeline.language import (
 )
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
+from app.pipeline.saga import SAGA_RULE, TurnSaga
 from app.pipeline.tool_telemetry import PARTIAL_FAILURE_RULE, ToolCallTimer
 from app.services.rag import query_context
 from app.services.tool_registry import load_tools_for_bot
@@ -444,8 +446,24 @@ async def run_voice_pipeline(
     # is answerable from a log rather than by inference.
     tool_timer = ToolCallTimer()
 
+    # Task 3.3 / 3.4 — both are created here, before the tools that close
+    # over them and before the handler below that drives them.
+    jobs = BackgroundJobs()
+
+    async def _announce_rollback(sentence: str) -> None:
+        """Put a rollback summary into the conversation for the model to say."""
+        await task.queue_frame(
+            LLMMessagesAppendFrame(messages=[{"role": "system", "content": sentence}], run_llm=True)
+        )
+
+    saga = TurnSaga(announce=_announce_rollback)
+
     @llm.event_handler("on_function_calls_started")
     async def _on_function_calls_started(service, function_calls):
+        # Tells the saga how many results to expect: pipecat announces a
+        # batch starting but never that it finished, so completion is
+        # counted from this number.
+        saga.begin(len(function_calls))
         await tool_timer.on_calls_started(service, function_calls)
 
     # Defense #1 against the Markdown-in-speech problem: tell the model
@@ -495,8 +513,9 @@ async def run_voice_pipeline(
     # Task 3.3 — created before the tools, because a long-running tool's
     # handler closes over it. The pipeline task does not exist yet; it is
     # attached below, once it does.
-    jobs = BackgroundJobs()
-    tools, has_background = await load_tools_for_bot(bot_id, jobs)
+    tools, has_background, has_undo = await load_tools_for_bot(bot_id, jobs, saga)
+    if has_undo:
+        voice_system_prompt += SAGA_RULE
     if has_background:
         # Only when this bot actually has such a tool. Added to
         # voice_system_prompt itself rather than to the context alone,

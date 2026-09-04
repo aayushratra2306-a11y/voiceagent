@@ -161,7 +161,7 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "status": response.status_code, "data": payload}
 
 
-def _http_handler(tool: BotTool, jobs=None):
+def _http_handler(tool: BotTool, jobs=None, saga=None):
     """Build the function pipecat will call for this tool record.
 
     A closure over the record, so every configured tool gets its own
@@ -190,6 +190,10 @@ def _http_handler(tool: BotTool, jobs=None):
             return
 
         result = await call_http_tool(tool, args)
+        # Task 3.4 — the saga records what happened as it happens, so a
+        # later failure in the same turn can walk the successes back.
+        if saga is not None:
+            await saga.record(tool.name, tool, args, result)
         await params.result_callback(result)
 
     return handler
@@ -206,7 +210,7 @@ def _builtin_tools() -> dict[str, Any]:
     return {fn.__name__: fn for fn in TOOLS}
 
 
-def to_function_schema(tool: BotTool, jobs=None) -> FunctionSchema:
+def to_function_schema(tool: BotTool, jobs=None, saga=None) -> FunctionSchema:
     """One HTTP tool record as something the model can be offered."""
     properties, required = tool.json_schema()
     return FunctionSchema(
@@ -214,16 +218,19 @@ def to_function_schema(tool: BotTool, jobs=None) -> FunctionSchema:
         description=tool.description,
         properties=properties,
         required=required,
-        handler=_http_handler(tool, jobs),
+        handler=_http_handler(tool, jobs, saga),
     )
 
 
-async def load_tools_for_bot(bot_id: str | None, jobs=None) -> tuple[list[Any], bool]:
+async def load_tools_for_bot(
+    bot_id: str | None, jobs=None, saga=None
+) -> tuple[list[Any], bool, bool]:
     """Every enabled tool this bot has, ready to hand to the LLM context.
 
-    Returns (tools, has_background) — the flag says whether any of them
-    runs in the background, which decides whether the system prompt needs
-    the rule explaining that behaviour (task 3.3).
+    Returns (tools, has_background, has_undo). The two flags decide which
+    prompt rules this bot needs — background acknowledgements (3.3) and
+    partial rollback (3.4) — so a bot without such tools does not carry an
+    explanation of them on every turn.
 
     Falls back to the built-in set when a bot has configured nothing, so
     every bot that existed before this task keeps the tools it had. A bot
@@ -233,7 +240,7 @@ async def load_tools_for_bot(bot_id: str | None, jobs=None) -> tuple[list[Any], 
     """
     builtins = _builtin_tools()
     if not bot_id:
-        return list(builtins.values()), False
+        return list(builtins.values()), False, False
 
     try:
         records = await BotTool.find(BotTool.bot_id == bot_id, BotTool.enabled == True).to_list()  # noqa: E712
@@ -241,11 +248,11 @@ async def load_tools_for_bot(bot_id: str | None, jobs=None) -> tuple[list[Any], 
         # A tool-loading failure must not take the call down: the caller can
         # still have a conversation, just without tools.
         logger.warning(f"[TOOLS] Could not load tools for bot {bot_id}: {e}")
-        return list(builtins.values()), False
+        return list(builtins.values()), False, False
 
     if not records:
         logger.info(f"[TOOLS] Bot {bot_id} has none configured — using the {len(builtins)} built-ins")
-        return list(builtins.values()), False
+        return list(builtins.values()), False, False
 
     loaded: list[Any] = []
     for record in records:
@@ -256,14 +263,15 @@ async def load_tools_for_bot(bot_id: str | None, jobs=None) -> tuple[list[Any], 
                 continue
             loaded.append(fn)
         else:
-            loaded.append(to_function_schema(record, jobs))
+            loaded.append(to_function_schema(record, jobs, saga))
 
     has_background = any(r.long_running and r.kind == "http" for r in records)
+    has_undo = any(r.kind == "http" and r.undo and r.undo.url for r in records)
     logger.info(
         f"[TOOLS] Bot {bot_id}: loaded {len(loaded)} configured tool(s)"
         + (" (one or more run in the background)" if has_background else "")
     )
-    return loaded, has_background
+    return loaded, has_background, has_undo
 
 
 async def test_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:

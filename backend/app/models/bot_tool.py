@@ -77,6 +77,25 @@ class ToolAuth(BaseModel):
     secret_encrypted: str = ""
 
 
+class ToolUndo(BaseModel):
+    """Task 3.4 — how this tool takes back what it did.
+
+    Optional, and its absence is meaningful rather than an oversight: a
+    lookup has nothing to undo, and a sent message or a charged card cannot
+    be undone at all. Only a tool that declares this is ever rolled back,
+    so the configuration carries the intent and the saga never guesses it.
+
+    The undo call sees the same arguments the original did, so a cancel URL
+    can be written with the same placeholders — `/bookings/{booking_id}`
+    reverses `/bookings` called with that id.
+    """
+
+    url: str = ""
+    method: str = "DELETE"
+    headers: dict[str, str] = Field(default_factory=dict)
+    body: dict[str, Any] = Field(default_factory=dict)
+
+
 class BotTool(Document):
     """One configured tool belonging to one bot."""
 
@@ -110,9 +129,30 @@ class BotTool(Document):
 
     parameters: list[ToolParameter] = Field(default_factory=list)
     auth: ToolAuth = Field(default_factory=ToolAuth)
+    undo: ToolUndo = Field(default_factory=ToolUndo)
 
     class Settings:
         name = "bot_tools"
+
+    def as_undo_tool(self) -> "BotTool":
+        """This tool's undo, shaped as a tool the HTTP caller can run.
+
+        Reuses the same execution path — templating, authentication, error
+        handling — rather than a second, subtly different one. The
+        credential is carried across because a cancel endpoint needs the
+        same authorisation the booking did.
+        """
+        return BotTool(
+            bot_id=self.bot_id,
+            name=f"undo_{self.name}",
+            description=f"Undo {self.name}",
+            kind="http",
+            method=self.undo.method,
+            url=self.undo.url,
+            headers=self.undo.headers or self.headers,
+            body=self.undo.body,
+            auth=self.auth,
+        )
 
     @field_validator("name")
     @classmethod

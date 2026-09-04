@@ -151,13 +151,13 @@ def test_no_auth_adds_nothing():
 async def test_a_bot_with_nothing_configured_still_gets_the_builtins():
     """Every bot predates this task. None of them would have tools at all
     if an empty configuration meant an empty toolset."""
-    tools, _ = await tool_registry.load_tools_for_bot("a-bot-with-no-tools-configured")
+    tools, *_ = await tool_registry.load_tools_for_bot("a-bot-with-no-tools-configured")
     names = [getattr(t, "__name__", getattr(t, "name", "")) for t in tools]
     assert "get_current_datetime" in names, names
 
 
 async def test_no_bot_id_still_gets_the_builtins():
-    tools, _ = await tool_registry.load_tools_for_bot(None)
+    tools, *_ = await tool_registry.load_tools_for_bot(None)
     assert tools, "a bot without an id must still be able to use tools"
 
 
@@ -404,7 +404,7 @@ async def test_configured_tools_replace_the_builtins_for_that_bot(client, user_a
     bot_id = await _make_bot(client, user_a_token, "Configured bot")
     await client.post(f"/bots/{bot_id}/tools/", json=TOOL_BODY, headers=auth_headers(user_a_token))
 
-    tools, _ = await tool_registry.load_tools_for_bot(bot_id)
+    tools, *_ = await tool_registry.load_tools_for_bot(bot_id)
     names = [getattr(t, "__name__", getattr(t, "name", "")) for t in tools]
     assert names == ["check_stock"], names
 
@@ -416,7 +416,7 @@ async def test_a_disabled_tool_is_not_offered_to_the_model(client, user_a_token)
     await client.patch(f"/bots/{bot_id}/tools/{tool_id}", json={**TOOL_BODY, "enabled": False},
                        headers=auth_headers(user_a_token))
 
-    tools, _ = await tool_registry.load_tools_for_bot(bot_id)
+    tools, *_ = await tool_registry.load_tools_for_bot(bot_id)
     assert "check_stock" not in [getattr(t, "name", "") for t in tools]
 
 
