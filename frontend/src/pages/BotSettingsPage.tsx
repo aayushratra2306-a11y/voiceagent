@@ -81,7 +81,20 @@ export default function BotSettingsPage() {
     if (isNew) return
     listBots().then(bots => {
       const bot = bots.find(b => b.id === id)
-      if (bot) setForm({ name: bot.name, system_prompt: bot.system_prompt, voice_id: bot.voice_id, llm_model: bot.llm_model, language: bot.language })
+      // Bots saved before voices were per-language hold a voice from the old
+      // English-only list, so their stored voice_id is not among the ones now
+      // offered for their language and NO radio would appear selected —
+      // making the form look broken and letting a save write the mismatch
+      // straight back. Show the language's default instead, which is also
+      // what the server substitutes at call time (language.resolve_voice), so
+      // the page agrees with what the caller actually hears.
+      if (bot) {
+        const allowed = voicesFor(bot.language)
+        const voice_id = allowed.some(v => v.id === bot.voice_id)
+          ? bot.voice_id
+          : allowed[0].id
+        setForm({ name: bot.name, system_prompt: bot.system_prompt, voice_id, llm_model: bot.llm_model, language: bot.language })
+      }
       setLoading(false)
     })
     listDocuments(id!).then(setDocs).catch(() => {})
