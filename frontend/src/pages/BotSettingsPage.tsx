@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument } from '../lib/api'
-import type { Bot, BotDocument } from '../lib/api'
+import {
+  createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument,
+  listBotTemplates, createTool,
+} from '../lib/api'
+import type { Bot, BotDocument, BotTemplate } from '../lib/api'
 
 // Voices per language. Until 2026-09-04 this was three English voices shown
 // to every bot whatever its language, so a Hindi bot was necessarily given
@@ -77,6 +80,24 @@ export default function BotSettingsPage() {
   const [uploadError, setUploadError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Task 3.9 — starting points instead of a blank instruction box. Only
+  // fetched for a brand new bot; an existing one is already past this.
+  const [templates, setTemplates] = useState<BotTemplate[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (isNew) listBotTemplates().then(setTemplates).catch(() => {})
+  }, [isNew])
+
+  function applyTemplate(t: BotTemplate) {
+    setSelectedTemplateId(t.id)
+    // Only the prompt — name is the customer's own to choose, and voice/
+    // language aren't part of what a template is curating. "Edit freely
+    // afterwards" (the manual's own fourth step) means this is a starting
+    // point, not a lock: every field below stays fully editable.
+    setForm(prev => ({ ...prev, system_prompt: t.system_prompt }))
+  }
+
   useEffect(() => {
     if (isNew) return
     listBots().then(bots => {
@@ -147,8 +168,36 @@ export default function BotSettingsPage() {
     setSaving(true)
     setError('')
     try {
-      if (isNew) await createBot(form)
-      else await updateBot(id!, form)
+      if (isNew) {
+        const created = await createBot(form)
+        // Task 3.9's "sensible tool selections" — a template names builtin
+        // tools by their function name; each becomes one BotTool(kind=
+        // "builtin") row, exactly like any other tool a customer could
+        // configure by hand (see BotToolsPage). A bot with these rows gets
+        // ONLY these tools rather than every builtin there is (task 3.1's
+        // fallback for a bot with nothing configured) — a Tutor template
+        // offered book_appointment would be exactly the irrelevant-tool
+        // problem 3.1 exists to get away from.
+        const template = templates.find(t => t.id === selectedTemplateId)
+        if (template) {
+          await Promise.all(template.tools.map(toolName => createTool(created.id, {
+            name: toolName, description: `Template default: ${toolName}`,
+            enabled: true, long_running: false, kind: 'builtin', builtin: toolName,
+            method: 'GET', url: '', headers: {}, query: {}, body: {},
+            parameters: [], auth: { kind: 'none', name: '' },
+            field_map: {}, timeout_seconds: 8,
+            payment: {
+              enabled: false, reference_field: '', amount_field: '', link_field: '',
+              signature_header: 'X-Razorpay-Signature',
+              webhook_reference_field: 'payload.payment_link.entity.id',
+              webhook_status_field: 'payload.payment_link.entity.status',
+              webhook_paid_value: 'paid',
+            },
+          })))
+        }
+      } else {
+        await updateBot(id!, form)
+      }
       navigate('/dashboard')
     } catch (err: any) {
       setError(err.message)
@@ -182,6 +231,41 @@ export default function BotSettingsPage() {
           {error && (
             <div className="bg-red-500/10 text-red-400 border border-red-500/20 text-sm rounded-xl px-4 py-3">
               {error}
+            </div>
+          )}
+
+          {/* Task 3.9 — starting points instead of a blank instruction box */}
+          {isNew && templates.length > 0 && (
+            <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                Start from a template
+              </label>
+              <p className="text-xs text-slate-500 mb-3">
+                Fills in a ready-made personality below — edit anything you like afterwards.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {templates.map(t => (
+                  <button
+                    type="button"
+                    key={t.id}
+                    onClick={() => applyTemplate(t)}
+                    className={`text-left rounded-xl border px-3.5 py-3 transition-all ${
+                      selectedTemplateId === t.id
+                        ? 'border-violet-500/60 bg-violet-500/10'
+                        : 'border-white/10 bg-white/5 hover:bg-white/8'
+                    }`}
+                  >
+                    <div className="text-sm font-semibold text-white">{t.name}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{t.description}</div>
+                  </button>
+                ))}
+              </div>
+              {selectedTemplateId && (
+                <button type="button" onClick={() => setSelectedTemplateId(null)}
+                  className="text-xs text-slate-500 hover:text-slate-300 mt-3">
+                  Clear selection — start blank instead
+                </button>
+              )}
             </div>
           )}
 

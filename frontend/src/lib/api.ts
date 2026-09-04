@@ -105,6 +105,19 @@ export async function listBots(): Promise<Bot[]> {
   return request('/bots/')
 }
 
+// Task 3.9 — starting points instead of a blank instruction box.
+export interface BotTemplate {
+  id: string
+  name: string
+  description: string
+  system_prompt: string
+  tools: string[]
+}
+
+export async function listBotTemplates(): Promise<BotTemplate[]> {
+  return request('/bots/templates')
+}
+
 export async function createBot(data: Omit<Bot, 'id'>): Promise<Bot> {
   return request('/bots/', { method: 'POST', body: JSON.stringify(data) })
 }

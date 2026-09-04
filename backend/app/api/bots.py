@@ -8,6 +8,7 @@ from app.core.auth import get_current_user
 from app.core.deps import get_owned_bot
 from app.models.bot import Bot
 from app.models.user import User
+from app.pipeline.bot_templates import TEMPLATES
 
 router = APIRouter(prefix="/bots", tags=["bots"])
 
@@ -130,6 +131,21 @@ class BotUpdate(BaseModel):
     @classmethod
     def _check_clock(cls, v: str | None) -> str | None:
         return _validate_clock(v) if v is not None else v
+
+
+@router.get("/templates")
+async def list_templates():
+    """Task 3.9 — starting points for a new bot, not the final bot itself.
+
+    Unauthenticated deliberately: this is the same catalogue for everyone,
+    the way the list of available voices already is, and someone should be
+    able to see what a new bot could look like before signing up.
+
+    Returns the full system_prompt (not a summary) — the picker on the New
+    Bot page pre-fills the actual form with it so a customer can start
+    editing immediately rather than fetching it a second time.
+    """
+    return [t.model_dump() for t in TEMPLATES]
 
 
 @router.post("/", status_code=201)
