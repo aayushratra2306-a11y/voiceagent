@@ -66,6 +66,21 @@ HTTP_TIMEOUT_SECONDS = 8.0
 # conversation out of the context window.
 MAX_RESPONSE_CHARS = 4000
 
+# Task 3.7. Appended to the system prompt only for a bot with a
+# payment-enabled tool, so a bot without one carries no such instruction as
+# prompt noise. The manual's tip is unambiguous: never take card numbers by
+# voice, always send a link — the compliance burden of handling card data
+# directly is enormous and completely avoidable by doing it this way.
+PAYMENT_SAFETY_RULE = (
+    "\n\nNEVER ask the caller to say, type, or otherwise give you their card "
+    "number, CVV, or expiry date over this call, and never repeat one back if "
+    "they offer it unprompted. If a caller starts to give you card details, stop "
+    "them immediately, explain you cannot take payment details this way, and "
+    "direct them to the secure payment link instead. Payment is completed only "
+    "through that link — never tell the caller a payment has succeeded unless "
+    "you have been explicitly told it was confirmed."
+)
+
 
 def _render(template: str, args: dict[str, Any]) -> str:
     """Substitute {placeholders} with the model's arguments.
@@ -176,7 +191,12 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     let alone two different callers, even on a reused worker process.
     """
     method = tool.method.upper()
-    cache_key = _cache_key(tool, args) if method == "GET" else None
+    # `not tool.payment.enabled`: creating a payment link is a side effect
+    # by definition — replaying a cached response would hand the caller a
+    # link (and reference) from an earlier request instead of a fresh one.
+    # GET already excludes it in practice (a create-link call is virtually
+    # always a POST), but this is the actual invariant, stated explicitly.
+    cache_key = _cache_key(tool, args) if method == "GET" and not tool.payment.enabled else None
     if cache_key is not None:
         ctx_cache = call_context.current().cache
         cached = ctx_cache.get(cache_key)
@@ -270,10 +290,70 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
         result = {"ok": True, "status": response.status_code, "data": payload}
         if fields is not None:
             result["fields"] = fields
+        if tool.payment.enabled:
+            await _track_payment_session(tool, payload, result)
 
     if cache_key is not None:
         call_context.current().cache[cache_key] = result
     return result
+
+
+async def _track_payment_session(tool: BotTool, payload: Any, result: dict[str, Any]) -> None:
+    """Task 3.7 — a payment link was just created; remember it against this
+    live call so a later webhook can find its way back to the conversation.
+
+    Never raises and never fails the tool call: the link itself was
+    generated successfully by this point (the caller's actual request), and
+    a tracking-record failure must not turn a working payment link into a
+    reported failure — it only means the automatic on-call confirmation
+    won't be able to find this one, which is degraded, not broken.
+    """
+    fields = {
+        "reference": _resolve_path(payload, tool.payment.reference_field),
+        "amount": _resolve_path(payload, tool.payment.amount_field),
+        "link_url": _resolve_path(payload, tool.payment.link_field),
+    }
+    if not fields["reference"] or not fields["link_url"]:
+        logger.warning(
+            f"[PAYMENT] {tool.name}: create-link response did not have a "
+            f"reference and a link at the configured paths — check "
+            f"reference_field/link_field against what the provider actually "
+            f"returned. Nothing tracked; the link itself is still valid."
+        )
+        result["message"] = (
+            result.get("message", "")
+            + " The link was created. Read it out or send it, but tell the caller "
+            "you cannot confirm automatically when it is paid."
+        )
+        return
+
+    try:
+        from app.models.payment import PaymentSession
+        from app.pipeline import call_context
+
+        ctx = call_context.current()
+        session = PaymentSession(
+            reference=str(fields["reference"]),
+            bot_id=ctx.bot_id or "",
+            pc_id=ctx.pc_id or "",
+            tool_id=str(tool.id or ""),
+            amount=str(fields["amount"] or ""),
+            link_url=str(fields["link_url"]),
+        )
+        await session.insert()
+        logger.info(f"[PAYMENT] Tracking {session.reference} for pc_id={ctx.pc_id or '(none)'}")
+        result["message"] = (
+            result.get("message", "")
+            + " Send this link to the caller now. You will be told automatically "
+            "the moment it is paid — do not say it is confirmed until then."
+        )
+    except Exception as e:
+        logger.warning(f"[PAYMENT] {tool.name}: could not save a tracking record: {type(e).__name__}: {e}")
+        result["message"] = (
+            result.get("message", "")
+            + " The link was created. Read it out or send it, but tell the caller "
+            "you cannot confirm automatically when it is paid."
+        )
 
 
 def _http_handler(tool: BotTool, jobs=None, saga=None):
@@ -339,13 +419,14 @@ def to_function_schema(tool: BotTool, jobs=None, saga=None) -> FunctionSchema:
 
 async def load_tools_for_bot(
     bot_id: str | None, jobs=None, saga=None
-) -> tuple[list[Any], bool, bool]:
+) -> tuple[list[Any], bool, bool, bool]:
     """Every enabled tool this bot has, ready to hand to the LLM context.
 
-    Returns (tools, has_background, has_undo). The two flags decide which
-    prompt rules this bot needs — background acknowledgements (3.3) and
-    partial rollback (3.4) — so a bot without such tools does not carry an
-    explanation of them on every turn.
+    Returns (tools, has_background, has_undo, has_payment). The flags decide
+    which prompt rules this bot needs — background acknowledgements (3.3),
+    partial rollback (3.4), and never asking for card details (3.7) — so a
+    bot without such tools does not carry an explanation of them on every
+    turn.
 
     Falls back to the built-in set when a bot has configured nothing, so
     every bot that existed before this task keeps the tools it had. A bot
@@ -355,7 +436,7 @@ async def load_tools_for_bot(
     """
     builtins = _builtin_tools()
     if not bot_id:
-        return list(builtins.values()), False, False
+        return list(builtins.values()), False, False, False
 
     try:
         records = await BotTool.find(BotTool.bot_id == bot_id, BotTool.enabled == True).to_list()  # noqa: E712
@@ -363,11 +444,11 @@ async def load_tools_for_bot(
         # A tool-loading failure must not take the call down: the caller can
         # still have a conversation, just without tools.
         logger.warning(f"[TOOLS] Could not load tools for bot {bot_id}: {e}")
-        return list(builtins.values()), False, False
+        return list(builtins.values()), False, False, False
 
     if not records:
         logger.info(f"[TOOLS] Bot {bot_id} has none configured — using the {len(builtins)} built-ins")
-        return list(builtins.values()), False, False
+        return list(builtins.values()), False, False, False
 
     loaded: list[Any] = []
     for record in records:
@@ -382,11 +463,12 @@ async def load_tools_for_bot(
 
     has_background = any(r.long_running and r.kind == "http" for r in records)
     has_undo = any(r.kind == "http" and r.undo and r.undo.url for r in records)
+    has_payment = any(r.kind == "http" and r.payment and r.payment.enabled for r in records)
     logger.info(
         f"[TOOLS] Bot {bot_id}: loaded {len(loaded)} configured tool(s)"
         + (" (one or more run in the background)" if has_background else "")
     )
-    return loaded, has_background, has_undo
+    return loaded, has_background, has_undo, has_payment
 
 
 async def test_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:

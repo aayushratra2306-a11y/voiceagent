@@ -52,7 +52,7 @@ from app.pipeline.rag_processor import RAGContextProcessor
 from app.pipeline.saga import SAGA_RULE, TurnSaga
 from app.pipeline.tool_telemetry import PARTIAL_FAILURE_RULE, ToolCallTimer
 from app.services.rag import query_context
-from app.services.tool_registry import load_tools_for_bot
+from app.services.tool_registry import PAYMENT_SAFETY_RULE, load_tools_for_bot
 
 
 class AudioDebugger(FrameProcessor):
@@ -395,6 +395,16 @@ async def run_voice_pipeline(
     llm_model: str,
     language: str = "en",
     bot_id: str | None = None,
+    # Task 3.7 — pc_id is the same id app.api.connect keys its live-call
+    # registry by, set by call_worker.py once the WebRTC handler has decided
+    # it (not known before this call's process even starts). payment_queue
+    # is the parent-to-child channel a payment webhook uses to speak back
+    # into this specific call — see _forward_payments below, the payment
+    # equivalent of call_worker.py's existing `_forward_ice`. Both default
+    # to None so a bot with no payment tool, or a call started before this
+    # task, works exactly as before.
+    pc_id: str | None = None,
+    payment_queue=None,
 ):
     session_id = str(uuid.uuid4())
     logger.info(f"[PIPELINE] Starting for bot: {bot_name} (session {session_id})")
@@ -404,8 +414,9 @@ async def run_voice_pipeline(
     # booking template needs the bot's time zone, and it must NOT be
     # something the model can pass in. This is where it comes from; see
     # call_context.py for why a module-level value is safe here (one OS
-    # process per call).
-    call_context.set_call(bot_id=bot_id, session_id=session_id, language=language)
+    # process per call). pc_id is here for the same reason — task 3.7's
+    # payment tool stamps it onto the PaymentSession it creates.
+    call_context.set_call(bot_id=bot_id, session_id=session_id, language=language, pc_id=pc_id)
 
     # NOTE (Phase 1, task 1.1): pipecat 1.7.0 removed `vad_analyzer` from
     # TransportParams entirely. Passing it here is silently dropped by
@@ -522,7 +533,7 @@ async def run_voice_pipeline(
     # Task 3.3 — created before the tools, because a long-running tool's
     # handler closes over it. The pipeline task does not exist yet; it is
     # attached below, once it does.
-    tools, has_background, has_undo = await load_tools_for_bot(bot_id, jobs, saga)
+    tools, has_background, has_undo, has_payment = await load_tools_for_bot(bot_id, jobs, saga)
     if has_undo:
         voice_system_prompt += SAGA_RULE
     if has_background:
@@ -531,6 +542,11 @@ async def run_voice_pipeline(
         # because RAGContextProcessor rebuilds messages[0] from that string
         # on every turn and would otherwise drop it after the first.
         voice_system_prompt += BACKGROUND_TOOL_RULE
+    if has_payment:
+        # Task 3.7. The manual's tip is direct: never take card numbers by
+        # voice, always send a link — the compliance burden of handling
+        # card data directly is enormous and completely avoidable.
+        voice_system_prompt += PAYMENT_SAFETY_RULE
     context = LLMContext(
         messages=[{"role": "system", "content": voice_system_prompt}],
         tools=tools,
@@ -704,6 +720,37 @@ async def run_voice_pipeline(
     # Task 3.3 — a finished background job speaks into this task.
     jobs.attach(task)
 
+    # Task 3.7 — the payment equivalent of call_worker.py's `_forward_ice`:
+    # a payment webhook lands in the PARENT process, this call runs in its
+    # own child process (task 2.4), so the only way across is the queue the
+    # parent was handed at spawn time. Reading it blocks a thread, not the
+    # event loop, same as ice's forwarder.
+    payment_forward_task = None
+    if payment_queue is not None:
+        async def _forward_payments() -> None:
+            loop = asyncio.get_event_loop()
+            while True:
+                item = await loop.run_in_executor(None, payment_queue.get)
+                if item is None:  # sentinel: parent is done sending
+                    return
+                status = item.get("status")
+                note = (
+                    f"A payment update just arrived from the payment provider for "
+                    f"reference {item.get('reference')}"
+                    + (f", amount {item['amount']}" if item.get("amount") else "")
+                    + f": status is '{status}'. "
+                    + (
+                        "It has been PAID. Tell the caller this now, clearly, as an "
+                        "interruption to whatever is currently being discussed."
+                        if status == "paid"
+                        else "It did NOT succeed. Tell the caller plainly and ask if "
+                        "they would like the link sent again — do not say it was paid."
+                    )
+                )
+                await jobs.announce_external(note)
+
+        payment_forward_task = asyncio.create_task(_forward_payments())
+
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("[PIPELINE] Client disconnected")
@@ -712,6 +759,8 @@ async def run_voice_pipeline(
         # something is how state becomes unknowable) — they finish and log
         # themselves, which is the only record that they happened.
         jobs.shutdown()
+        if payment_forward_task is not None:
+            payment_forward_task.cancel()
         await task.cancel()
 
     # Fires when a user turn stays open ~5s with no completed transcript —

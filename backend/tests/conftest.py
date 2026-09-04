@@ -46,10 +46,12 @@ async def _test_db():
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
+    from app.models.payment import PaymentSession
     from app.models.revoked_token import RevokedRefreshToken
     from app.models.user import User
 
-    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn, RevokedRefreshToken, BotTool])
+    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
+                   RevokedRefreshToken, BotTool, PaymentSession])
     yield
     await database.client.drop_database(database.name)
 

@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api import auth, bot_tools, bots, connect, documents
+from app.api import auth, bot_tools, bots, connect, documents, payments
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
 from app.core.config import settings
 from app.core.rate_limit import limiter
@@ -22,6 +22,7 @@ from app.models.bot_tool import BotTool
 from app.models.conversation import ConversationTurn
 from app.models.document import Document
 from app.models.order import Order
+from app.models.payment import PaymentSession
 from app.models.revoked_token import RevokedRefreshToken
 from app.models.user import User
 
@@ -37,7 +38,8 @@ sentry_sdk.init(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn, RevokedRefreshToken, BotTool])
+    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
+                   RevokedRefreshToken, BotTool, PaymentSession])
     await seed_fake_orders()
     # Task 2.4 — reaps finished/crashed per-call worker processes so the
     # registry and the OS process table don't grow unbounded.
@@ -74,6 +76,7 @@ app.include_router(bots.router)
 app.include_router(connect.router)
 app.include_router(documents.router)
 app.include_router(bot_tools.router)
+app.include_router(payments.router)
 
 
 @app.get("/health")

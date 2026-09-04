@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from app.core.deps import get_owned_bot
 from app.models.bot import Bot
-from app.models.bot_tool import BotTool, ToolAuth, ToolParameter
+from app.models.bot_tool import BotTool, PaymentLinkConfig, ToolAuth, ToolParameter
 from app.services.tool_registry import test_tool
 
 router = APIRouter(prefix="/bots/{bot_id}/tools", tags=["tools"])
@@ -33,6 +33,26 @@ class AuthIn(BaseModel):
     # stored one — which is what lets the UI show a masked value and still
     # let someone edit the URL without re-typing their key.
     secret: str | None = None
+
+
+class PaymentIn(BaseModel):
+    """Task 3.7 — what turns a plain HTTP tool into a payment-link tool.
+
+    Everything here is a path or a flag except the webhook secret, which
+    follows the same write-only rule as an API key: sent in plain text on
+    the way in, stored encrypted, never returned.
+    """
+
+    enabled: bool = False
+    reference_field: str = ""
+    amount_field: str = ""
+    link_field: str = ""
+    signature_header: str = "X-Razorpay-Signature"
+    webhook_reference_field: str = "payload.payment_link.entity.id"
+    webhook_status_field: str = "payload.payment_link.entity.status"
+    webhook_paid_value: str = "paid"
+    # None means "keep the stored one", exactly like auth.secret.
+    webhook_secret: str | None = None
 
 
 class ToolIn(BaseModel):
@@ -57,6 +77,9 @@ class ToolIn(BaseModel):
     # longer; 8.0 keeps every tool saved before this task unchanged.
     field_map: dict[str, str] = Field(default_factory=dict)
     timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+    # Task 3.7. Same write-only handling as auth.secret above: the webhook
+    # secret goes out in `webhook_secret` and never comes back.
+    payment: "PaymentIn" = Field(default_factory=lambda: PaymentIn())
 
 
 def _out(tool: BotTool) -> dict:
@@ -77,6 +100,19 @@ def _out(tool: BotTool) -> dict:
         "parameters": [p.model_dump() for p in tool.parameters],
         "field_map": tool.field_map,
         "timeout_seconds": tool.timeout_seconds,
+        "payment": {
+            "enabled": tool.payment.enabled,
+            "reference_field": tool.payment.reference_field,
+            "amount_field": tool.payment.amount_field,
+            "link_field": tool.payment.link_field,
+            "signature_header": tool.payment.signature_header,
+            "webhook_reference_field": tool.payment.webhook_reference_field,
+            "webhook_status_field": tool.payment.webhook_status_field,
+            "webhook_paid_value": tool.payment.webhook_paid_value,
+            # Never the secret itself — only whether one is configured, which
+            # is what the form needs to show "leave blank to keep".
+            "has_webhook_secret": bool(tool.payment.webhook_secret_encrypted),
+        },
         "auth": {
             "kind": tool.auth.kind,
             "name": tool.auth.name,
@@ -115,13 +151,17 @@ async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
     if await BotTool.find_one(BotTool.bot_id == str(bot.id), BotTool.name == body.name):
         raise HTTPException(status_code=409, detail=f"This bot already has a tool called {body.name}")
 
-    data = body.model_dump(exclude={"auth"})
+    data = body.model_dump(exclude={"auth", "payment"})
     tool = BotTool(
         bot_id=str(bot.id),
         auth=ToolAuth(
             kind=body.auth.kind,
             name=body.auth.name,
             secret_encrypted=encrypt_secret(body.auth.secret or ""),
+        ),
+        payment=PaymentLinkConfig(
+            **body.payment.model_dump(exclude={"webhook_secret"}),
+            webhook_secret_encrypted=encrypt_secret(body.payment.webhook_secret or ""),
         ),
         **data,
     )
@@ -133,8 +173,15 @@ async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
 async def update_tool(body: ToolIn, tool_id: str, bot: Bot = Depends(get_owned_bot)):
     tool = await _owned_tool(str(bot.id), tool_id)
 
-    for field, value in body.model_dump(exclude={"auth"}).items():
+    for field, value in body.model_dump(exclude={"auth", "payment"}).items():
         setattr(tool, field, value)
+
+    for field, value in body.payment.model_dump(exclude={"webhook_secret"}).items():
+        setattr(tool.payment, field, value)
+    # Same rule as the API key: None keeps the stored secret so the rest of
+    # the form can be edited without re-typing it; "" clears it.
+    if body.payment.webhook_secret is not None:
+        tool.payment.webhook_secret_encrypted = encrypt_secret(body.payment.webhook_secret)
 
     tool.auth.kind = body.auth.kind
     tool.auth.name = body.auth.name

@@ -153,13 +153,33 @@ export interface BotTool {
    *  seconds," far shorter than the 8s default a booking call may
    *  legitimately need. */
   timeout_seconds: number
+  /** Task 3.7 — makes this tool a payment-link tool: the reference and link
+   *  are pulled out of the provider's response so a later webhook can find
+   *  the call that asked for it. The webhook secret is write-only, like the
+   *  API key. */
+  payment: PaymentConfig
   auth: { kind: string; name: string; secret_masked: string; has_secret: boolean }
+}
+
+export interface PaymentConfig {
+  enabled: boolean
+  reference_field: string
+  amount_field: string
+  link_field: string
+  signature_header: string
+  webhook_reference_field: string
+  webhook_status_field: string
+  webhook_paid_value: string
+  has_webhook_secret?: boolean
+  /** Write-only. Omit to keep the stored one. */
+  webhook_secret?: string
 }
 
 /** What the form sends. Omitting `auth.secret` means "keep the stored one",
  *  which is what lets the URL be edited without re-typing the API key. */
-export type BotToolInput = Omit<BotTool, 'id' | 'auth'> & {
+export type BotToolInput = Omit<BotTool, 'id' | 'auth' | 'payment'> & {
   auth: { kind: string; name: string; secret?: string }
+  payment: Omit<PaymentConfig, 'has_webhook_secret'>
 }
 
 export async function listTools(botId: string): Promise<BotTool[]> {

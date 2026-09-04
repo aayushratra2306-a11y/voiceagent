@@ -108,6 +108,32 @@ class BackgroundJobs:
             f"interruption to whatever is currently being discussed. If it failed, "
             f"say plainly what did not happen rather than glossing over it."
         )
+        await self._speak(note, context=name)
+
+    async def announce_external(self, note: str) -> None:
+        """Task 3.7 — speak a note into this call from OUTSIDE the process
+        that is running it.
+
+        A payment webhook lands in the API process, seconds or minutes
+        after the link was sent, while this call's pipeline runs in its own
+        OS process (task 2.4). The webhook can't call queue_frame directly
+        — it doesn't have this Python object, only a multiprocessing.Queue
+        connected to it (see call_worker.py's `_forward_payments`, the
+        payment equivalent of the existing `_forward_ice`). This is the
+        method that queue's consumer calls once the note has crossed back
+        into this process.
+
+        Same guard as the internal path: if the caller has already hung up,
+        there's nobody to speak to — the payment is still recorded, just
+        with no one to tell in the moment.
+        """
+        if self._call_ended:
+            logger.info("[JOB] External announcement arrived after the call ended, not spoken")
+            return
+        await self._speak(note, context="external")
+
+    async def _speak(self, note: str, context: str) -> None:
+        """The actual queue_frame call, shared by both announcement paths."""
         try:
             await self._task.queue_frame(
                 LLMMessagesAppendFrame(messages=[{"role": "system", "content": note}], run_llm=True)
@@ -115,7 +141,7 @@ class BackgroundJobs:
         except Exception as e:
             # A call that ended between the check above and this line. Not
             # worth an error: the outcome is already in the log.
-            logger.warning(f"[JOB] Could not announce {name}: {type(e).__name__}: {e}")
+            logger.warning(f"[JOB] Could not announce ({context}): {type(e).__name__}: {e}")
 
     def shutdown(self) -> None:
         """Called when the caller hangs up.

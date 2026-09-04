@@ -104,6 +104,49 @@ class ToolUndo(BaseModel):
         return v.strip()
 
 
+class PaymentLinkConfig(BaseModel):
+    """Task 3.7 — turns a plain HTTP tool into a payment-link tool.
+
+    Generating the link needs no new code — it's exactly what the generic
+    HTTP tool has done since 3.1, pointed at whatever provider a customer
+    actually uses. What this adds is the piece configuration alone cannot
+    do: tracking one specific link against the live call that requested it,
+    so an asynchronous "it was paid" from the provider can be spoken back
+    into the right conversation. See models/payment.py for how.
+
+    Reuses 3.6's dotted-path idea twice over — once for reading the
+    provider's create-link response, once for reading its webhook body —
+    because both are "pull a named value out of somebody else's JSON
+    shape," and a customer configuring this should not have to learn two
+    different mechanisms for the same thing.
+    """
+
+    enabled: bool = False
+
+    # Dotted paths into the CREATE-LINK response (see tool_registry._resolve_path).
+    reference_field: str = ""
+    amount_field: str = ""
+    link_field: str = ""
+
+    # The provider's webhook, verified before any of it is trusted — see
+    # tool_registry's warning on this task: a customer's caller must never
+    # be told a payment succeeded on the strength of an unsigned request.
+    # HMAC-SHA256 of the raw body against this secret, which is Razorpay's
+    # own scheme (documented at razorpay.com/docs/webhooks) and a common
+    # one elsewhere — NOT a claim that every provider signs this way; a
+    # provider with a different scheme (Stripe's is timestamp-prefixed)
+    # needs its own verifier, not this one pretending to be universal.
+    webhook_secret_encrypted: str = ""
+    signature_header: str = "X-Razorpay-Signature"
+
+    # Dotted paths into the WEBHOOK body — a different shape from the
+    # create-link response, so separate paths rather than reusing the ones
+    # above.
+    webhook_reference_field: str = "payload.payment_link.entity.id"
+    webhook_status_field: str = "payload.payment_link.entity.status"
+    webhook_paid_value: str = "paid"
+
+
 class BotTool(Document):
     """One configured tool belonging to one bot."""
 
@@ -158,6 +201,9 @@ class BotTool(Document):
     # already configured changes behaviour; a lookup tool is the one meant to
     # be dialled down.
     timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+
+    # --- task 3.7, the payment link tool -------------------------------
+    payment: PaymentLinkConfig = Field(default_factory=PaymentLinkConfig)
 
     class Settings:
         name = "bot_tools"

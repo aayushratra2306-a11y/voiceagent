@@ -37,6 +37,13 @@ class CallContext:
     bot_id: str | None = None
     user_id: str | None = None
     session_id: str | None = None
+    # Task 3.7 — the same id app.api.connect keys its live-call registry by
+    # (the dict key `_active_calls` uses, not session_id above — a separate
+    # id decided by the WebRTC handler before the pipeline even starts).
+    # A payment tool stamps this onto the PaymentSession it creates, so a
+    # provider's webhook arriving later can find this exact call and speak
+    # into it while it is still live.
+    pc_id: str | None = None
     language: str = "en"
     # Task 3.3's background runner, so a builtin tool can also hand slow work
     # off instead of holding the turn. None outside a call.

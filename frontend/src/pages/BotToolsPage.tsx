@@ -29,6 +29,13 @@ const BLANK: BotToolInput = {
   method: 'GET', url: '', headers: {}, query: {}, body: {},
   parameters: [], auth: { kind: 'none', name: '', secret: '' },
   field_map: {}, timeout_seconds: 8,
+  payment: {
+    enabled: false, reference_field: '', amount_field: '', link_field: '',
+    signature_header: 'X-Razorpay-Signature',
+    webhook_reference_field: 'payload.payment_link.entity.id',
+    webhook_status_field: 'payload.payment_link.entity.status',
+    webhook_paid_value: 'paid', webhook_secret: '',
+  },
 }
 
 /** Key/value maps are edited as rows so a customer never types JSON. */
@@ -57,6 +64,7 @@ export default function BotToolsPage() {
   const [queryRows, setQueryRows] = useState<Pair[]>([])
   const [fieldMapRows, setFieldMapRows] = useState<Pair[]>([])
   const [secretTouched, setSecretTouched] = useState(false)
+  const [paymentSecretTouched, setPaymentSecretTouched] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const [testArgs, setTestArgs] = useState<Record<string, string>>({})
@@ -78,7 +86,8 @@ export default function BotToolsPage() {
   function startNew() {
     setEditingId('new'); setForm(BLANK)
     setHeaderRows([]); setQueryRows([]); setFieldMapRows([])
-    setSecretTouched(false); setTestArgs({}); setTestResult('')
+    setSecretTouched(false); setPaymentSecretTouched(false)
+    setTestArgs({}); setTestResult('')
   }
 
   function startEdit(t: BotTool) {
@@ -92,10 +101,14 @@ export default function BotToolsPage() {
       query: t.query, body: t.body, parameters: t.parameters,
       auth: { kind: t.auth.kind, name: t.auth.name },
       field_map: t.field_map, timeout_seconds: t.timeout_seconds,
+      // webhook_secret deliberately absent — same rule as the API key: the
+      // server never returns it, and omitting it means "keep the stored one".
+      payment: { ...t.payment, webhook_secret: undefined },
     })
     setHeaderRows(toPairs(t.headers)); setQueryRows(toPairs(t.query))
     setFieldMapRows(toPairs(t.field_map))
-    setSecretTouched(false); setTestArgs({}); setTestResult('')
+    setSecretTouched(false); setPaymentSecretTouched(false)
+    setTestArgs({}); setTestResult('')
   }
 
   function set<K extends keyof BotToolInput>(k: K, v: BotToolInput[K]) {
@@ -116,6 +129,9 @@ export default function BotToolsPage() {
       headers: fromPairs(headerRows),
       query: fromPairs(queryRows),
       field_map: fromPairs(fieldMapRows),
+      payment: paymentSecretTouched
+        ? form.payment
+        : { ...form.payment, webhook_secret: undefined },
       auth: secretTouched
         ? form.auth
         : { kind: form.auth.kind, name: form.auth.name },   // omit `secret` → keep stored
@@ -353,6 +369,73 @@ export default function BotToolsPage() {
                 "that system isn't responding" than to leave the caller waiting in silence.
                 Slower actions (like a booking) may need longer.
               </p>
+            </div>
+
+            {/* Task 3.7 — the payment link tool */}
+            <div className="border border-white/8 rounded-xl p-4">
+              <label className="flex items-center gap-2.5 text-sm text-slate-300">
+                <input type="checkbox" checked={form.payment.enabled}
+                  onChange={e => set('payment', { ...form.payment, enabled: e.target.checked })}
+                  className="accent-violet-500" />
+                This tool creates a payment link
+              </label>
+              <p className="text-xs text-slate-500 mt-1 ml-6">
+                The bot will be told never to take card details by voice, and the caller is
+                told automatically when the payment arrives — even mid-sentence.
+              </p>
+
+              {form.payment.enabled && (
+                <div className="mt-4 space-y-3 ml-6">
+                  <p className="text-xs text-slate-400">
+                    Where to find each thing in the payment provider's reply:
+                  </p>
+                  {([
+                    ['reference_field', 'Payment reference', 'id'],
+                    ['link_field', 'The link itself', 'short_url'],
+                    ['amount_field', 'Amount (optional)', 'amount'],
+                  ] as const).map(([key, labelText, ph]) => (
+                    <div key={key} className="flex gap-2 items-center">
+                      <span className="text-xs text-slate-500 w-40 shrink-0">{labelText}</span>
+                      <input value={form.payment[key]} placeholder={ph}
+                        onChange={e => set('payment', { ...form.payment, [key]: e.target.value })}
+                        className={`${smallField} font-mono`} />
+                    </div>
+                  ))}
+
+                  <p className="text-xs text-slate-400 pt-2">
+                    And how the provider tells us it was paid:
+                  </p>
+                  {([
+                    ['signature_header', 'Signature header', 'X-Razorpay-Signature'],
+                    ['webhook_reference_field', 'Reference in webhook', 'payload.payment_link.entity.id'],
+                    ['webhook_status_field', 'Status in webhook', 'payload.payment_link.entity.status'],
+                    ['webhook_paid_value', 'Value meaning "paid"', 'paid'],
+                  ] as const).map(([key, labelText, ph]) => (
+                    <div key={key} className="flex gap-2 items-center">
+                      <span className="text-xs text-slate-500 w-40 shrink-0">{labelText}</span>
+                      <input value={form.payment[key]} placeholder={ph}
+                        onChange={e => set('payment', { ...form.payment, [key]: e.target.value })}
+                        className={`${smallField} font-mono`} />
+                    </div>
+                  ))}
+
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs text-slate-500 w-40 shrink-0">Webhook secret</span>
+                    <input type="password" value={form.payment.webhook_secret ?? ''}
+                      onChange={e => {
+                        setPaymentSecretTouched(true)
+                        set('payment', { ...form.payment, webhook_secret: e.target.value })
+                      }}
+                      placeholder={editingId === 'new' ? 'From your provider dashboard' : 'Leave blank to keep the saved one'}
+                      className={`${smallField} font-mono`} />
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Without a matching secret every callback is rejected — that is what stops
+                    anyone else claiming a payment succeeded. Point your provider's webhook at{' '}
+                    <code className="font-mono text-slate-400">/payments/webhook/{editingId !== 'new' ? editingId : '<save first>'}</code>
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="space-y-3">

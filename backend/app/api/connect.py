@@ -52,6 +52,10 @@ class _ActiveCall:
     process: mp.Process
     ice_queue: mp.Queue
     user_id: str
+    # Task 3.7 — parent -> child, for a payment webhook that lands here
+    # minutes after the link was sent and needs to reach the call that is
+    # still in progress. See get_payment_queue() below.
+    payment_queue: "mp.Queue | None" = None
 
 
 _active_calls: dict[str, _ActiveCall] = {}
@@ -127,6 +131,10 @@ class _PooledWorker:
     ice_queue: mp.Queue
     ready: EventClass
     spawned_at: float
+    # Task 3.7 — created up front like the others, for the same reason: a
+    # multiprocessing.Queue has to be handed over at Process construction
+    # and cannot be sent through another queue afterwards.
+    payment_queue: "mp.Queue | None" = None
 
 
 _idle_pool: list[_PooledWorker] = []
@@ -136,14 +144,17 @@ def _spawn_pooled_worker() -> _PooledWorker:
     job_queue: mp.Queue = _MP.Queue()
     answer_queue: mp.Queue = _MP.Queue()
     ice_queue: mp.Queue = _MP.Queue()
+    payment_queue: mp.Queue = _MP.Queue()
     ready = _MP.Event()
     proc = _MP.Process(
         target=pooled_worker_main,
-        args=(job_queue, answer_queue, ice_queue, ready),
+        args=(job_queue, answer_queue, ice_queue, ready, payment_queue),
         daemon=True,
     )
     proc.start()
-    return _PooledWorker(proc, job_queue, answer_queue, ice_queue, ready, time.monotonic())
+    return _PooledWorker(
+        proc, job_queue, answer_queue, ice_queue, ready, time.monotonic(), payment_queue
+    )
 
 
 def _top_up_pool() -> None:
@@ -270,6 +281,7 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
 
     if worker is not None:
         proc, answer_queue, ice_queue = worker.process, worker.answer_queue, worker.ice_queue
+        payment_queue = worker.payment_queue
         worker.job_queue.put({
             "bot_config": bot_config,
             "sdp": body.sdp,
@@ -286,9 +298,13 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         logger.warning("[POOL] Empty, spawning a cold worker for this call")
         answer_queue = _MP.Queue()
         ice_queue = _MP.Queue()
+        payment_queue = _MP.Queue()
         proc = _MP.Process(
             target=call_worker_main,
-            args=(bot_config, body.sdp, body.type, body.pc_id, answer_queue, ice_queue),
+            args=(
+                bot_config, body.sdp, body.type, body.pc_id,
+                answer_queue, ice_queue, payment_queue,
+            ),
             daemon=True,
         )
         proc.start()
@@ -304,9 +320,25 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         proc.terminate()
         raise HTTPException(status_code=504, detail="Call setup timed out") from e
 
-    _active_calls[answer["pc_id"]] = _ActiveCall(proc, ice_queue, str(current_user.id))
+    _active_calls[answer["pc_id"]] = _ActiveCall(
+        proc, ice_queue, str(current_user.id), payment_queue
+    )
     logger.info(f"[CALL] Started call worker pid={proc.pid} pc_id={answer['pc_id']} bot={bot.name}")
     return answer
+
+
+def get_payment_queue(pc_id: str) -> "mp.Queue | None":
+    """Task 3.7 — the channel into a specific live call, or None if it has
+    already ended.
+
+    Exposed as a function rather than letting the payments route reach into
+    `_active_calls` directly: this registry's shape is an implementation
+    detail of the process model (and the comment above it notes it will
+    have to move to Redis if the API is ever run as more than one replica).
+    One accessor is one place to change when that happens.
+    """
+    call = _active_calls.get(pc_id)
+    return call.payment_queue if call else None
 
 
 @router.post("/connect/ice")

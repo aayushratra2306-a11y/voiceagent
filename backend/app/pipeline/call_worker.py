@@ -86,6 +86,7 @@ def call_worker_main(
     pc_id: str | None,
     answer_queue: mp.Queue,
     ice_queue: mp.Queue,
+    payment_queue: "mp.Queue | None" = None,
 ) -> None:
     """Process entry point for a worker spawned FOR a specific call. Still
     used when the pool is empty — a burst of simultaneous calls degrades to
@@ -97,7 +98,8 @@ def call_worker_main(
     async def _run():
         run_voice_pipeline = await _prepare_worker()
         await _handle_call(
-            run_voice_pipeline, bot_config, sdp, sdp_type, pc_id, answer_queue, ice_queue
+            run_voice_pipeline, bot_config, sdp, sdp_type, pc_id, answer_queue, ice_queue,
+            payment_queue,
         )
 
     try:
@@ -111,6 +113,7 @@ def pooled_worker_main(
     answer_queue: mp.Queue,
     ice_queue: mp.Queue,
     ready_event,
+    payment_queue: "mp.Queue | None" = None,
 ) -> None:
     """Process entry point for a POOLED worker: do the expensive startup
     first, then wait for a call to be assigned.
@@ -143,7 +146,7 @@ def pooled_worker_main(
         await _handle_call(
             run_voice_pipeline,
             job["bot_config"], job["sdp"], job["sdp_type"], job["pc_id"],
-            answer_queue, ice_queue,
+            answer_queue, ice_queue, payment_queue,
         )
 
     try:
@@ -193,13 +196,16 @@ async def _prepare_worker():
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
+    from app.models.payment import PaymentSession
     from app.pipeline.voice_pipeline import run_voice_pipeline
 
     # Document is here for Task 2.10: the RAG processor resolves doc_id ->
-    # filename to cite a source. Beanie raises CollectionWasNotInitialized
-    # for any model missing from this list, so an omission here is the same
-    # failure this whole init_db call exists to fix.
-    await init_db([Order, Appointment, ConversationTurn, Document, BotTool])
+    # filename to cite a source. PaymentSession is here for Task 3.7: a
+    # payment-link tool inserts one from inside this same process. Beanie
+    # raises CollectionWasNotInitialized for any model missing from this
+    # list, so an omission here is the same failure this whole init_db call
+    # exists to fix.
+    await init_db([Order, Appointment, ConversationTurn, Document, BotTool, PaymentSession])
     return run_voice_pipeline
 
 
@@ -211,6 +217,7 @@ async def _handle_call(
     pc_id: str | None,
     answer_queue: mp.Queue,
     ice_queue: mp.Queue,
+    payment_queue: "mp.Queue | None" = None,
 ) -> None:
     """Everything that is specific to one call. Identical whether the process
     was spawned for this call or taken warm from the pool."""
@@ -233,6 +240,15 @@ async def _handle_call(
     request = SmallWebRTCRequest(sdp=sdp, type=sdp_type, pc_id=pc_id)
     answer = await handler.handle_web_request(request, start_pipeline)
     answer_queue.put({"sdp": answer["sdp"], "type": answer["type"], "pc_id": answer["pc_id"]})
+
+    # Task 3.7 — the client may not have sent a pc_id at all (the normal
+    # case for a brand new call); the handler decides one, and this is the
+    # first point either process learns what it is. bot_config is read by
+    # start_pipeline's closure, which fires as pipecat's own on-connected
+    # callback — always AFTER handle_web_request returns (see the wait
+    # below) — so setting these here, before that wait, is early enough.
+    bot_config["pc_id"] = answer["pc_id"]
+    bot_config["payment_queue"] = payment_queue
 
     # start_pipeline is pipecat's own on-connected callback — it fires once
     # the peer connection is actually established, which can be slightly
