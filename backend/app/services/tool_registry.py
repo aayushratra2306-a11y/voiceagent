@@ -81,6 +81,20 @@ PAYMENT_SAFETY_RULE = (
     "you have been explicitly told it was confirmed."
 )
 
+# Task 3.10. Appended only for a bot with an approval-gated tool. The
+# manual's own reasoning: no company will let an AI approve a large refund
+# unsupervised, and this is what makes them comfortable letting it handle
+# everything below the threshold on its own.
+APPROVAL_RULE = (
+    "\n\nSome of your tools have a value above which they require a person's "
+    "sign-off before they actually happen. When a tool reports that something "
+    "needs approval, tell the caller plainly that this needs to be checked by a "
+    "person and they will hear back separately — do not make them wait on this "
+    "call for it, and never say the action is done until you are told it was "
+    "approved. If it is later denied, say so honestly rather than pretending it "
+    "went through."
+)
+
 
 def _render(template: str, args: dict[str, Any]) -> str:
     """Substitute {placeholders} with the model's arguments.
@@ -356,6 +370,78 @@ async def _track_payment_session(tool: BotTool, payload: Any, result: dict[str, 
         )
 
 
+async def _check_approval_gate(tool: BotTool, args: dict[str, Any]) -> dict[str, Any] | None:
+    """Task 3.10 — before the action runs at all, not after.
+
+    Returns None when the tool may proceed normally. Returns a result dict
+    when it may not: the underlying HTTP call never happens, and instead a
+    PendingApproval record is created for a person to decide later.
+
+    The amount is read from whichever declared parameter the tool names
+    (`amount_parameter`) — the same argument the model filled in from what
+    the caller said. If it's missing or not a number, this fails CLOSED:
+    approval is required rather than skipped, because the whole point of
+    this gate is that a big action should never slip through, and an
+    unparseable amount is exactly the case where "let it through" would be
+    the wrong default.
+    """
+    if not tool.approval.enabled:
+        return None
+
+    raw = args.get(tool.approval.amount_parameter)
+    try:
+        amount = float(raw)
+        unparseable = False
+    except (TypeError, ValueError):
+        amount = tool.approval.threshold  # for display only; see docstring
+        unparseable = True
+
+    if not unparseable and amount <= tool.approval.threshold:
+        return None
+
+    from app.models.approval import PendingApproval
+    from app.pipeline import call_context
+
+    ctx = call_context.current()
+    try:
+        approval = PendingApproval(
+            tool_id=str(tool.id or ""), bot_id=ctx.bot_id or "", user_id=ctx.user_id or "",
+            pc_id=ctx.pc_id or "", tool_name=tool.name, arguments=args,
+            amount=amount, threshold=tool.approval.threshold,
+        )
+        await approval.insert()
+    except Exception as e:
+        # The action must NOT run un-approved just because the approval
+        # record itself failed to save — that would silently defeat the
+        # whole feature. Refuse instead, with something the model can say.
+        logger.error(f"[APPROVAL] Could not create a pending approval for {tool.name}: {e}")
+        return {
+            "ok": False,
+            "error": "approval_unavailable",
+            "message": (
+                "This action needs approval and that could not be set up right now. "
+                "Tell the caller it cannot be completed on this call and to try again "
+                "shortly."
+            ),
+        }
+
+    logger.info(
+        f"[APPROVAL] {tool.name}: {amount} > threshold {tool.approval.threshold} "
+        f"— queued approval {approval.id}, action not yet run"
+    )
+    return {
+        "ok": True,
+        "pending_approval": True,
+        "approval_id": str(approval.id),
+        "message": (
+            f"This is above the amount that can be approved automatically "
+            f"({tool.approval.threshold}) and has been sent to a person to review. "
+            "Tell the caller it needs sign-off and they will hear back separately — "
+            "do not make them wait on this call, and do not say it is done."
+        ),
+    }
+
+
 def _http_handler(tool: BotTool, jobs=None, saga=None):
     """Build the function pipecat will call for this tool record.
 
@@ -382,6 +468,16 @@ def _http_handler(tool: BotTool, jobs=None, saga=None):
                     "it is done."
                 ),
             })
+            return
+
+        # Task 3.10 — checked before the HTTP call, not after: the whole
+        # point is that the underlying action must not happen at all until
+        # a person says so.
+        gated = await _check_approval_gate(tool, args)
+        if gated is not None:
+            if saga is not None:
+                await saga.record(tool.name, tool, args, gated)
+            await params.result_callback(gated)
             return
 
         result = await call_http_tool(tool, args)
@@ -419,12 +515,13 @@ def to_function_schema(tool: BotTool, jobs=None, saga=None) -> FunctionSchema:
 
 async def load_tools_for_bot(
     bot_id: str | None, jobs=None, saga=None
-) -> tuple[list[Any], bool, bool, bool]:
+) -> tuple[list[Any], bool, bool, bool, bool]:
     """Every enabled tool this bot has, ready to hand to the LLM context.
 
-    Returns (tools, has_background, has_undo, has_payment). The flags decide
-    which prompt rules this bot needs — background acknowledgements (3.3),
-    partial rollback (3.4), and never asking for card details (3.7) — so a
+    Returns (tools, has_background, has_undo, has_payment, has_approval).
+    The flags decide which prompt rules this bot needs — background
+    acknowledgements (3.3), partial rollback (3.4), never asking for card
+    details (3.7), and never claiming a gated action is done (3.10) — so a
     bot without such tools does not carry an explanation of them on every
     turn.
 
@@ -436,7 +533,7 @@ async def load_tools_for_bot(
     """
     builtins = _builtin_tools()
     if not bot_id:
-        return list(builtins.values()), False, False, False
+        return list(builtins.values()), False, False, False, False
 
     try:
         records = await BotTool.find(BotTool.bot_id == bot_id, BotTool.enabled == True).to_list()  # noqa: E712
@@ -444,11 +541,11 @@ async def load_tools_for_bot(
         # A tool-loading failure must not take the call down: the caller can
         # still have a conversation, just without tools.
         logger.warning(f"[TOOLS] Could not load tools for bot {bot_id}: {e}")
-        return list(builtins.values()), False, False, False
+        return list(builtins.values()), False, False, False, False
 
     if not records:
         logger.info(f"[TOOLS] Bot {bot_id} has none configured — using the {len(builtins)} built-ins")
-        return list(builtins.values()), False, False, False
+        return list(builtins.values()), False, False, False, False
 
     loaded: list[Any] = []
     for record in records:
@@ -464,11 +561,12 @@ async def load_tools_for_bot(
     has_background = any(r.long_running and r.kind == "http" for r in records)
     has_undo = any(r.kind == "http" and r.undo and r.undo.url for r in records)
     has_payment = any(r.kind == "http" and r.payment and r.payment.enabled for r in records)
+    has_approval = any(r.kind == "http" and r.approval and r.approval.enabled for r in records)
     logger.info(
         f"[TOOLS] Bot {bot_id}: loaded {len(loaded)} configured tool(s)"
         + (" (one or more run in the background)" if has_background else "")
     )
-    return loaded, has_background, has_undo, has_payment
+    return loaded, has_background, has_undo, has_payment, has_approval
 
 
 async def test_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:

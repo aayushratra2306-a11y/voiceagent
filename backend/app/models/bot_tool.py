@@ -147,6 +147,30 @@ class PaymentLinkConfig(BaseModel):
     webhook_paid_value: str = "paid"
 
 
+class ApprovalConfig(BaseModel):
+    """Task 3.10 — a big action waits for a person instead of happening
+    on its own.
+
+    The manual is direct about why: no company will let an AI approve a
+    large refund unsupervised, and having this threshold is what makes
+    them comfortable letting it handle everything below it — which is
+    where the real call volume is anyway. Its own tip is just as direct
+    about who sets the number: "make the threshold configurable per
+    customer, not fixed by you" — a small shop and a bank want completely
+    different limits, and this is that number, per tool, set by whoever
+    configures it.
+
+    `amount_parameter` names one of this tool's OWN declared
+    ToolParameters — the argument the model will fill in from what the
+    caller says, checked against `threshold` before the underlying HTTP
+    call is ever made.
+    """
+
+    enabled: bool = False
+    amount_parameter: str = "amount"
+    threshold: float = 0.0
+
+
 class BotTool(Document):
     """One configured tool belonging to one bot."""
 
@@ -204,6 +228,9 @@ class BotTool(Document):
 
     # --- task 3.7, the payment link tool -------------------------------
     payment: PaymentLinkConfig = Field(default_factory=PaymentLinkConfig)
+
+    # --- task 3.10, human approval for big actions ---------------------
+    approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
 
     class Settings:
         name = "bot_tools"

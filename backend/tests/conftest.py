@@ -41,6 +41,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 async def _test_db():
     from app.db.mongo import database, init_db
     from app.models.appointment import Appointment
+    from app.models.approval import PendingApproval
     from app.models.bot import Bot
     from app.models.bot_tool import BotTool
     from app.models.conversation import ConversationTurn
@@ -53,7 +54,7 @@ async def _test_db():
 
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
-                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem])
+                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
     yield
     await database.client.drop_database(database.name)
 

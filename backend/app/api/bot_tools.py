@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from app.core.deps import get_owned_bot
 from app.models.bot import Bot
-from app.models.bot_tool import BotTool, PaymentLinkConfig, ToolAuth, ToolParameter
+from app.models.bot_tool import ApprovalConfig, BotTool, PaymentLinkConfig, ToolAuth, ToolParameter
 from app.services.tool_registry import test_tool
 
 router = APIRouter(prefix="/bots/{bot_id}/tools", tags=["tools"])
@@ -80,6 +80,10 @@ class ToolIn(BaseModel):
     # Task 3.7. Same write-only handling as auth.secret above: the webhook
     # secret goes out in `webhook_secret` and never comes back.
     payment: "PaymentIn" = Field(default_factory=lambda: PaymentIn())
+    # Task 3.10 — no secret involved, so unlike auth/payment this passes
+    # straight through with everything else rather than needing its own
+    # write-only handling.
+    approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
 
 
 def _out(tool: BotTool) -> dict:
@@ -112,6 +116,11 @@ def _out(tool: BotTool) -> dict:
             # Never the secret itself — only whether one is configured, which
             # is what the form needs to show "leave blank to keep".
             "has_webhook_secret": bool(tool.payment.webhook_secret_encrypted),
+        },
+        "approval": {
+            "enabled": tool.approval.enabled,
+            "amount_parameter": tool.approval.amount_parameter,
+            "threshold": tool.approval.threshold,
         },
         "auth": {
             "kind": tool.auth.kind,
@@ -151,7 +160,7 @@ async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
     if await BotTool.find_one(BotTool.bot_id == str(bot.id), BotTool.name == body.name):
         raise HTTPException(status_code=409, detail=f"This bot already has a tool called {body.name}")
 
-    data = body.model_dump(exclude={"auth", "payment"})
+    data = body.model_dump(exclude={"auth", "payment", "approval"})
     tool = BotTool(
         bot_id=str(bot.id),
         auth=ToolAuth(
@@ -163,6 +172,11 @@ async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
             **body.payment.model_dump(exclude={"webhook_secret"}),
             webhook_secret_encrypted=encrypt_secret(body.payment.webhook_secret or ""),
         ),
+        # No secret involved (unlike auth/payment above), but still built
+        # as a real ApprovalConfig here rather than left to a later plain
+        # setattr of a dict, which is exactly the mistake payment's own
+        # separate handling exists to avoid.
+        approval=ApprovalConfig(**body.approval.model_dump()),
         **data,
     )
     await tool.insert()
@@ -173,11 +187,14 @@ async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
 async def update_tool(body: ToolIn, tool_id: str, bot: Bot = Depends(get_owned_bot)):
     tool = await _owned_tool(str(bot.id), tool_id)
 
-    for field, value in body.model_dump(exclude={"auth", "payment"}).items():
+    for field, value in body.model_dump(exclude={"auth", "payment", "approval"}).items():
         setattr(tool, field, value)
 
     for field, value in body.payment.model_dump(exclude={"webhook_secret"}).items():
         setattr(tool.payment, field, value)
+
+    for field, value in body.approval.model_dump().items():
+        setattr(tool.approval, field, value)
     # Same rule as the API key: None keeps the stored secret so the rest of
     # the form can be edited without re-typing it; "" clears it.
     if body.payment.webhook_secret is not None:

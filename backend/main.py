@@ -10,13 +10,14 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api import auth, bot_tools, bots, connect, documents, payments, webhooks
+from app.api import approvals, auth, bot_tools, bots, connect, documents, payments, webhooks
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.mongo import init_db
 from app.db.seed import seed_fake_orders
 from app.models.appointment import Appointment
+from app.models.approval import PendingApproval
 from app.models.bot import Bot
 from app.models.bot_tool import BotTool
 from app.models.conversation import ConversationTurn
@@ -42,7 +43,7 @@ sentry_sdk.init(
 async def lifespan(app: FastAPI):
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
-                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem])
+                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
     await seed_fake_orders()
     # Task 2.4 — reaps finished/crashed per-call worker processes so the
     # registry and the OS process table don't grow unbounded.
@@ -88,6 +89,7 @@ app.include_router(documents.router)
 app.include_router(bot_tools.router)
 app.include_router(payments.router)
 app.include_router(webhooks.router)
+app.include_router(approvals.router)
 
 
 @app.get("/health")

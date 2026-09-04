@@ -52,7 +52,7 @@ from app.pipeline.rag_processor import RAGContextProcessor
 from app.pipeline.saga import SAGA_RULE, TurnSaga
 from app.pipeline.tool_telemetry import PARTIAL_FAILURE_RULE, ToolCallTimer
 from app.services.rag import query_context
-from app.services.tool_registry import PAYMENT_SAFETY_RULE, load_tools_for_bot
+from app.services.tool_registry import APPROVAL_RULE, PAYMENT_SAFETY_RULE, load_tools_for_bot
 
 
 class AudioDebugger(FrameProcessor):
@@ -540,7 +540,9 @@ async def run_voice_pipeline(
     # Task 3.3 — created before the tools, because a long-running tool's
     # handler closes over it. The pipeline task does not exist yet; it is
     # attached below, once it does.
-    tools, has_background, has_undo, has_payment = await load_tools_for_bot(bot_id, jobs, saga)
+    tools, has_background, has_undo, has_payment, has_approval = await load_tools_for_bot(
+        bot_id, jobs, saga
+    )
     if has_undo:
         voice_system_prompt += SAGA_RULE
     if has_background:
@@ -554,6 +556,11 @@ async def run_voice_pipeline(
         # voice, always send a link — the compliance burden of handling
         # card data directly is enormous and completely avoidable.
         voice_system_prompt += PAYMENT_SAFETY_RULE
+    if has_approval:
+        # Task 3.10 — no company will let an AI approve a large refund
+        # unsupervised; this is what tells the model the difference between
+        # a normal tool result and one still waiting on a person.
+        voice_system_prompt += APPROVAL_RULE
     context = LLMContext(
         messages=[{"role": "system", "content": voice_system_prompt}],
         tools=tools,

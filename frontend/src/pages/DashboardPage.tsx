@@ -45,6 +45,12 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-1">
           <button
+            onClick={() => navigate('/approvals')}
+            className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
+          >
+            Approvals
+          </button>
+          <button
             onClick={() => navigate('/webhooks')}
             className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
           >

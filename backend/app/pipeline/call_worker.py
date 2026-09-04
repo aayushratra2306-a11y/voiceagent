@@ -192,6 +192,7 @@ async def _prepare_worker():
     # mechanism, not the WebRTC-specific path live" caveat was flagging.
     from app.db.mongo import init_db
     from app.models.appointment import Appointment
+    from app.models.approval import PendingApproval
     from app.models.bot_tool import BotTool
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
@@ -210,7 +211,7 @@ async def _prepare_worker():
     # call exists to fix.
     await init_db([
         Order, Appointment, ConversationTurn, Document, BotTool, PaymentSession,
-        WebhookSubscription, WebhookDelivery, WebhookOutboxItem,
+        WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
     ])
     return run_voice_pipeline
 

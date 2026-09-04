@@ -171,7 +171,16 @@ export interface BotTool {
    *  the call that asked for it. The webhook secret is write-only, like the
    *  API key. */
   payment: PaymentConfig
+  /** Task 3.10 — above this value on the named parameter, the underlying
+   *  action waits for a person instead of running automatically. */
+  approval: ApprovalGateConfig
   auth: { kind: string; name: string; secret_masked: string; has_secret: boolean }
+}
+
+export interface ApprovalGateConfig {
+  enabled: boolean
+  amount_parameter: string
+  threshold: number
 }
 
 export interface PaymentConfig {
@@ -400,4 +409,33 @@ export async function listWebhookDeliveries(id: string): Promise<WebhookDelivery
  *  on it. */
 export async function testWebhookSubscription(id: string): Promise<Record<string, unknown>> {
   return request(`/webhooks/${id}/test`, { method: 'POST' })
+}
+
+// ── Approvals (Task 3.10) ───────────────────────────────────────────────────
+// A tool can declare a value above which it needs a person's sign-off before
+// the underlying action happens at all — never automatically, and never from
+// the call itself. This is that person's own queue.
+export interface PendingApproval {
+  id: string
+  tool_name: string
+  bot_id: string
+  arguments: Record<string, unknown>
+  amount: number
+  threshold: number
+  status: 'pending' | 'approved' | 'denied'
+  created_at: string
+  decided_at: string | null
+  decided_by: string
+}
+
+export async function listApprovals(status?: string): Promise<PendingApproval[]> {
+  return request(`/approvals/${status ? `?status=${status}` : ''}`)
+}
+
+export async function approveAction(id: string): Promise<PendingApproval> {
+  return request(`/approvals/${id}/approve`, { method: 'POST' })
+}
+
+export async function denyAction(id: string): Promise<PendingApproval> {
+  return request(`/approvals/${id}/deny`, { method: 'POST' })
 }

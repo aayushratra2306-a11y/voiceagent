@@ -36,6 +36,7 @@ const BLANK: BotToolInput = {
     webhook_status_field: 'payload.payment_link.entity.status',
     webhook_paid_value: 'paid', webhook_secret: '',
   },
+  approval: { enabled: false, amount_parameter: 'amount', threshold: 0 },
 }
 
 /** Key/value maps are edited as rows so a customer never types JSON. */
@@ -104,6 +105,7 @@ export default function BotToolsPage() {
       // webhook_secret deliberately absent — same rule as the API key: the
       // server never returns it, and omitting it means "keep the stored one".
       payment: { ...t.payment, webhook_secret: undefined },
+      approval: t.approval,
     })
     setHeaderRows(toPairs(t.headers)); setQueryRows(toPairs(t.query))
     setFieldMapRows(toPairs(t.field_map))
@@ -433,6 +435,42 @@ export default function BotToolsPage() {
                     Without a matching secret every callback is rejected — that is what stops
                     anyone else claiming a payment succeeded. Point your provider's webhook at{' '}
                     <code className="font-mono text-slate-400">/payments/webhook/{editingId !== 'new' ? editingId : '<save first>'}</code>
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Task 3.10 — human approval for big actions */}
+            <div className="border border-white/8 rounded-xl p-4">
+              <label className="flex items-center gap-2.5 text-sm text-slate-300">
+                <input type="checkbox" checked={form.approval.enabled}
+                  onChange={e => set('approval', { ...form.approval, enabled: e.target.checked })}
+                  className="accent-violet-500" />
+                Require a person's approval above a value
+              </label>
+              <p className="text-xs text-slate-500 mt-1 ml-6">
+                Above the threshold, this tool sends the request for a person to approve instead
+                of running it — nothing happens until someone says yes on the Approvals page.
+              </p>
+
+              {form.approval.enabled && (
+                <div className="mt-4 space-y-3 ml-6">
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs text-slate-500 w-32 shrink-0">Amount is in input</span>
+                    <input value={form.approval.amount_parameter}
+                      onChange={e => set('approval', { ...form.approval, amount_parameter: e.target.value })}
+                      placeholder="amount" className={`${smallField} font-mono`} />
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs text-slate-500 w-32 shrink-0">Approve automatically up to</span>
+                    <input type="number" min={0} step="any" value={form.approval.threshold}
+                      onChange={e => set('approval', { ...form.approval, threshold: Number(e.target.value) || 0 })}
+                      className={`${smallField} font-mono max-w-[140px]`} />
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Set this to whatever a small shop or a bank would want differently — there's
+                    no right number, only the one that matches your own comfort with letting the
+                    bot act on its own.
                   </p>
                 </div>
               )}

@@ -53,6 +53,12 @@ class TurnSaga:
         self._steps: list[SagaStep] = []
         self._failed: list[str] = []
         self._irreversible: list[str] = []
+        # Task 3.10 — kept separate from _irreversible on purpose: those two
+        # need different sentences. "Succeeded and cannot be undone, so it
+        # stands" is true of an irreversible success; it is actively FALSE
+        # of something still waiting on a person, which has not happened at
+        # all yet.
+        self._pending_approval: list[str] = []
         self._expected = 0
         self._seen = 0
         # Called with the sentence the caller should hear. Supplied by the
@@ -73,6 +79,7 @@ class TurnSaga:
         self._steps.clear()
         self._failed.clear()
         self._irreversible.clear()
+        self._pending_approval.clear()
         self._expected = expected
         self._seen = 0
 
@@ -92,6 +99,14 @@ class TurnSaga:
         """
         if not result.get("ok", True):
             self._failed.append(name)
+        elif result.get("pending_approval"):
+            # Task 3.10 — the underlying action has NOT run yet, no matter
+            # what this tool's own undo configuration says. A tool that
+            # happens to declare both approval and undo has nothing to
+            # roll back — it never ran — but it is also not "an
+            # irreversible success", so it gets its own bucket rather than
+            # borrowing a sentence that would misdescribe it either way.
+            self._pending_approval.append(name)
         elif tool is not None and getattr(tool, "undo", None) and tool.undo.url:
             self._steps.append(SagaStep(name, tool, arguments, result))
         else:
@@ -108,7 +123,7 @@ class TurnSaga:
         self._expected = 0          # never act on the same batch twice
         if not self.has_failure:
             return
-        if not self._steps and not self._irreversible:
+        if not self._steps and not self._irreversible and not self._pending_approval:
             # Everything failed. There is nothing to undo, and the failed
             # results already tell the model what to say.
             return
@@ -158,6 +173,7 @@ class TurnSaga:
             "undone": undone,
             "could_not_undo": failed_undo,
             "left_standing": list(self._irreversible),
+            "pending_approval": list(self._pending_approval),
             "failed": list(self._failed),
         }
 
@@ -178,6 +194,12 @@ class TurnSaga:
                 f"These succeeded and could not be undone automatically: "
                 f"{', '.join(summary['could_not_undo'])}. Tell the caller a person "
                 f"will follow up about them — do not promise they are cancelled."
+            )
+        if summary.get("pending_approval"):
+            parts.append(
+                f"These have NOT happened yet and are waiting on a person to approve: "
+                f"{', '.join(summary['pending_approval'])}. Do not describe them as done "
+                f"or as failed — the caller will hear back separately once decided."
             )
         return (
             "Part of what the caller asked for did not complete. "

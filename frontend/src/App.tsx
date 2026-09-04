@@ -6,6 +6,7 @@ import BotSettingsPage from './pages/BotSettingsPage'
 import BotToolsPage from './pages/BotToolsPage'
 import SessionPage from './pages/SessionPage'
 import WebhooksPage from './pages/WebhooksPage'
+import ApprovalsPage from './pages/ApprovalsPage'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, ready } = useAuth()
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/bots/:id/tools" element={<PrivateRoute><BotToolsPage /></PrivateRoute>} />
           <Route path="/session/:id" element={<PrivateRoute><SessionPage /></PrivateRoute>} />
           <Route path="/webhooks" element={<PrivateRoute><WebhooksPage /></PrivateRoute>} />
+          <Route path="/approvals" element={<PrivateRoute><ApprovalsPage /></PrivateRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

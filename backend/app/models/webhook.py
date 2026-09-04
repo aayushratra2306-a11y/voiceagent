@@ -35,6 +35,12 @@ EVENT_TYPES = frozenset({
     "appointment.cancelled",
     "appointment.rescheduled",
     "call.ended",
+    # Task 3.10 — the caller has usually long hung up by the time a person
+    # actually decides on a big action, so a webhook (not a live-call
+    # announcement) is the realistic way a customer's own system finds out
+    # and follows up — a callback, an SMS, whatever they already use.
+    "approval.granted",
+    "approval.denied",
 })
 
 

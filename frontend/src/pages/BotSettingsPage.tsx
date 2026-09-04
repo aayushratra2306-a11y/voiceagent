@@ -193,6 +193,7 @@ export default function BotSettingsPage() {
               webhook_status_field: 'payload.payment_link.entity.status',
               webhook_paid_value: 'paid',
             },
+            approval: { enabled: false, amount_parameter: 'amount', threshold: 0 },
           })))
         }
       } else {
