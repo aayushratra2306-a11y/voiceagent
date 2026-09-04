@@ -39,6 +39,7 @@ class ToolIn(BaseModel):
     name: str
     description: str
     enabled: bool = True
+    long_running: bool = False
     kind: str = "http"
     builtin: str = ""
     method: str = "GET"
@@ -57,6 +58,7 @@ def _out(tool: BotTool) -> dict:
         "name": tool.name,
         "description": tool.description,
         "enabled": tool.enabled,
+        "long_running": tool.long_running,
         "kind": tool.kind,
         "builtin": tool.builtin,
         "method": tool.method,

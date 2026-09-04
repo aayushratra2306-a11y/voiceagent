@@ -37,6 +37,7 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core.tracing import setup_call_tracing
 from app.models.conversation import ConversationTurn
+from app.pipeline.background_jobs import BACKGROUND_TOOL_RULE, BackgroundJobs
 from app.pipeline.language import (
     didnt_catch_for,
     greeting_for,
@@ -491,7 +492,17 @@ async def run_voice_pipeline(
     # Loaded per call rather than cached: a customer editing a tool expects
     # their next call to use it, and this costs one indexed query against a
     # handful of rows while the greeting is still playing.
-    tools = await load_tools_for_bot(bot_id)
+    # Task 3.3 — created before the tools, because a long-running tool's
+    # handler closes over it. The pipeline task does not exist yet; it is
+    # attached below, once it does.
+    jobs = BackgroundJobs()
+    tools, has_background = await load_tools_for_bot(bot_id, jobs)
+    if has_background:
+        # Only when this bot actually has such a tool. Added to
+        # voice_system_prompt itself rather than to the context alone,
+        # because RAGContextProcessor rebuilds messages[0] from that string
+        # on every turn and would otherwise drop it after the first.
+        voice_system_prompt += BACKGROUND_TOOL_RULE
     context = LLMContext(
         messages=[{"role": "system", "content": voice_system_prompt}],
         tools=tools,
@@ -662,9 +673,17 @@ async def run_voice_pipeline(
         logger.info("[PIPELINE] Client connected — sending greeting")
         await task.queue_frame(TTSSpeakFrame(greeting_for(language, speaking_gender)))
 
+    # Task 3.3 — a finished background job speaks into this task.
+    jobs.attach(task)
+
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("[PIPELINE] Client disconnected")
+        # Deliberately before task.cancel(): jobs still running are not
+        # cancelled (cancelling a request that may already have booked
+        # something is how state becomes unknowable) — they finish and log
+        # themselves, which is the only record that they happened.
+        jobs.shutdown()
         await task.cancel()
 
     # Fires when a user turn stays open ~5s with no completed transcript —

@@ -161,15 +161,34 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "status": response.status_code, "data": payload}
 
 
-def _http_handler(tool: BotTool):
+def _http_handler(tool: BotTool, jobs=None):
     """Build the function pipecat will call for this tool record.
 
     A closure over the record, so every configured tool gets its own
     handler without any of them existing as code.
+
+    Task 3.3: a tool marked long-running does not block the turn. It hands
+    the work to `jobs` and returns an acknowledgement straight away, so the
+    caller hears "I'm looking that up" instead of ten seconds of silence.
+    The real answer is spoken when it arrives.
     """
 
     async def handler(params) -> None:
         args = dict(params.arguments or {})
+
+        if tool.long_running and jobs is not None:
+            jobs.start(tool.name, call_http_tool(tool, args), args)
+            await params.result_callback({
+                "ok": True,
+                "started": True,
+                "message": (
+                    "This is running now and will take a few moments. Tell the caller "
+                    "you are working on it and carry on — do not wait, and do not say "
+                    "it is done."
+                ),
+            })
+            return
+
         result = await call_http_tool(tool, args)
         await params.result_callback(result)
 
@@ -187,7 +206,7 @@ def _builtin_tools() -> dict[str, Any]:
     return {fn.__name__: fn for fn in TOOLS}
 
 
-def to_function_schema(tool: BotTool) -> FunctionSchema:
+def to_function_schema(tool: BotTool, jobs=None) -> FunctionSchema:
     """One HTTP tool record as something the model can be offered."""
     properties, required = tool.json_schema()
     return FunctionSchema(
@@ -195,12 +214,16 @@ def to_function_schema(tool: BotTool) -> FunctionSchema:
         description=tool.description,
         properties=properties,
         required=required,
-        handler=_http_handler(tool),
+        handler=_http_handler(tool, jobs),
     )
 
 
-async def load_tools_for_bot(bot_id: str | None) -> list[Any]:
+async def load_tools_for_bot(bot_id: str | None, jobs=None) -> tuple[list[Any], bool]:
     """Every enabled tool this bot has, ready to hand to the LLM context.
+
+    Returns (tools, has_background) — the flag says whether any of them
+    runs in the background, which decides whether the system prompt needs
+    the rule explaining that behaviour (task 3.3).
 
     Falls back to the built-in set when a bot has configured nothing, so
     every bot that existed before this task keeps the tools it had. A bot
@@ -210,7 +233,7 @@ async def load_tools_for_bot(bot_id: str | None) -> list[Any]:
     """
     builtins = _builtin_tools()
     if not bot_id:
-        return list(builtins.values())
+        return list(builtins.values()), False
 
     try:
         records = await BotTool.find(BotTool.bot_id == bot_id, BotTool.enabled == True).to_list()  # noqa: E712
@@ -218,11 +241,11 @@ async def load_tools_for_bot(bot_id: str | None) -> list[Any]:
         # A tool-loading failure must not take the call down: the caller can
         # still have a conversation, just without tools.
         logger.warning(f"[TOOLS] Could not load tools for bot {bot_id}: {e}")
-        return list(builtins.values())
+        return list(builtins.values()), False
 
     if not records:
         logger.info(f"[TOOLS] Bot {bot_id} has none configured — using the {len(builtins)} built-ins")
-        return list(builtins.values())
+        return list(builtins.values()), False
 
     loaded: list[Any] = []
     for record in records:
@@ -233,10 +256,14 @@ async def load_tools_for_bot(bot_id: str | None) -> list[Any]:
                 continue
             loaded.append(fn)
         else:
-            loaded.append(to_function_schema(record))
+            loaded.append(to_function_schema(record, jobs))
 
-    logger.info(f"[TOOLS] Bot {bot_id}: loaded {len(loaded)} configured tool(s)")
-    return loaded
+    has_background = any(r.long_running and r.kind == "http" for r in records)
+    logger.info(
+        f"[TOOLS] Bot {bot_id}: loaded {len(loaded)} configured tool(s)"
+        + (" (one or more run in the background)" if has_background else "")
+    )
+    return loaded, has_background
 
 
 async def test_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:

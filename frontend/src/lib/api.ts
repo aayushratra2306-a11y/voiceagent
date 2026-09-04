@@ -134,6 +134,9 @@ export interface BotTool {
   name: string
   description: string
   enabled: boolean
+  /** Task 3.3 — returns an acknowledgement at once and speaks the real
+   *  result when it arrives, instead of leaving the caller in silence. */
+  long_running: boolean
   kind: 'http' | 'builtin'
   builtin: string
   method: string

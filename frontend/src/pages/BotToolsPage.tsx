@@ -25,7 +25,7 @@ const AUTH_KINDS = [
 ]
 
 const BLANK: BotToolInput = {
-  name: '', description: '', enabled: true, kind: 'http', builtin: '',
+  name: '', description: '', enabled: true, long_running: false, kind: 'http', builtin: '',
   method: 'GET', url: '', headers: {}, query: {}, body: {},
   parameters: [], auth: { kind: 'none', name: '', secret: '' },
 }
@@ -84,7 +84,8 @@ export default function BotToolsPage() {
     // The secret is deliberately absent: the API never returns it, and
     // leaving it out of the payload tells the server to keep the stored one.
     setForm({
-      name: t.name, description: t.description, enabled: t.enabled, kind: t.kind,
+      name: t.name, description: t.description, enabled: t.enabled,
+      long_running: t.long_running, kind: t.kind,
       builtin: t.builtin, method: t.method, url: t.url, headers: t.headers,
       query: t.query, body: t.body, parameters: t.parameters,
       auth: { kind: t.auth.kind, name: t.auth.name },
@@ -323,11 +324,27 @@ export default function BotToolsPage() {
               )}
             </div>
 
-            <label className="flex items-center gap-2.5 text-sm text-slate-300">
-              <input type="checkbox" checked={form.enabled}
-                onChange={e => set('enabled', e.target.checked)} className="accent-violet-500" />
-              Available to the bot
-            </label>
+            <div className="space-y-3">
+              <label className="flex items-center gap-2.5 text-sm text-slate-300">
+                <input type="checkbox" checked={form.enabled}
+                  onChange={e => set('enabled', e.target.checked)} className="accent-violet-500" />
+                Available to the bot
+              </label>
+
+              {/* Task 3.3 */}
+              <div>
+                <label className="flex items-center gap-2.5 text-sm text-slate-300">
+                  <input type="checkbox" checked={form.long_running}
+                    onChange={e => set('long_running', e.target.checked)} className="accent-violet-500" />
+                  This one is slow
+                </label>
+                <p className="text-xs text-slate-500 mt-1 ml-6">
+                  The bot will say it is working on it and keep talking, then tell the caller
+                  the answer when it arrives — instead of leaving them in silence.
+                  Turn this on if the system usually takes more than a few seconds.
+                </p>
+              </div>
+            </div>
 
             {/* Test */}
             {editingId !== 'new' && (

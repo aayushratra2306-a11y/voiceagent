@@ -88,6 +88,12 @@ class BotTool(Document):
     description: str
     enabled: bool = True
 
+    # Task 3.3 — a tool the caller should not wait in silence for. It starts
+    # in the background, returns an acknowledgement immediately, and its real
+    # result is spoken when it arrives. Off by default: most APIs answer fast
+    # enough, and the acknowledgement costs an extra conversational turn.
+    long_running: bool = False
+
     kind: Literal["builtin", "http"] = "http"
 
     # kind="builtin"
