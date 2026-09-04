@@ -35,21 +35,66 @@ else falls back to English, which is a worse greeting but never a broken
 one.
 """
 
+# Caught by the user on a live call 2026-09-04: the Hindi bot speaks with
+# Sneha, a female voice, and said "मैं आपकी क्या मदद कर सकता हूँ?" — the
+# MASCULINE form. In Hindi the verb agrees with the speaker's own gender, so
+# a female voice has to say "कर सकती हूँ". Saying it the other way is not a
+# stylistic nitpick; it is audibly wrong to any Hindi speaker.
+#
+# The same agreement exists in French ("je suis prêt" / "prête", "désolé" /
+# "désolée") and Spanish ("estoy listo" / "lista"), and our default voices
+# there — Audrey and Marta — are female too, so both were wrong in exactly
+# the same way. German and English don't inflect these, hence _same().
+#
+# _same() rather than repeating a string twice: it states outright that the
+# language has no distinction here, and makes the two halves impossible to
+# edit out of sync later.
+def _same(text: str) -> dict[str, str]:
+    """For languages where the phrasing doesn't change with speaker gender."""
+    return {"female": text, "male": text}
+
+
 GREETINGS = {
-    "en": "Hello! I'm ready. How can I help you?",
-    "hi": "नमस्ते! मैं तैयार हूँ। मैं आपकी क्या मदद कर सकता हूँ?",
-    "es": "¡Hola! Estoy listo. ¿En qué puedo ayudarte?",
-    "fr": "Bonjour ! Je suis prêt. Comment puis-je vous aider ?",
-    "de": "Hallo! Ich bin bereit. Wie kann ich Ihnen helfen?",
+    "en": _same("Hello! I'm ready. How can I help you?"),
+    "hi": {
+        "female": "नमस्ते! मैं तैयार हूँ। मैं आपकी क्या मदद कर सकती हूँ?",
+        "male": "नमस्ते! मैं तैयार हूँ। मैं आपकी क्या मदद कर सकता हूँ?",
+    },
+    "es": {
+        "female": "¡Hola! Estoy lista. ¿En qué puedo ayudarte?",
+        "male": "¡Hola! Estoy listo. ¿En qué puedo ayudarte?",
+    },
+    "fr": {
+        "female": "Bonjour ! Je suis prête. Comment puis-je vous aider ?",
+        "male": "Bonjour ! Je suis prêt. Comment puis-je vous aider ?",
+    },
+    "de": _same("Hallo! Ich bin bereit. Wie kann ich Ihnen helfen?"),
 }
 
 DIDNT_CATCH = {
-    "en": "Sorry, I didn't catch that — could you say it again?",
-    "hi": "माफ़ कीजिए, मैं समझ नहीं पाया — क्या आप दोबारा कह सकते हैं?",
-    "es": "Perdona, no te he entendido. ¿Puedes repetirlo?",
-    "fr": "Désolé, je n'ai pas compris. Pouvez-vous répéter ?",
-    "de": "Entschuldigung, das habe ich nicht verstanden. Können Sie das wiederholen?",
+    "en": _same("Sorry, I didn't catch that — could you say it again?"),
+    # "पाया"/"पाई" is the bot describing itself, so it follows the voice.
+    # "कह सकते हैं" is about the CALLER and stays as it is — आप takes the
+    # plural-formal form regardless of who is being addressed.
+    "hi": {
+        "female": "माफ़ कीजिए, मैं समझ नहीं पाई — क्या आप दोबारा कह सकते हैं?",
+        "male": "माफ़ कीजिए, मैं समझ नहीं पाया — क्या आप दोबारा कह सकते हैं?",
+    },
+    # Spanish compound past ("he entendido") does NOT agree with the subject,
+    # so unlike the greeting there is genuinely nothing to vary here.
+    "es": _same("Perdona, no te he entendido. ¿Puedes repetirlo?"),
+    "fr": {
+        "female": "Désolée, je n'ai pas compris. Pouvez-vous répéter ?",
+        "male": "Désolé, je n'ai pas compris. Pouvez-vous répéter ?",
+    },
+    "de": _same("Entschuldigung, das habe ich nicht verstanden. Können Sie das wiederholen?"),
 }
+
+# Languages where the bot referring to ITSELF changes with its gender. The
+# model writes far more speech than the two fixed strings above, so it needs
+# telling as well — the same live call had it saying "मैं आपकी आवाज़ सुन रहा
+# हूँ" (masculine) through a female voice.
+GENDERED_SELF_REFERENCE = frozenset({"hi", "fr", "es"})
 
 # Endonyms deliberately — the instruction reads more naturally to the model
 # in the language it is being asked to speak, and it keeps the prompt
@@ -144,17 +189,38 @@ def resolve_voice(voice_id: str | None, language: str | None) -> str:
     return default_voice_for(language)
 
 
-def greeting_for(language: str | None) -> str:
-    """The line the bot opens the call with."""
-    return GREETINGS.get(_base(language), GREETINGS["en"])
+def voice_gender(voice_id: str | None, language: str | None = None) -> str:
+    """"female" or "male" for a known voice, else the language default's.
+
+    Falls back rather than returning None because every caller here has to
+    pick one form or the other — there is no ungendered way to say "I can
+    help you" in Hindi, so a None would only push the same guess upward.
+    """
+    for voice in VOICES.get(_VOICE_LANGUAGE.get(voice_id or "", ""), []):
+        if voice["id"] == voice_id:
+            return voice["gender"]
+    return VOICES.get(_base(language), VOICES["en"])[0]["gender"]
 
 
-def didnt_catch_for(language: str | None) -> str:
+def greeting_for(language: str | None, gender: str | None = None) -> str:
+    """The line the bot opens the call with, in the voice's own gender."""
+    forms = GREETINGS.get(_base(language), GREETINGS["en"])
+    return forms.get(gender or _default_gender(language), forms["female"])
+
+
+def didnt_catch_for(language: str | None, gender: str | None = None) -> str:
     """The fallback spoken when a turn produced no usable transcript."""
-    return DIDNT_CATCH.get(_base(language), DIDNT_CATCH["en"])
+    forms = DIDNT_CATCH.get(_base(language), DIDNT_CATCH["en"])
+    return forms.get(gender or _default_gender(language), forms["female"])
 
 
-def system_language_note(language: str | None) -> str:
+def _default_gender(language: str | None) -> str:
+    """Whatever this language's default voice sounds like — so the wording
+    matches the voice a bot actually gets when nobody chose one."""
+    return VOICES.get(_base(language), VOICES["en"])[0]["gender"]
+
+
+def system_language_note(language: str | None, gender: str | None = None) -> str:
     """The instruction that makes the model actually reply in the bot's
     language. Empty for English: English is already what an unprompted model
     defaults to, so the sentence would be pure prompt noise, and every token
@@ -166,6 +232,12 @@ def system_language_note(language: str | None) -> str:
     word in it — and a naive "always reply in Hindi" instruction leaves the
     model to guess what to do when its own input is half English. The caller
     borrowing an English word is not a request to switch languages.
+
+    The gender clause matters more than it looks. The greeting and fallback
+    are two fixed sentences; the model writes everything else, and on the
+    live call it said "मैं आपकी आवाज़ सुन रहा हूँ" — masculine — through a
+    female voice. Fixing only the fixed strings would leave the bot correct
+    for one line and wrong for the rest of the conversation.
     """
     base = _base(language)
     if base == "en":
@@ -173,9 +245,17 @@ def system_language_note(language: str | None) -> str:
     name = LANGUAGE_NAMES.get(base)
     if name is None:
         return ""
-    return (
+    note = (
         f"\n\nSpeak {name} — the caller has chosen it for this conversation. "
         f"Reply in {name} even when the caller mixes in English words, which "
         f"is normal in ordinary speech and is not a request to change "
         f"language. Only switch if they clearly ask you to."
     )
+    if base in GENDERED_SELF_REFERENCE:
+        speaking_as = gender or _default_gender(language)
+        grammatical = "feminine" if speaking_as == "female" else "masculine"
+        note += (
+            f" The voice the caller hears is {speaking_as}, so use {grammatical} "
+            f"grammatical forms whenever you refer to yourself."
+        )
+    return note

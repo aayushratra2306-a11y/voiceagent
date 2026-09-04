@@ -37,8 +37,8 @@ UI_LANGUAGES = ["en", "hi", "es", "fr", "de"]
 def test_every_language_the_ui_offers_has_its_own_spoken_text(code):
     """A language selectable in the UI but missing here silently falls back
     to English — the exact bug being fixed, reintroduced for a new language."""
-    assert greeting_for(code) == GREETINGS[code]
-    assert greeting_for(code) != GREETINGS["en"] or code == "en"
+    assert greeting_for(code) in GREETINGS[code].values()
+    assert greeting_for(code) != GREETINGS["en"]["female"] or code == "en"
     assert didnt_catch_for(code)
 
 
@@ -81,14 +81,14 @@ def test_regional_and_uppercase_codes_normalise(value):
     """Matches providers._base_lang, so STT/TTS/prompt can never disagree
     about what language a call is in."""
     base = value.split("-")[0].lower()
-    assert greeting_for(value) == GREETINGS[base]
+    assert greeting_for(value) == greeting_for(base)
     assert system_language_note(value) == system_language_note(base)
 
 
 @pytest.mark.parametrize("value", [None, "", "zz", "klingon"])
 def test_unknown_language_degrades_to_english_rather_than_breaking(value):
     """A worse greeting beats a crash or an empty one on a live call."""
-    assert greeting_for(value) == GREETINGS["en"]
+    assert greeting_for(value) == GREETINGS["en"]["female"]
     assert didnt_catch_for(value)
     assert system_language_note(value) == ""
 
@@ -101,9 +101,9 @@ def test_pipeline_uses_the_helpers_rather_than_hardcoded_english():
     from app.pipeline import voice_pipeline
 
     source = inspect.getsource(voice_pipeline.run_voice_pipeline)
-    assert "greeting_for(language)" in source, "greeting is hardcoded again"
-    assert "didnt_catch_for(language)" in source, "fallback is hardcoded again"
-    assert "system_language_note(language)" in source, (
+    assert "greeting_for(language" in source, "greeting is hardcoded again"
+    assert "didnt_catch_for(language" in source, "fallback is hardcoded again"
+    assert "system_language_note(language" in source, (
         "the model is no longer told what language to reply in"
     )
     assert "Hello! I'm ready" not in source, "hardcoded English greeting is back"
@@ -221,3 +221,106 @@ def test_regional_language_codes_reach_cartesia_normalised():
     from app.pipeline.providers import get_tts_service
 
     assert get_tts_service(voice_id=HINDI_SNEHA, language="hi-IN")._settings.language == "hi"
+
+
+# --- Speaker gender agreement (found by the user on a live call 2026-09-04) --
+#
+# The Hindi bot speaks with Sneha, a female voice, and said "मैं आपकी क्या मदद
+# कर सकता हूँ?" — the MASCULINE form. Hindi verbs agree with the speaker's own
+# gender, so a female voice must say "कर सकती हूँ". Not a nitpick: it is
+# audibly wrong to any Hindi speaker. French and Spanish inflect the same way
+# and their defaults (Audrey, Marta) are female too, so both were wrong
+# identically.
+
+from app.pipeline.language import GENDERED_SELF_REFERENCE, voice_gender  # noqa: E402
+
+
+def test_hindi_female_voice_uses_feminine_verb_forms():
+    """The exact sentence the user heard and corrected."""
+    assert "सकती" in greeting_for("hi", "female")
+    assert "सकता" not in greeting_for("hi", "female")
+
+
+def test_hindi_male_voice_still_uses_masculine_forms():
+    assert "सकता" in greeting_for("hi", "male")
+    assert "सकती" not in greeting_for("hi", "male")
+
+
+def test_hindi_fallback_agrees_with_gender_too():
+    """Easy to miss — it only fires on a failed turn."""
+    assert "पाई" in didnt_catch_for("hi", "female")
+    assert "पाया" in didnt_catch_for("hi", "male")
+
+
+@pytest.mark.parametrize(
+    "code,feminine,masculine",
+    [("fr", "prête", "prêt"), ("es", "lista", "listo")],
+)
+def test_the_same_agreement_applies_in_french_and_spanish(code, feminine, masculine):
+    """Both default voices there are female, so both had the identical bug."""
+    assert feminine in greeting_for(code, "female")
+    assert masculine in greeting_for(code, "male")
+    assert greeting_for(code, "female") != greeting_for(code, "male")
+
+
+def test_french_apology_agrees_as_well():
+    assert didnt_catch_for("fr", "female").startswith("Désolée")
+    assert didnt_catch_for("fr", "male").startswith("Désolé,")
+
+
+@pytest.mark.parametrize("code", ["en", "de"])
+def test_languages_without_this_agreement_say_the_same_thing_either_way(code):
+    """English and German don't inflect these; differing forms would mean a
+    typo crept into one half."""
+    assert greeting_for(code, "female") == greeting_for(code, "male")
+    assert didnt_catch_for(code, "female") == didnt_catch_for(code, "male")
+
+
+def test_the_model_is_told_the_voices_gender():
+    """The two fixed strings are a fraction of what the caller hears — the
+    model writes the rest, and on the live call it said "सुन रहा हूँ"
+    (masculine) through a female voice."""
+    note = system_language_note("hi", "female")
+    assert "feminine" in note
+    assert "masculine" in system_language_note("hi", "male")
+
+
+@pytest.mark.parametrize("code", sorted(GENDERED_SELF_REFERENCE))
+def test_every_gendered_language_tells_the_model(code):
+    assert "feminine" in system_language_note(code, "female")
+
+
+@pytest.mark.parametrize("code", ["en", "de"])
+def test_ungendered_languages_do_not_waste_prompt_on_it(code):
+    assert "feminine" not in system_language_note(code, "female")
+
+
+def test_gender_follows_the_actual_voice_not_a_guess():
+    assert voice_gender(HINDI_SNEHA) == "female"
+    assert voice_gender(HINDI_VIKAS) == "male"
+
+
+def test_unknown_voice_falls_back_to_the_languages_default_gender():
+    """Must not return None — there is no ungendered way to say "I can help
+    you" in Hindi, so a None would only move the same guess further up."""
+    assert voice_gender("not-a-real-voice", "hi") == "female"  # Sneha is the default
+
+
+def test_wording_matches_the_voice_end_to_end():
+    """The whole point: pick the male Hindi voice and the words change with
+    it, without anyone passing gender by hand."""
+    resolved = resolve_voice(HINDI_VIKAS, "hi")
+    assert "सकता" in greeting_for("hi", voice_gender(resolved, "hi"))
+
+
+def test_pipeline_passes_the_voices_gender_through():
+    import inspect
+
+    from app.pipeline import voice_pipeline
+
+    source = inspect.getsource(voice_pipeline.run_voice_pipeline)
+    assert "voice_gender(voice_id, language)" in source
+    for call in ("greeting_for(language, speaking_gender)",
+                 "didnt_catch_for(language, speaking_gender)",
+                 "system_language_note(language, speaking_gender)"):
+        assert call in source, f"{call} is not wired through"

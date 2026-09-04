@@ -34,7 +34,13 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core.tracing import setup_call_tracing
 from app.models.conversation import ConversationTurn
-from app.pipeline.language import didnt_catch_for, greeting_for, system_language_note
+from app.pipeline.language import (
+    didnt_catch_for,
+    greeting_for,
+    resolve_voice,
+    system_language_note,
+    voice_gender,
+)
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
 from app.pipeline.tools import TOOLS
@@ -270,6 +276,14 @@ async def run_voice_pipeline(
     # factory in app/pipeline/providers.py — settings.stt_provider etc.
     # switch cloud vs. local with no code change here. The endpointing=300
     # reasoning above still applies; it lives inside get_stt_service() now.)
+    # Resolve the voice up front rather than letting get_tts_service do it
+    # privately: what the bot SAYS has to agree with the gender of the voice
+    # it says it in, so the greeting, the fallback and the system prompt all
+    # need to know which voice actually won. resolve_voice is idempotent, so
+    # get_tts_service resolving again below is harmless.
+    voice_id = resolve_voice(voice_id, language)
+    speaking_gender = voice_gender(voice_id, language)
+
     stt = get_stt_service(language=language)
     llm = get_llm_service(llm_model=llm_model)
     tts = get_tts_service(voice_id=voice_id, language=language)
@@ -292,7 +306,7 @@ async def run_voice_pipeline(
         # English until the caller explicitly asked it to switch. Confirmed
         # live 2026-09-04. Appended after the Markdown rules, not before, so
         # it sits closest to the turn and is the last thing the model reads.
-        + system_language_note(language)
+        + system_language_note(language, speaking_gender)
     )
 
     # Task 1.3: pass the tool functions straight into `tools=` — pipecat 1.7.0
@@ -435,7 +449,7 @@ async def run_voice_pipeline(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("[PIPELINE] Client connected — sending greeting")
-        await task.queue_frame(TTSSpeakFrame(greeting_for(language)))
+        await task.queue_frame(TTSSpeakFrame(greeting_for(language, speaking_gender)))
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
@@ -453,7 +467,7 @@ async def run_voice_pipeline(
     @user_aggregator.event_handler("on_user_turn_stop_timeout")
     async def on_user_turn_stop_timeout(aggregator):
         logger.warning("[PIPELINE] User turn timed out with no transcript — prompting caller to repeat")
-        await task.queue_frame(TTSSpeakFrame(didnt_catch_for(language)))
+        await task.queue_frame(TTSSpeakFrame(didnt_catch_for(language, speaking_gender)))
 
     # Latency (2026-09-03). Task 2.4 gives every call a fresh process, so a
     # worker starts with NO open connections to anything. The first retrieval
