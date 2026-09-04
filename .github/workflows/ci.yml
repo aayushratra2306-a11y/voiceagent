@@ -23,6 +23,14 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Lets the rag-eval job below be run deliberately, since it no longer runs
+  # on every push — see the note on that job.
+  workflow_dispatch:
+  schedule:
+    # Mondays 06:00 UTC. Retrieval quality drifts from data and index changes
+    # rather than from any single commit, so a weekly check catches it while
+    # costing ~32 rerank calls a week instead of ~32 per push.
+    - cron: "0 6 * * 1"
 
 defaults:
   run:
@@ -123,10 +131,28 @@ jobs:
   # A check that cannot pass reports nothing and teaches you to ignore red.
   # test_rag_quality.py asserts against a margin (24/32) instead, which is
   # what actually catches a regression rather than normal retrieval drift.
+  # Runs on main, on demand, and weekly -- NOT on every dev push.
+  #
+  # Found 2026-09-04: Pinecone's free tier allows 500 reranks per month
+  # across the whole organisation, and this job spends 32 of them every time
+  # it runs. Five pushes in a day is 160, so the month's budget went in a few
+  # days of ordinary work and live calls started silently falling back to raw
+  # cosine similarity -- measurably worse ranking (see RERANK_MODEL's comment
+  # in services/rag.py for a case where the correct chunk missed the raw
+  # top-5 entirely), plus a 3.5s retrieval budget overrun on a real call.
+  #
+  # Retrieval quality drifts from document and index changes rather than from
+  # any one commit, so per-push was always the wrong cadence for it. It is
+  # already continue-on-error and deliberately not a required check, so
+  # nothing depends on it gating a dev push.
   rag-eval:
     runs-on: ubuntu-latest
     needs: test
     continue-on-error: true
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.ref == 'refs/heads/main'
     # Retrieval itself never touches MongoDB — only Pinecone, OpenAI and
     # Groq. The container is here because tests/conftest.py has an autouse,
     # session-scoped fixture that calls init_db(), and a conftest applies to
