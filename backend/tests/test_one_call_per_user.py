@@ -34,7 +34,7 @@ import time
 import pytest
 
 from app.api import connect as connect_module
-from app.api.connect import _ActiveCall, _active_calls, _end_previous_calls_for
+from app.api.connect import _active_calls, _ActiveCall, _end_previous_calls_for
 
 
 def _idle_process(ctx) -> mp.Process:

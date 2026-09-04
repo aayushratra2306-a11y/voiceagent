@@ -90,8 +90,31 @@ async def create_bot(body: BotCreate, current_user: User = Depends(get_current_u
 
 @router.get("/")
 async def list_bots(current_user: User = Depends(get_current_user)):
+    # Every field the bot editor needs, not just the ones the dashboard card
+    # shows. This is the only endpoint the frontend has for reading a bot —
+    # BotSettingsPage loads an existing bot by finding it in this list — so a
+    # field missing here is a field the edit form cannot see.
+    #
+    # FOUND 2026-09-04: `language` and `system_prompt` were both absent. It
+    # went unnoticed while voices were one fixed English list, because nothing
+    # on the page depended on the language. Once voices became per-language,
+    # opening a Hindi bot showed the ENGLISH voices — `bot.language` was
+    # undefined, so the UI fell back to English exactly as it would for a bot
+    # with no language set. The prompt box was quietly empty for the same
+    # reason. Saving did not corrupt either value only because update_bot
+    # drops None fields, which is luck rather than design.
     bots = await Bot.find(Bot.user_id == str(current_user.id)).to_list()
-    return [{"id": str(b.id), "name": b.name, "llm_model": b.llm_model, "voice_id": b.voice_id} for b in bots]
+    return [
+        {
+            "id": str(b.id),
+            "name": b.name,
+            "system_prompt": b.system_prompt,
+            "llm_model": b.llm_model,
+            "voice_id": b.voice_id,
+            "language": b.language,
+        }
+        for b in bots
+    ]
 
 
 @router.patch("/{bot_id}")
