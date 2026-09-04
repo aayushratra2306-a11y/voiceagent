@@ -172,7 +172,12 @@ async def outbox_summary(current_user: User = Depends(get_current_user)):
         return {"pending": 0, "failed": 0}
 
     items = await WebhookOutboxItem.find({"subscription_id": {"$in": list(subs)}}).to_list()
-    now = datetime.now(UTC)
+    # .replace(tzinfo=None): items came back from PyMongo naive (no
+    # tz_aware=True on this client, even though every value here was
+    # written as aware UTC) — comparing against an aware `now` directly
+    # raises rather than answers, since Python refuses to order a naive
+    # and an aware datetime against each other.
+    now = datetime.now(UTC).replace(tzinfo=None)
     return {
         "pending": sum(1 for i in items if i.status == "pending"),
         "overdue": sum(1 for i in items if i.status == "pending" and i.next_attempt_at <= now),

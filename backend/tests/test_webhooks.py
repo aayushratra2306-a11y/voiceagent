@@ -241,7 +241,11 @@ async def test_a_failed_delivery_is_rescheduled_with_the_first_delay(monkeypatch
     saved = await WebhookOutboxItem.get(item.id)
     assert saved.status == "pending", "a failure must stay pending to be retried"
     assert saved.attempt == 1
-    expected_earliest = before + timedelta(seconds=RETRY_DELAYS_SECONDS[0] - 1)
+    # PyMongo returns a NAIVE datetime by default (no tz_aware=True on this
+    # client, confirmed directly against bson's own codec) even though it
+    # was written as aware UTC — stripped here rather than compared
+    # against an aware value, or this raises instead of asserting.
+    expected_earliest = (before + timedelta(seconds=RETRY_DELAYS_SECONDS[0] - 1)).replace(tzinfo=None)
     assert saved.next_attempt_at >= expected_earliest, "did not wait the increasing delay before retrying"
 
 
