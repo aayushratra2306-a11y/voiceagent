@@ -46,14 +46,34 @@ def _vad_params_source() -> str:
 
 
 def test_vad_confidence_stays_sensitive_enough_to_actually_fire():
-    """At 0.85 VAD went completely silent on a real call, which disables Smart
-    Turn and hands turn boundaries to the STT endpointer."""
+    """0.85 silenced VAD entirely; 0.7 fired only partway into a call, with
+    the first utterances still missed. 0.6 is pipecat's own default."""
     source = _vad_params_source()
-    assert "confidence=0.7," in source, (
-        "VAD confidence changed. Above ~0.8 it stopped firing entirely on real "
-        "calls, and pipecat degrades silently rather than erroring"
+    assert "confidence=0.6," in source, (
+        "VAD confidence changed. At 0.85 it never fired at all and at 0.7 it "
+        "missed the opening utterances, and pipecat degrades silently rather "
+        "than erroring, so this is not self-announcing when it regresses"
     )
     assert "confidence=0.85," not in source
+
+
+def test_vad_is_the_instrumented_subclass():
+    """Three threshold changes were made without ever measuring what Silero
+    actually reported. MeasuredSileroVAD logs the real numbers so the next
+    change is arithmetic rather than a fourth guess."""
+    assert "MeasuredSileroVAD(params=" in _vad_params_source()
+
+
+def test_measured_vad_records_the_peaks_it_is_asked_about():
+    """The instrumentation must observe the same two values the gate uses, or
+    it will confidently report about something that isn't the decision."""
+    from app.pipeline.voice_pipeline import MeasuredSileroVAD
+
+    for method in ("voice_confidence", "_get_smoothed_volume"):
+        assert hasattr(MeasuredSileroVAD, method)
+        assert method in MeasuredSileroVAD.__dict__, (
+            f"{method} is no longer overridden, so its value is never recorded"
+        )
 
 
 def test_the_two_vad_frames_are_not_confused_with_turn_frames():

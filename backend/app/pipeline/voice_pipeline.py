@@ -113,6 +113,74 @@ class AudioDebugger(FrameProcessor):
         )
 
 
+class MeasuredSileroVAD(SileroVADAnalyzer):
+    """Silero VAD that reports what it actually measured.
+
+    The VAD thresholds have now been changed three times by reasoning about
+    symptoms — 0.7, then 0.85 to stop noise holding VAD open, then back to
+    0.7 when 0.85 turned out to stop VAD firing at all. Each round cost a
+    deploy and a live call to evaluate, because nothing ever logged the one
+    thing that decides the outcome: the numbers Silero is actually producing
+    for this caller's microphone.
+
+    BaseVADAnalyzer.analyze_audio gates on
+    ``confidence >= params.confidence and volume >= params.min_volume``, and
+    computes each through a method call this class can intercept, so the real
+    values cost nothing extra to observe. The periodic summary names which of
+    the two gates is failing and by how much, which turns the next threshold
+    change into arithmetic instead of another guess.
+    """
+
+    # Long enough that a call produces a readable handful of lines rather
+    # than a flood, short enough to localise a problem to a moment.
+    REPORT_EVERY_SECONDS = 5.0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._peak_confidence = 0.0
+        self._peak_volume = 0.0
+        self._last_report = 0.0
+
+    def voice_confidence(self, buffer) -> float:
+        value = super().voice_confidence(buffer)
+        self._peak_confidence = max(self._peak_confidence, value)
+        return value
+
+    def _get_smoothed_volume(self, audio) -> float:
+        # Called once per analysis window alongside voice_confidence, so this
+        # is where both peaks are known and the report can be emitted.
+        value = super()._get_smoothed_volume(audio)
+        self._peak_volume = max(self._peak_volume, value)
+        self._report_if_due()
+        return value
+
+    def _report_if_due(self):
+        now = time.monotonic()
+        if now - self._last_report < self.REPORT_EVERY_SECONDS:
+            return
+        self._last_report = now
+
+        confidence_ok = self._peak_confidence >= self._params.confidence
+        volume_ok = self._peak_volume >= self._params.min_volume
+        if confidence_ok and volume_ok:
+            verdict = "would fire"
+        elif not confidence_ok and not volume_ok:
+            verdict = "BLOCKED by both"
+        elif not confidence_ok:
+            verdict = "BLOCKED by confidence"
+        else:
+            verdict = "BLOCKED by min_volume"
+
+        logger.info(
+            f"[VAD] peak confidence={self._peak_confidence:.2f} "
+            f"(need {self._params.confidence}) | "
+            f"peak volume={self._peak_volume:.2f} "
+            f"(need {self._params.min_volume}) -> {verdict}"
+        )
+        self._peak_confidence = 0.0
+        self._peak_volume = 0.0
+
+
 # Root-caused 2026-08-30: LLMs default to Markdown-formatted text (tables,
 # headers, bold) because that's correct for a chat screen — but this is a
 # voice pipeline, and Cartesia was speaking the raw syntax out loud. User's
@@ -454,8 +522,8 @@ async def run_voice_pipeline(
             # before touching confidence again — and check the new
             # "VAD(real)" / "VAD has NEVER fired" log lines to tell the two
             # failure modes apart, which the old logging could not do.
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(
-                confidence=0.7,
+            vad_analyzer=MeasuredSileroVAD(params=VADParams(
+                confidence=0.6,
                 min_volume=0.4,
                 start_secs=0.2,
                 stop_secs=0.5,
