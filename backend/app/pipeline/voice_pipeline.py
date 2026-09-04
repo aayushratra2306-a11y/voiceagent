@@ -18,6 +18,8 @@ from pipecat.frames.frames import (
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -48,19 +50,67 @@ from app.services.rag import query_context
 
 
 class AudioDebugger(FrameProcessor):
-    """Logs every frame so we can see what types flow through the pipeline."""
+    """Logs every frame so we can see what types flow through the pipeline.
+
+    The VAD lines used to be a lie, and it cost several days of misdiagnosis.
+    UserStartedSpeakingFrame is emitted by the AGGREGATOR when a turn begins,
+    whatever started it — VAD, or merely a transcript arriving. Logging it as
+    "VAD: user started speaking" meant the logs claimed VAD was working on a
+    call where it never fired once, which sent us hunting Deepgram's
+    endpointing and Smart Turn's accuracy instead of the actual cause.
+
+    VADUserStartedSpeakingFrame / VADUserStoppedSpeakingFrame are the real
+    thing. They are logged separately now, and a turn that ends without VAD
+    having spoken at all is called out explicitly — see _warn_if_vad_silent.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._vad_ever_fired = False
+        self._warned_vad_silent = False
+
     async def process_frame(self, frame: Frame, direction):
         await super().process_frame(frame, direction)
         name = type(frame).__name__
-        if isinstance(frame, UserStartedSpeakingFrame):
-            logger.info("[AUDIO] VAD: user started speaking")
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._vad_ever_fired = True
+            logger.info("[AUDIO] VAD(real): speech detected")
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            logger.info(f"[AUDIO] VAD(real): silence detected (stop_secs={frame.stop_secs})")
+        elif isinstance(frame, UserStartedSpeakingFrame):
+            logger.info("[AUDIO] Turn started")
         elif isinstance(frame, UserStoppedSpeakingFrame):
-            logger.info("[AUDIO] VAD: user stopped speaking")
+            logger.info("[AUDIO] Turn stopped")
+            self._warn_if_vad_silent()
         elif isinstance(frame, TranscriptionFrame):
             logger.info(f"[AUDIO] TranscriptionFrame: '{frame.text}'")
         elif any(k in name for k in ("Transcri", "STT", "Speech", "Word", "Text")):
             logger.info(f"[AUDIO] {name}: text={getattr(frame, 'text', getattr(frame, 'content', '?'))!r}")
         await self.push_frame(frame, direction)
+
+    def _warn_if_vad_silent(self):
+        """Say so, loudly and once, when turns are running without VAD.
+
+        This is a silent degradation in pipecat, not an error, which is why
+        it went unnoticed. TurnAnalyzerUserTurnStopStrategy._handle_transcription
+        has a fallback for "transcripts arrive without VAD firing" whose comment
+        reads: "Without VAD/turn analyzer data, assume turn is complete". It
+        arms a short timer off the transcript and ends the turn — so Smart Turn
+        is never consulted at all, and the turn ends wherever the STT
+        endpointer happened to finalize, mid-sentence included.
+
+        Nothing logs when that path is taken. This does.
+        """
+        if self._vad_ever_fired or self._warned_vad_silent:
+            return
+        self._warned_vad_silent = True
+        logger.warning(
+            "[AUDIO] Turn ended but VAD has NEVER fired on this call — pipecat is "
+            "falling back to 'assume turn is complete' off the transcript alone, "
+            "so Smart Turn is not running and turns will split wherever the STT "
+            "endpointer finalises. Check VADParams confidence/min_volume against "
+            "this caller's mic level."
+        )
 
 
 # Root-caused 2026-08-30: LLMs default to Markdown-formatted text (tables,
@@ -371,8 +421,41 @@ async def run_voice_pipeline(
     context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
+            # confidence 0.85 -> 0.7, reverting the 2026-08-30 raise, because
+            # 0.85 overshot into a worse failure than the one it fixed.
+            #
+            # Live call 2026-09-04: VAD did not fire ONCE. Every turn began
+            # with "strategy: TranscriptionUserTurnStartStrategy" and no
+            # analyze_end_of_turn line appeared anywhere in the log, meaning
+            # Smart Turn never ran. Pipecat does not error on that; it falls
+            # back (TurnAnalyzerUserTurnStopStrategy._handle_transcription,
+            # "Without VAD/turn analyzer data, assume turn is complete") to
+            # arming a timer off the transcript instead.
+            #
+            # The arithmetic confirms it exactly: that fallback waits
+            # `_stt_timeout - _stop_secs`, and `_stop_secs` is still 0.0
+            # because it is only ever set from a VAD stop frame. 0.7 - 0.0 =
+            # 0.7s after the final transcript at 10:03:02.120 gives
+            # 10:03:02.820; the turn stopped at 10:03:02.821. So the turn
+            # ended wherever Deepgram happened to finalise — mid-sentence,
+            # while the caller was still speaking — and the second half became
+            # its own turn. That is the whole "lost words" bug, and it is a
+            # VAD sensitivity problem, not the STT endpointing one we assumed.
+            #
+            # Raising confidence to 0.85 was meant to stop background noise
+            # holding VAD open ("still speaking" for 5+ seconds). Not firing
+            # at all is the worse of the two failures by a distance: a stuck
+            # VAD delays a reply, whereas a silent VAD disables Smart Turn
+            # entirely and truncates what the caller actually said. 0.7 is the
+            # value that was in place through the earlier sessions where Smart
+            # Turn demonstrably did run.
+            #
+            # If noise-holding returns, raise min_volume (the loudness gate)
+            # before touching confidence again — and check the new
+            # "VAD(real)" / "VAD has NEVER fired" log lines to tell the two
+            # failure modes apart, which the old logging could not do.
             vad_analyzer=SileroVADAnalyzer(params=VADParams(
-                confidence=0.85,
+                confidence=0.7,
                 min_volume=0.4,
                 start_secs=0.2,
                 stop_secs=0.5,
