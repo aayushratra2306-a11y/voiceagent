@@ -121,3 +121,107 @@ def test_stop_secs_and_endpointing_are_still_deliberately_paired():
     svc = get_stt_service("hi")
     assert svc._settings.endpointing == 500
     assert "stop_secs=0.5," in _vad_params_source()
+
+
+# --- The instrumentation's own first bug (2026-09-04) ------------------------
+#
+# MeasuredSileroVAD shipped and produced NOTHING. Every report interval raised
+# "unsupported format string passed to numpy.ndarray.__format__" and pipecat
+# turned it into a non-fatal ErrorFrame, so the call carried on and the logs
+# filled with errors instead of measurements.
+#
+# Cause: SileroVADAnalyzer.voice_confidence is annotated `-> float` but
+# returns `self._model(...)[0]`, a numpy value. The annotation is simply
+# wrong, and trusting it meant the peaks were numpy objects that ":.2f"
+# cannot format. An instrument that silently measures nothing is worse than
+# no instrument, so both readings are pinned to real floats here.
+
+import numpy as np  # noqa: E402
+from pipecat.audio.vad.silero import SileroVADAnalyzer  # noqa: E402
+from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams  # noqa: E402
+
+from app.pipeline.voice_pipeline import MeasuredSileroVAD  # noqa: E402
+
+
+def _bare_vad() -> MeasuredSileroVAD:
+    """An instance without __init__, which would load the Silero model."""
+    vad = object.__new__(MeasuredSileroVAD)
+    vad._peak_confidence = 0.0
+    vad._peak_volume = 0.0
+    vad._last_report = 0.0
+    vad._params = VADParams(confidence=0.6, min_volume=0.4)
+    return vad
+
+
+def test_a_numpy_confidence_is_coerced_to_a_real_float(monkeypatch):
+    """Silero's actual return type, not its annotation."""
+    monkeypatch.setattr(
+        SileroVADAnalyzer, "voice_confidence",
+        lambda self, buffer: np.array([0.83], dtype=np.float32),
+    )
+    value = _bare_vad().voice_confidence(b"")
+    assert type(value) is float, f"got {type(value).__name__}, which ':.2f' cannot format"
+
+
+def test_a_numpy_volume_is_coerced_too(monkeypatch):
+    monkeypatch.setattr(
+        VADAnalyzer, "_get_smoothed_volume",
+        lambda self, audio: np.float32(0.55),
+    )
+    vad = _bare_vad()
+    assert type(vad._get_smoothed_volume(b"")) is float
+
+
+def test_the_report_survives_numpy_peaks():
+    """The exact crash: formatting a numpy peak with ':.2f'. Reproduced by
+    setting the peaks directly, since that is the state the bug left them in."""
+    vad = _bare_vad()
+    vad._peak_confidence = np.array([0.83], dtype=np.float32)
+    vad._peak_volume = np.array([0.55], dtype=np.float32)
+    vad._last_report = -1e9  # force the report to be due
+
+    try:
+        vad._report_if_due()
+    except TypeError as e:
+        raise AssertionError(
+            f"the VAD report still cannot format its own readings: {e}"
+        ) from e
+
+
+def test_the_report_actually_emits_and_resets(monkeypatch):
+    """A report that never fires measures nothing; peaks that never reset
+    would make every later line a running maximum rather than a window."""
+    lines: list[str] = []
+    monkeypatch.setattr(
+        "app.pipeline.voice_pipeline.logger.info", lambda msg: lines.append(msg)
+    )
+    vad = _bare_vad()
+    vad._peak_confidence, vad._peak_volume = 0.83, 0.55
+    vad._last_report = -1e9
+    vad._report_if_due()
+
+    assert lines and "[VAD]" in lines[0]
+    assert "would fire" in lines[0], lines[0]
+    assert vad._peak_confidence == 0.0 and vad._peak_volume == 0.0
+
+
+def test_the_report_names_which_gate_blocked():
+    """The whole point: the line has to say what to change."""
+    vad = _bare_vad()
+    seen = []
+    import app.pipeline.voice_pipeline as vp
+
+    original = vp.logger.info
+    vp.logger.info = lambda msg: seen.append(msg)
+    try:
+        vad._peak_confidence, vad._peak_volume = 0.42, 0.55  # confidence short
+        vad._last_report = -1e9
+        vad._report_if_due()
+        vad._peak_confidence, vad._peak_volume = 0.83, 0.10  # volume short
+        vad._last_report = -1e9
+        vad._report_if_due()
+    finally:
+        vp.logger.info = original
+
+    assert "BLOCKED by confidence" in seen[0], seen[0]
+    assert "BLOCKED by min_volume" in seen[1], seen[1]

@@ -4,6 +4,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
+import numpy as np
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -113,6 +114,26 @@ class AudioDebugger(FrameProcessor):
         )
 
 
+def _as_float(value) -> float:
+    """Coerce a VAD reading to a plain float, whatever shape it arrives in.
+
+    SileroVADAnalyzer.voice_confidence is annotated `-> float` and is not one:
+    it returns `self._model(...)[0]`, a numpy value whose exact shape depends
+    on the model build. A plain float() covers scalars and 0-d arrays but
+    raises "only 0-dimensional arrays can be converted to Python scalars" on a
+    1-element one, so the shape is flattened first rather than assumed.
+
+    Worth the care because the failure is silent where it matters: the first
+    version of this instrumentation raised on every report, pipecat turned
+    that into a non-fatal ErrorFrame, and the calls carried on while producing
+    no measurements at all.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(np.ravel(np.asarray(value))[0])
+
+
 class MeasuredSileroVAD(SileroVADAnalyzer):
     """Silero VAD that reports what it actually measured.
 
@@ -142,14 +163,21 @@ class MeasuredSileroVAD(SileroVADAnalyzer):
         self._last_report = 0.0
 
     def voice_confidence(self, buffer) -> float:
-        value = super().voice_confidence(buffer)
+        # float() is load-bearing, not tidiness. SileroVADAnalyzer annotates
+        # this `-> float` but actually returns `self._model(...)[0]`, a numpy
+        # value. Keeping it raw made the peak a numpy object too, and
+        # formatting one with ":.2f" raises "unsupported format string passed
+        # to numpy.ndarray.__format__" -- which is exactly what the first
+        # deploy of this class did, once every report interval, so it produced
+        # no measurements at all while looking like it was working.
+        value = _as_float(super().voice_confidence(buffer))
         self._peak_confidence = max(self._peak_confidence, value)
         return value
 
     def _get_smoothed_volume(self, audio) -> float:
         # Called once per analysis window alongside voice_confidence, so this
         # is where both peaks are known and the report can be emitted.
-        value = super()._get_smoothed_volume(audio)
+        value = _as_float(super()._get_smoothed_volume(audio))
         self._peak_volume = max(self._peak_volume, value)
         self._report_if_due()
         return value
@@ -160,8 +188,10 @@ class MeasuredSileroVAD(SileroVADAnalyzer):
             return
         self._last_report = now
 
-        confidence_ok = self._peak_confidence >= self._params.confidence
-        volume_ok = self._peak_volume >= self._params.min_volume
+        peak_confidence = _as_float(self._peak_confidence)
+        peak_volume = _as_float(self._peak_volume)
+        confidence_ok = peak_confidence >= self._params.confidence
+        volume_ok = peak_volume >= self._params.min_volume
         if confidence_ok and volume_ok:
             verdict = "would fire"
         elif not confidence_ok and not volume_ok:
@@ -172,9 +202,9 @@ class MeasuredSileroVAD(SileroVADAnalyzer):
             verdict = "BLOCKED by min_volume"
 
         logger.info(
-            f"[VAD] peak confidence={self._peak_confidence:.2f} "
+            f"[VAD] peak confidence={peak_confidence:.2f} "
             f"(need {self._params.confidence}) | "
-            f"peak volume={self._peak_volume:.2f} "
+            f"peak volume={peak_volume:.2f} "
             f"(need {self._params.min_volume}) -> {verdict}"
         )
         self._peak_confidence = 0.0
