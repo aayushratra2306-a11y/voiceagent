@@ -38,6 +38,7 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core.tracing import setup_call_tracing
 from app.models.conversation import ConversationTurn
+from app.pipeline import call_context
 from app.pipeline.background_jobs import BACKGROUND_TOOL_RULE, BackgroundJobs
 from app.pipeline.language import (
     didnt_catch_for,
@@ -397,6 +398,14 @@ async def run_voice_pipeline(
 ):
     session_id = str(uuid.uuid4())
     logger.info(f"[PIPELINE] Starting for bot: {bot_name} (session {session_id})")
+
+    # Task 3.5 — the built-in tools are plain module-level functions, so they
+    # get no bot and no session, only the arguments the model supplied. The
+    # booking template needs the bot's time zone, and it must NOT be
+    # something the model can pass in. This is where it comes from; see
+    # call_context.py for why a module-level value is safe here (one OS
+    # process per call).
+    call_context.set_call(bot_id=bot_id, session_id=session_id, language=language)
 
     # NOTE (Phase 1, task 1.1): pipecat 1.7.0 removed `vad_analyzer` from
     # TransportParams entirely. Passing it here is silently dropped by

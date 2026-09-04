@@ -27,14 +27,13 @@ untrusted — the AI can and occasionally will invent a plausible-looking but
 wrong value.
 """
 
-import re
 from datetime import UTC, datetime
 
 from loguru import logger
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.models.appointment import Appointment
 from app.models.order import Order
+from app.pipeline.booking import BOOKING_TOOLS
 
 
 async def get_current_datetime(params: FunctionCallParams):
@@ -97,65 +96,20 @@ async def get_order_status(params: FunctionCallParams, order_id: str):
     await params.result_callback(result)
 
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
-
-
-async def book_appointment(params: FunctionCallParams, date: str, time: str, purpose: str):
-    """Book an appointment slot for the caller.
-
-    Always confirm the date, time, and purpose back to the caller in your
-    reply before or after calling this — never book silently. If this
-    reports the slot is already taken, tell the caller plainly and ask for
-    a different time; do not just say it's booked anyway.
-
-    Args:
-        date: The appointment date in YYYY-MM-DD format (e.g. "2026-09-03").
-            Work out the correct date yourself from what the caller said
-            (e.g. "tomorrow", "next Monday") using the current date from
-            get_current_datetime if you need it — do not pass relative
-            phrases like "tomorrow" through directly.
-        time: The appointment time in 24-hour HH:MM format (e.g. "15:00" for
-            3pm). Convert from whatever format the caller used.
-        purpose: A short description of what the appointment is for.
-    """
-    logger.info(f"[TOOL] book_appointment called with date={date!r} time={time!r} purpose={purpose!r}")
-
-    # Validate before touching the database — the AI is not guaranteed to
-    # follow the requested format even when told to.
-    if not _DATE_RE.match(date) or not _TIME_RE.match(time):
-        logger.warning(f"[TOOL] book_appointment: bad format date={date!r} time={time!r}")
-        await params.result_callback({
-            "booked": False,
-            "message": (
-                "The date or time wasn't in a valid format. Work out the exact "
-                "date as YYYY-MM-DD and the time as 24-hour HH:MM, then try again."
-            ),
-        })
-        return
-
-    existing = await Appointment.find_one(Appointment.date == date, Appointment.time == time)
-    if existing:
-        logger.info(f"[TOOL] book_appointment: slot {date} {time} already taken")
-        await params.result_callback({
-            "booked": False,
-            "message": f"The {time} slot on {date} is already booked. Ask the caller for a different time.",
-        })
-        return
-
-    appointment = Appointment(date=date, time=time, purpose=purpose)
-    await appointment.insert()
-
-    result = {"booked": True, "date": date, "time": time, "purpose": purpose}
-    logger.info(f"[TOOL] book_appointment -> {result}")
-    await params.result_callback(result)
-
-
-# The set of tools every bot currently has access to. Per-bot, DB-configured
-# tool selection is later work (see the master plan's Phase 3, task 3.1) —
-# for now, every bot gets the same small, fixed set.
+# The set of tools a bot gets when it has none configured of its own.
+#
+# Task 3.5 replaced the original one-function book_appointment with the
+# booking TEMPLATE — check availability, book, cancel, reschedule — which
+# handles time zones, the slot being taken mid-booking, and giving the
+# caller a reference code they can repeat back. The name book_appointment
+# is deliberately unchanged so bots that already reference it keep working;
+# what changed is everything behind it.
+#
+# Per-bot tool selection is task 3.1 (see services/tool_registry.py): a bot
+# with its own tools configured gets exactly those, and this list is the
+# fallback for every bot that has configured nothing.
 TOOLS = [
     get_current_datetime,
     get_order_status,
-    book_appointment,
+    *BOOKING_TOOLS,
 ]

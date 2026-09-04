@@ -157,6 +157,11 @@ truststore==0.10.4
 typer==0.27.2
 typing-inspection==0.4.4
 typing_extensions==4.16.0
+# Task 3.5 — the IANA time zone database as a package. Linux has one in the
+# OS, Windows does not, so zoneinfo.ZoneInfo("Asia/Kolkata") raises there
+# and the booking template would fall back to UTC on a developer machine
+# while working on the server. Pinning it makes both behave identically.
+tzdata==2026.1
 urllib3==2.7.0
 uvicorn==0.52.3
 wait_for2==0.4.1
