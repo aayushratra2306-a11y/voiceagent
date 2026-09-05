@@ -49,7 +49,7 @@ from app.pipeline.language import (
 )
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
-from app.pipeline.saga import SAGA_RULE, TurnSaga
+from app.pipeline.saga import SAGA_RULE, RequestBoundary, TurnSaga
 from app.pipeline.tool_telemetry import PARTIAL_FAILURE_RULE, ToolCallTimer
 from app.services.rag import query_context
 from app.services.tool_registry import APPROVAL_RULE, PAYMENT_SAFETY_RULE, load_tools_for_bot
@@ -662,7 +662,13 @@ async def run_voice_pipeline(
 
     user_aggregator = context_aggregator.user()
 
-    pipeline_steps = [transport.input(), stt, AudioDebugger(), user_aggregator]
+    # Task 3.4 — RequestBoundary resets the saga when the CALLER speaks, which
+    # is what bounds a rollback now that its scope is the request rather than
+    # one batch of tool calls. Placed beside AudioDebugger, which is where the
+    # same turn frames are already being watched.
+    pipeline_steps = [
+        transport.input(), stt, AudioDebugger(), RequestBoundary(saga), user_aggregator,
+    ]
 
     # Bug found 2026-09-03: this used to sit BEFORE user_aggregator and react
     # to every raw TranscriptionFrame straight from Deepgram. Deepgram closes

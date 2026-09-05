@@ -16,10 +16,33 @@ is nothing to roll back. A booking declares a cancel URL, so a booking that
 succeeded alongside a payment that failed gets cancelled. The configuration
 carries the intent; this file does not guess it.
 
-The unit of work is one turn's batch of tool calls, because that is what
-the caller asked for in one sentence: "book the cab and text me the
+The unit of work is one CALLER REQUEST — everything the tools did between
+one thing the caller said and the next. "Book the cab and text me the
 receipt" is one request, and half of it succeeding is the case this exists
 for.
+
+That used to be one batch of tool calls instead, which was wrong against a
+real model. Confirmed live on 2026-09-05 against Groq's gpt-oss-120b: asked
+to book a slot and send a receipt in one breath, it did not emit the two
+calls as one parallel batch. It called book_slot, read the result, then
+called send_receipt 1.5 seconds later — two batches of one, no caller
+speech in between. Nothing was ever rolled back, because no single batch
+ever contained both the success and the failure. A reasoning model chaining
+its calls this way is normal rather than exceptional, so a saga scoped to
+one batch would almost never fire in production.
+
+What still bounds it, and why the boundary is where it is: the caller
+speaking again. `new_request()` is called on UserStoppedSpeakingFrame, so a
+booking made in answer to an earlier sentence is never rolled back by
+something unrelated failing later — the disaster the batch scoping was
+protecting against. Between those boundaries the model may take as many
+turns as it likes; they are all still the one thing that was asked for.
+
+The trigger stays deliberately narrow: only a failure in the batch that
+just completed starts a rollback. A step recorded AFTER a failure the model
+has already seen is very often its remedy for that failure — booking a
+different slot when the first was gone — and undoing that would be worse
+than the problem.
 
 On the manual's warning that some things genuinely cannot be undone — a
 sent message, a charged card — nothing here pretends otherwise. A tool
@@ -32,6 +55,8 @@ Silently leaving a mess is the outcome this is written to avoid.
 from typing import Any
 
 from loguru import logger
+from pipecat.frames.frames import Frame, UserStoppedSpeakingFrame
+from pipecat.processors.frame_processor import FrameProcessor
 
 
 class SagaStep:
@@ -43,10 +68,11 @@ class SagaStep:
 
 
 class TurnSaga:
-    """The completed steps of one turn, and how to walk them back.
+    """The completed steps of one caller request, and how to walk them back.
 
-    Reset between turns: rolling back a booking made two turns ago because
-    something unrelated failed now would be its own kind of disaster.
+    Reset when the caller speaks again: rolling back a booking made in
+    answer to an earlier sentence, because something unrelated failed now,
+    would be its own kind of disaster.
     """
 
     def __init__(self, announce=None):
@@ -70,22 +96,35 @@ class TurnSaga:
         return bool(self._failed)
 
     def begin(self, expected: int) -> None:
-        """A new batch of tool calls. Clears the last one.
+        """A new batch of tool calls within the request already in progress.
 
-        Rolling back a booking made two turns ago because something
-        unrelated failed now would be its own kind of disaster, so each
-        turn starts empty.
+        Only the failures are cleared, because they are what decides
+        whether THIS batch triggers a rollback. What succeeded earlier in
+        the same request is deliberately kept: with a model that chains its
+        calls one at a time, the success being rolled back is normally in
+        an earlier batch than the failure that causes it.
+        """
+        self._failed.clear()
+        self._expected = expected
+        self._seen = 0
+
+    def new_request(self) -> None:
+        """The caller said something new. Nothing before this may be undone.
+
+        This is the boundary that keeps the widened scope safe — see the
+        module docstring. Called from the pipeline when the caller's turn
+        ends, not when a batch of tool calls does.
         """
         self._steps.clear()
         self._failed.clear()
         self._irreversible.clear()
         self._pending_approval.clear()
-        self._expected = expected
+        self._expected = 0
         self._seen = 0
 
     # Kept as an alias so a caller that only wants to clear state reads
     # naturally.
-    reset = begin
+    reset = new_request
 
     async def record(self, name: str, tool, arguments: dict[str, Any], result: dict[str, Any]) -> None:
         """Note what a tool did, and roll back if that completes a bad batch.
@@ -129,6 +168,11 @@ class TurnSaga:
             return
 
         summary = await self.roll_back()
+        # Consumed: these have been undone, so a second failure later in the
+        # same request must not undo them again. What cannot be undone is
+        # deliberately NOT cleared — it is still standing, and still true of
+        # the request, so a later sentence should say so again.
+        self._steps.clear()
         if self._announce:
             await self._announce(self.describe(summary))
 
@@ -207,6 +251,31 @@ class TurnSaga:
             + " Tell them exactly this, plainly and without apologising at length. "
             "Do not describe anything as done unless it is listed as standing."
         )
+
+
+class RequestBoundary(FrameProcessor):
+    """Tells the saga where one caller request ends and the next begins.
+
+    The saga's scope is everything the tools did between one thing the
+    caller said and the next, so the boundary has to be the caller
+    speaking — not a batch of tool calls finishing, which the model may do
+    several times over while working on the same sentence.
+
+    UserStoppedSpeakingFrame rather than a transcript: it arrives whatever
+    the caller said, including an interruption mid-way through a booking,
+    which is exactly a case where nothing earlier should be undone by what
+    happens next.
+    """
+
+    def __init__(self, saga: TurnSaga):
+        super().__init__()
+        self._saga = saga
+
+    async def process_frame(self, frame: Frame, direction):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, UserStoppedSpeakingFrame):
+            self._saga.new_request()
+        await self.push_frame(frame, direction)
 
 
 # Added to the system prompt only for bots that have a reversible tool.

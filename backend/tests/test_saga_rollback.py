@@ -201,9 +201,9 @@ async def test_a_rollback_never_raises_into_a_live_call(monkeypatch):
 
 # --- batch boundaries ------------------------------------------------------
 
-async def test_a_new_turn_cannot_roll_back_the_previous_one(monkeypatch):
-    """Undoing a booking made two turns ago because something unrelated
-    failed now would be its own kind of disaster."""
+async def test_a_new_caller_request_cannot_roll_back_the_previous_one(monkeypatch):
+    """Undoing a booking made in answer to an earlier sentence, because
+    something unrelated failed now, would be its own kind of disaster."""
     rec = _Recorder()
     _patch_calls(monkeypatch, rec)
     saga = TurnSaga(announce=lambda s: _noop())
@@ -211,10 +211,62 @@ async def test_a_new_turn_cannot_roll_back_the_previous_one(monkeypatch):
     saga.begin(1)
     await saga.record("book_cab", _tool("book_cab", "https://api.test/cancel"), {}, OK)
 
-    saga.begin(1)                                   # a new turn
+    saga.new_request()                              # the caller spoke again
+    saga.begin(1)
     await saga.record("check_stock", _tool("check_stock"), {}, BAD)
 
-    assert rec.calls == [], "rolled back a step from an earlier turn"
+    assert rec.calls == [], "rolled back a step from an earlier request"
+
+
+async def test_a_chained_call_still_rolls_back_the_earlier_one(monkeypatch):
+    """The live case, 2026-09-05: a reasoning model asked for two things in
+    one sentence called them one at a time, 1.5s apart, with no caller
+    speech in between. Scoped to a batch, nothing was ever undone."""
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
+    said = []
+    saga = TurnSaga(announce=lambda s: said.append(s) or _noop())
+
+    saga.begin(1)                                   # the model's first batch
+    await saga.record("book_slot", _tool("book_slot", "https://api.test/cancel"), {}, OK)
+
+    saga.begin(1)                                   # its second, same request
+    await saga.record("send_receipt", _tool("send_receipt"), {}, BAD)
+
+    assert [c[0] for c in rec.calls] == ["undo_book_slot"], rec.calls
+    assert said, "the caller was told nothing about a half-finished request"
+
+
+async def test_a_step_taken_after_a_known_failure_is_left_alone(monkeypatch):
+    """A tool the model runs AFTER seeing a failure is usually its remedy for
+    that failure — a different slot when the first was gone. Undoing it would
+    be worse than the problem."""
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
+    saga = TurnSaga(announce=lambda s: _noop())
+
+    saga.begin(1)
+    await saga.record("book_9am", _tool("book_9am", "https://api.test/cancel"), {}, BAD)
+
+    saga.begin(1)                                   # the model tries another slot
+    await saga.record("book_10am", _tool("book_10am", "https://api.test/cancel"), {}, OK)
+
+    assert rec.calls == [], "undid the model's own fix for the failure"
+
+
+async def test_one_failure_does_not_undo_the_same_step_twice(monkeypatch):
+    rec = _Recorder()
+    _patch_calls(monkeypatch, rec)
+    saga = TurnSaga(announce=lambda s: _noop())
+
+    saga.begin(1)
+    await saga.record("book_cab", _tool("book_cab", "https://api.test/cancel"), {}, OK)
+    saga.begin(1)
+    await saga.record("send_sms", _tool("send_sms"), {}, BAD)
+    saga.begin(1)
+    await saga.record("send_email", _tool("send_email"), {}, BAD)
+
+    assert [c[0] for c in rec.calls] == ["undo_book_cab"], rec.calls
 
 
 async def test_an_incomplete_batch_does_nothing(monkeypatch):
@@ -254,6 +306,22 @@ def test_the_rule_is_only_added_for_bots_with_a_reversible_tool():
     source = inspect.getsource(voice_pipeline.run_voice_pipeline)
     assert "if has_undo:" in source
     assert "SAGA_RULE" in source
+
+
+def test_the_caller_speaking_is_what_bounds_a_rollback():
+    """Without RequestBoundary in the pipeline the saga would never reset,
+    and a booking could be undone by a failure in a later conversation."""
+    import inspect
+
+    from app.pipeline import saga as saga_module
+    from app.pipeline import voice_pipeline
+
+    source = inspect.getsource(voice_pipeline.run_voice_pipeline)
+    assert "RequestBoundary(saga)" in source
+
+    boundary = inspect.getsource(saga_module.RequestBoundary)
+    assert "UserStoppedSpeakingFrame" in boundary
+    assert "new_request()" in boundary
 
 
 def test_the_saga_is_told_how_many_results_to_expect():
