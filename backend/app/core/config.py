@@ -101,6 +101,17 @@ class Settings(BaseSettings):
     # costs far more than the startup latency this saves.
     call_worker_pool_size: int = 2
 
+    # Phase 3 hardening — whether this server may send a request to a
+    # private, loopback, or link-local address when a customer configures
+    # one (a webhook subscription URL, task 3.8; a bot tool URL, task 3.1).
+    # Off by default because on a cloud VM the link-local range is the
+    # metadata service, which hands out the instance's own credentials to
+    # anything that asks it — see app/core/url_safety.py. Turn this on for
+    # local development, where pointing a tool at http://localhost:9000 is
+    # the normal thing to do, and leave it off anywhere reachable from the
+    # internet.
+    allow_private_outbound_urls: bool = False
+
     # Task 2.7 — error tracking. Blank by default: sentry_sdk.init(dsn="")
     # is a confirmed-safe no-op (verified live 2026-08-31), so this stays
     # completely dormant — zero behavior change — until a real DSN is set.

@@ -43,12 +43,14 @@ import asyncio
 import base64
 import json
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 
 from app.core.crypto import decrypt_secret
+from app.core.url_safety import rejection_reason
 from app.models.bot_tool import BotTool
 from app.pipeline import call_context
 
@@ -110,6 +112,49 @@ def _render(template: str, args: dict[str, Any]) -> str:
     return out
 
 
+def _render_url(template: str, args: dict[str, Any]) -> str:
+    """Substitute into a URL, percent-encoding what gets substituted.
+
+    Every other rendering target is structured — a header value, a query
+    dict httpx encodes itself, a JSON body — so a stray character in a
+    value stays inside that value. A URL is the exception: it is one flat
+    string in which `?`, `#` and `&` are grammar, so substituting raw text
+    into it lets an argument change the shape of the request rather than
+    just its content. These arguments come from a language model reading
+    aloud what an anonymous caller said, which is as untrusted as input
+    gets — an order number of `1?admin=true` would otherwise append a
+    query parameter to a customer's API call that the customer never
+    configured.
+
+    `safe="/"` rather than `safe=""`: a value that legitimately spans path
+    segments (`orders/2026/17`) is a real, if uncommon, configuration, and
+    encoding its slashes would break a tool that works today. Every
+    character that actually carries URL grammar is still encoded.
+
+    Traversal is handled separately below, because `/` staying safe means
+    `..` survives encoding.
+    """
+    out = template
+    for key, value in args.items():
+        text = "" if value is None else str(value)
+        out = out.replace("{" + key + "}", quote(text, safe="/"))
+    return out
+
+
+def _has_traversal(url: str) -> bool:
+    """Whether a rendered URL walks up out of the path it was configured for.
+
+    `https://api.example.com/orders/{id}` with an id of `../../admin/users`
+    is a different endpoint than the one the customer configured, on the
+    same host and carrying the same credential. Checked on the rendered
+    path only — a `..` inside a query value is just text.
+    """
+    from urllib.parse import urlparse
+
+    path = urlparse(url).path
+    return ".." in path.split("/")
+
+
 def _render_map(mapping: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     rendered: dict[str, Any] = {}
     for key, value in mapping.items():
@@ -161,6 +206,56 @@ def _cache_key(tool: BotTool, args: dict[str, Any]) -> str:
     return f"{tool.id or tool.name}:{sorted(args.items())}"
 
 
+def _inside_a_call() -> bool:
+    """Whether this process is actually running a call right now.
+
+    The cache below is call-scoped, and that scoping is enforced entirely
+    by the fact that a call gets its own OS process which then exits (see
+    call_context.py). Outside a call — the "test this tool" button in the
+    dashboard, and task 3.10's approve endpoint, both of which run
+    call_http_tool from the long-lived API process — there is no such
+    boundary: `call_context.current()` is a module-level object that
+    process holds for its entire lifetime. Caching into it there would
+    mean a Test button that shows yesterday's answer after the customer
+    fixed their API, and a dict that grows for as long as the server runs.
+
+    So the cache is switched off unless a call actually set the context.
+    """
+    ctx = call_context.current()
+    return bool(ctx.pc_id or ctx.session_id or ctx.bot_id)
+
+
+def _capped(payload: Any) -> Any:
+    """The response as the model sees it, bounded in size.
+
+    Bounding happens HERE, on the parsed value, and never on the text
+    before it is parsed. Truncating a 5KB JSON document to 4000 characters
+    and then parsing it yields invalid JSON, which used to fall through to
+    "treat the response as plain text" — at which point every field_map
+    path resolved to None and the tool reported "nothing was found" for a
+    record that was returned perfectly well. A large order record is a
+    completely ordinary thing for a customer's API to return, so that was
+    a lookup tool confidently telling callers their order did not exist.
+    """
+    if payload is None or isinstance(payload, (int, float, bool)):
+        return payload
+    try:
+        as_text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+    except (TypeError, ValueError):
+        as_text = str(payload)
+    if len(as_text) <= MAX_RESPONSE_CHARS:
+        return payload
+    return {
+        "truncated": True,
+        "note": (
+            "This response was too large to include in full. The fields this "
+            "tool is configured to read were still taken from the complete "
+            "response and are accurate."
+        ),
+        "preview": as_text[:MAX_RESPONSE_CHARS],
+    }
+
+
 def _apply_auth(tool: BotTool, headers: dict[str, str], params: dict[str, Any]) -> None:
     """Add the customer's credential wherever their API expects it.
 
@@ -210,7 +305,14 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     # link (and reference) from an earlier request instead of a fresh one.
     # GET already excludes it in practice (a create-link call is virtually
     # always a POST), but this is the actual invariant, stated explicitly.
-    cache_key = _cache_key(tool, args) if method == "GET" and not tool.payment.enabled else None
+    # `_inside_a_call()`: see its docstring — the cache's whole safety
+    # argument is the per-call process boundary, which does not exist in
+    # the API process.
+    cache_key = (
+        _cache_key(tool, args)
+        if method == "GET" and not tool.payment.enabled and _inside_a_call()
+        else None
+    )
     if cache_key is not None:
         ctx_cache = call_context.current().cache
         cached = ctx_cache.get(cache_key)
@@ -225,8 +327,37 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     # fails instantly with UnsupportedProtocol rather than ever reaching the
     # customer's API. Confirmed live 2026-09-05. Stripped here too so an
     # already-saved tool doesn't need re-editing to pick up the fix.
-    url = _render(tool.url.strip(), args)
-    headers = {k: str(v) for k, v in _render_map(tool.headers, args).items()}
+    url = _render_url(tool.url.strip(), args)
+    if _has_traversal(url):
+        logger.warning(f"[TOOL] {tool.name}: refused a rendered URL that walks out of its path: {url}")
+        return {
+            "ok": False,
+            "error": "bad_request",
+            "message": "That request could not be made with the details given. Ask the caller to confirm them.",
+        }
+
+    # A tool URL is customer-configured, and this server is the one that
+    # dials it — see app/core/url_safety.py for why "the customer typed it"
+    # does not make an internal address safe to fetch. Checked here rather
+    # than only when the tool is saved, because the check that counts is
+    # the one immediately before the request.
+    unsafe = rejection_reason(url)
+    if unsafe:
+        logger.warning(f"[TOOL] {tool.name}: refused to call {url} — {unsafe}")
+        return {
+            "ok": False,
+            "error": "blocked_url",
+            "message": "That system could not be reached. Tell the caller plainly rather than guessing an answer.",
+        }
+
+    # str().replace(): a header value carrying a newline splits one request
+    # into two as far as some servers are concerned. These values are
+    # templated from model-supplied arguments like everything else, so the
+    # possibility is real rather than theoretical.
+    headers = {
+        k: str(v).replace("\r", "").replace("\n", "")
+        for k, v in _render_map(tool.headers, args).items()
+    }
     params = _render_map(tool.query, args)
     body = _render_map(tool.body, args) if tool.body else None
     _apply_auth(tool, headers, params)
@@ -261,11 +392,15 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
             "message": "That system could not be reached. Tell the caller plainly rather than guessing an answer.",
         }
 
-    text = response.text[:MAX_RESPONSE_CHARS]
+    # Parsed in FULL, then bounded by `_capped` at the point it goes to the
+    # model — never truncated first. See _capped's docstring: truncating
+    # before parsing turned every large-but-perfectly-valid JSON response
+    # into "nothing was found."
+    text = response.text
     try:
         payload: Any = json.loads(text) if text.strip() else None
     except ValueError:
-        payload = text
+        payload = text[:MAX_RESPONSE_CHARS]
 
     if response.status_code >= 400:
         logger.warning(f"[TOOL] {tool.name}: HTTP {response.status_code}")
@@ -273,7 +408,7 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
             "ok": False,
             "error": f"http_{response.status_code}",
             "status": response.status_code,
-            "data": payload,
+            "data": _capped(payload),
             # 4xx is usually the caller's input (unknown order number); 5xx is
             # the customer's system. The model should say different things.
             "message": (
@@ -301,7 +436,7 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
             "message": "Nothing was found for that. Tell the caller plainly and ask them to confirm the details.",
         }
     else:
-        result = {"ok": True, "status": response.status_code, "data": payload}
+        result = {"ok": True, "status": response.status_code, "data": _capped(payload)}
         if fields is not None:
             result["fields"] = fields
         if tool.payment.enabled:
@@ -349,6 +484,7 @@ async def _track_payment_session(tool: BotTool, payload: Any, result: dict[str, 
         session = PaymentSession(
             reference=str(fields["reference"]),
             bot_id=ctx.bot_id or "",
+            user_id=ctx.user_id or "",
             pc_id=ctx.pc_id or "",
             tool_id=str(tool.id or ""),
             amount=str(fields["amount"] or ""),
@@ -457,6 +593,28 @@ def _http_handler(tool: BotTool, jobs=None, saga=None):
     async def handler(params) -> None:
         args = dict(params.arguments or {})
 
+        # Task 3.10 — FIRST, before anything else can dispatch the work.
+        #
+        # This used to sit below the long-running branch, which meant a
+        # tool configured as both long-running (3.3) and approval-gated
+        # (3.10) handed itself to the background runner and executed for
+        # real without any approval ever being asked for. Nothing warned
+        # about it: the caller heard the normal "I'm working on it", and
+        # the action simply happened. Those two settings are most likely
+        # to be combined on exactly the tools this gate exists for — a
+        # large refund against a slow payment provider is both — so the
+        # bypass sat where it would do the most damage.
+        #
+        # The ordering is the fix and also the invariant: the gate decides
+        # whether the underlying action may happen AT ALL, so nothing that
+        # can cause it to happen may run before the gate does.
+        gated = await _check_approval_gate(tool, args)
+        if gated is not None:
+            if saga is not None:
+                await saga.record(tool.name, tool, args, gated)
+            await params.result_callback(gated)
+            return
+
         if tool.long_running and jobs is not None:
             jobs.start(tool.name, call_http_tool(tool, args), args)
             await params.result_callback({
@@ -468,16 +626,6 @@ def _http_handler(tool: BotTool, jobs=None, saga=None):
                     "it is done."
                 ),
             })
-            return
-
-        # Task 3.10 — checked before the HTTP call, not after: the whole
-        # point is that the underlying action must not happen at all until
-        # a person says so.
-        gated = await _check_approval_gate(tool, args)
-        if gated is not None:
-            if saga is not None:
-                await saga.record(tool.name, tool, args, gated)
-            await params.result_callback(gated)
             return
 
         result = await call_http_tool(tool, args)
@@ -548,7 +696,22 @@ async def load_tools_for_bot(
         return list(builtins.values()), False, False, False, False
 
     loaded: list[Any] = []
+    # A tool's name becomes a function name in the schema sent to the LLM
+    # provider, and two functions with the same name is not a thing that
+    # schema can express — the provider either rejects the request outright
+    # or silently keeps one of them, which would present as "my second tool
+    # never gets called" with nothing in the logs to explain it. Nothing
+    # stops a customer naming two tools the same, so the first one wins and
+    # the collision is said out loud.
+    used_names: set[str] = set()
     for record in records:
+        if record.name in used_names:
+            logger.warning(
+                f"[TOOLS] Bot {bot_id} has more than one enabled tool named "
+                f"{record.name!r} — only the first is being offered to the model. "
+                f"Rename or disable the duplicate."
+            )
+            continue
         if record.kind == "builtin":
             fn = builtins.get(record.builtin)
             if fn is None:
@@ -557,6 +720,7 @@ async def load_tools_for_bot(
             loaded.append(fn)
         else:
             loaded.append(to_function_schema(record, jobs, saga))
+        used_names.add(record.name)
 
     has_background = any(r.long_running and r.kind == "http" for r in records)
     has_undo = any(r.kind == "http" and r.undo and r.undo.url for r in records)

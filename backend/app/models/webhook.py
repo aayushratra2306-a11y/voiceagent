@@ -35,6 +35,13 @@ EVENT_TYPES = frozenset({
     "appointment.cancelled",
     "appointment.rescheduled",
     "call.ended",
+    # Task 3.7 — a payment link is very often paid after the caller has hung
+    # up, which is exactly when the live-call announcement has nobody to
+    # announce to. Without these two the payment is recorded in this system
+    # and nowhere the customer can see it; with them, their own service is
+    # told the same way it is told about everything else here.
+    "payment.received",
+    "payment.failed",
     # Task 3.10 — the caller has usually long hung up by the time a person
     # actually decides on a big action, so a webhook (not a live-call
     # announcement) is the realistic way a customer's own system finds out

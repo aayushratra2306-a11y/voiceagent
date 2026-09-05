@@ -36,7 +36,15 @@ class PendingApproval(Document):
     amount: float
     threshold: float
 
-    status: Literal["pending", "approved", "denied"] = "pending"
+    # "approving" is a real, short-lived state, not a bookkeeping detail: it
+    # is claimed atomically the instant someone presses approve, BEFORE the
+    # underlying action runs, so a second press (or a second tab, or a
+    # double-click) finds it already claimed and is refused instead of
+    # issuing the refund a second time. If the server dies mid-action the
+    # record stays "approving", which is the honest description — the action
+    # may or may not have gone through, and that needs a person to check
+    # rather than an automatic retry that could double it.
+    status: Literal["pending", "approving", "approved", "denied"] = "pending"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     decided_at: datetime | None = None
     # Free text rather than a user id: this codebase has no separate staff/

@@ -35,6 +35,7 @@ from beanie import PydanticObjectId
 from loguru import logger
 
 from app.core.crypto import decrypt_secret
+from app.core.url_safety import rejection_reason
 from app.models.webhook import (
     EVENT_TYPES,
     WebhookDelivery,
@@ -54,6 +55,20 @@ MAX_ATTEMPTS = len(RETRY_DELAYS_SECONDS) + 1
 # Bounded so one slow or hanging customer endpoint cannot back up delivery
 # for every other subscriber's events behind it in the same poll.
 DELIVERY_TIMEOUT_SECONDS = 8.0
+
+# How long a claimed item is held before another pass may pick it up again.
+# Must exceed the longest one attempt can take, or the lease expires while
+# the request it protects is still in flight — which is the exact duplicate
+# this exists to prevent. See `_claim`.
+LEASE_SECONDS = DELIVERY_TIMEOUT_SECONDS + 22
+
+# The most items one pass will take on at once. Without it, an outbox that
+# has backed up (a customer endpoint down overnight, say) comes back as one
+# unbounded list and is then handed to a single asyncio.gather — thousands
+# of concurrent HTTP requests out of the API process, which is a far worse
+# failure than delivering the backlog a few hundred at a time. Anything not
+# taken this pass is still due on the next one, five seconds later.
+BATCH_LIMIT = 200
 
 SIGNATURE_HEADER = "X-Voiceagent-Signature"
 EVENT_HEADER = "X-Voiceagent-Event"
@@ -118,6 +133,15 @@ async def deliver_now(sub: WebhookSubscription, event: str, payload: dict) -> di
     the actual delivery mechanism webhook_delivery_loop calls per attempt;
     the queue decides WHEN, this decides WHAT HAPPENS.
     """
+    # Re-checked here, not just when the subscription was saved: the URL is
+    # customer-supplied and this server is what dials it, and a name that
+    # resolved to a public address at registration can be re-pointed at
+    # 127.0.0.1 afterwards. See app/core/url_safety.py.
+    unsafe = rejection_reason(sub.url)
+    if unsafe:
+        logger.warning(f"[WEBHOOK] Refusing to POST to {sub.url} for subscription {sub.id} — {unsafe}")
+        return {"ok": False, "status_code": None, "error": f"blocked: {unsafe}"}
+
     secret = decrypt_secret(sub.secret_encrypted)
     body = json.dumps(
         {"event": event, "payload": payload, "sent_at": datetime.now(UTC).isoformat()},
@@ -159,10 +183,14 @@ async def webhook_delivery_loop(interval_seconds: int = 5) -> None:
 
 async def _run_due_deliveries() -> None:
     try:
-        due = await WebhookOutboxItem.find(
-            WebhookOutboxItem.status == "pending",
-            WebhookOutboxItem.next_attempt_at <= datetime.now(UTC),
-        ).to_list()
+        due = await (
+            WebhookOutboxItem.find(
+                WebhookOutboxItem.status == "pending",
+                WebhookOutboxItem.next_attempt_at <= datetime.now(UTC),
+            )
+            .limit(BATCH_LIMIT)
+            .to_list()
+        )
     except Exception as e:
         logger.warning(f"[WEBHOOK] Could not read the outbox: {type(e).__name__}: {e}")
         return
@@ -176,7 +204,57 @@ async def _run_due_deliveries() -> None:
     await asyncio.gather(*(_process_one(item) for item in due), return_exceptions=True)
 
 
+async def _claim(item: WebhookOutboxItem) -> bool:
+    """Take exclusive ownership of one outbox item, or report that someone
+    else already has it.
+
+    This closes a duplicate-delivery hole that the timings made routine
+    rather than rare. The loop polls every 5 seconds; one attempt is
+    allowed up to DELIVERY_TIMEOUT_SECONDS (8). An item used to stay
+    `status="pending"` with `next_attempt_at` in the past for the whole
+    time its request was in flight, so any customer endpoint that took
+    longer than the poll interval to answer — a cold start, an endpoint
+    doing real work, anything hanging until the timeout — matched the
+    "due" query again on the very next pass and was POSTed the same event
+    a second time, and a third, for as long as the first attempt ran. The
+    customer sees duplicate events; a customer who books or charges on
+    receipt sees duplicate bookings or charges.
+
+    One atomic update does the claiming: the filter includes the attempt
+    number the reader saw, so of two passes racing for the same item
+    exactly one update matches and the loser skips it. The same statement
+    pushes `next_attempt_at` out by a lease comfortably longer than any
+    single attempt can take, so nothing else considers it due while this
+    attempt is running. A process that dies mid-delivery simply lets the
+    lease expire, and the item comes back around — at-least-once, which
+    is the correct guarantee here and the one the retry schedule already
+    implied.
+    """
+    now = datetime.now(UTC)
+    try:
+        updated = await WebhookOutboxItem.get_motor_collection().update_one(
+            {"_id": item.id, "status": "pending", "attempt": item.attempt},
+            {
+                "$set": {"next_attempt_at": now + timedelta(seconds=LEASE_SECONDS)},
+                "$inc": {"attempt": 1},
+            },
+        )
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Could not claim outbox item {item.id}: {type(e).__name__}: {e}")
+        return False
+
+    if updated.modified_count != 1:
+        return False
+    # Keep the in-memory copy in step with what was just written, so the
+    # save at the end of _process_one does not roll the attempt back.
+    item.attempt += 1
+    return True
+
+
 async def _process_one(item: WebhookOutboxItem) -> None:
+    if not await _claim(item):
+        return
+
     try:
         sub = await WebhookSubscription.get(PydanticObjectId(item.subscription_id))
     except Exception:
@@ -187,9 +265,16 @@ async def _process_one(item: WebhookOutboxItem) -> None:
         # nowhere left to send it, and not a failure worth retrying.
         item.status = "failed"
         await item.save()
+        # Logged like any other outcome: a customer asking "why did these
+        # stop arriving" gets an answer that names the reason, instead of
+        # events vanishing with nothing written down anywhere.
+        await WebhookDelivery(
+            subscription_id=item.subscription_id, event=item.event, payload=item.payload,
+            attempt=item.attempt, ok=False, status_code=None,
+            error="subscription no longer exists or is disabled",
+        ).insert()
         return
 
-    item.attempt += 1
     result = await deliver_now(sub, item.event, item.payload)
 
     await WebhookDelivery(

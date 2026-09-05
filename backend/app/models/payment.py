@@ -32,6 +32,11 @@ class PaymentSession(Document):
     # principle run outside a call context) and means "nobody to tell."
     pc_id: str = ""
     tool_id: str  # which BotTool's webhook secret verifies this reference
+    # The bot's owner. Carried so the provider's callback can be forwarded
+    # on to that customer's own webhook subscriptions (task 3.8) — without
+    # it, a payment landing after the caller hung up is recorded here and
+    # nowhere else, which is the case a customer most needs told about.
+    user_id: str = ""
 
     amount: str = ""
     currency: str = ""

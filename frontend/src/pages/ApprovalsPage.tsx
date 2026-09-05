@@ -135,8 +135,13 @@ export default function ApprovalsPage() {
 function StatusPill({ status }: { status: PendingApproval['status'] }) {
   const styles = {
     pending: 'bg-amber-500/15 text-amber-300',
+    // Deliberately not green: the action has been released to run but has
+    // not reported back. Saying "approved" here would claim something
+    // finished that may still be in flight.
+    approving: 'bg-sky-500/15 text-sky-300',
     approved: 'bg-emerald-500/15 text-emerald-300',
     denied: 'bg-red-500/15 text-red-300',
   }
-  return <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${styles[status]}`}>{status}</span>
+  const label = status === 'approving' ? 'running' : status
+  return <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${styles[status]}`}>{label}</span>
 }

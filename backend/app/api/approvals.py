@@ -54,19 +54,55 @@ async def _owned_approval(approval_id: str, user_id: str) -> PendingApproval:
 
 @router.get("/")
 async def list_approvals(
-    status: str | None = None, current_user: User = Depends(get_current_user)
+    status: str | None = None,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
 ):
     """Newest first — same reasoning as the webhook delivery log: whoever
-    opens this is almost always chasing the thing that just happened."""
+    opens this is almost always chasing the thing that just happened.
+
+    Bounded, like the delivery log: an account that has been running a
+    while accumulates decided approvals indefinitely, and nobody opening
+    this page wants every one of them ever.
+    """
     query = [PendingApproval.user_id == str(current_user.id)]
     if status:
         query.append(PendingApproval.status == status)
     approvals = (
         await PendingApproval.find(*query)
         .sort(-PendingApproval.created_at)  # type: ignore[arg-type]
+        .limit(max(1, min(limit, 500)))
         .to_list()
     )
     return [_out(a) for a in approvals]
+
+
+async def _claim_for_decision(approval: PendingApproval, new_status: str, decided_by: str) -> bool:
+    """Move this approval out of "pending" atomically, or report that it
+    already left.
+
+    Reading `status == "pending"` and then acting on it is two operations,
+    and two requests can both pass the read before either writes — a
+    double-click, an impatient second click, two people on the same
+    account, a retried request. For a deny that would be harmless. For an
+    approve it means `call_http_tool` runs twice: the refund is issued
+    twice, the payout sent twice. That is precisely the outcome task 3.10
+    exists to make impossible, so guarding it with a plain if-statement
+    was not enough.
+
+    One conditional update decides it instead. Whichever request MongoDB
+    applies first flips the status; the other's filter no longer matches,
+    it gets nothing back, and it is refused with a 409.
+    """
+    updated = await PendingApproval.get_motor_collection().update_one(
+        {"_id": approval.id, "status": "pending"},
+        {"$set": {
+            "status": new_status,
+            "decided_at": datetime.now(UTC),
+            "decided_by": decided_by,
+        }},
+    )
+    return updated.modified_count == 1
 
 
 @router.post("/{approval_id}/approve")
@@ -78,6 +114,15 @@ async def approve(approval_id: str, current_user: User = Depends(get_current_use
     approval = await _owned_approval(approval_id, str(current_user.id))
     if approval.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already {approval.status}")
+
+    # Claimed BEFORE the action runs, not after — see _claim_for_decision.
+    # "approving" rather than "approved": the action has not happened yet,
+    # and if this process dies during it, a record that already says
+    # "approved" would be a lie about something nobody can confirm.
+    if not await _claim_for_decision(approval, "approving", current_user.email):
+        raise HTTPException(status_code=409, detail="This was already decided.")
+    approval.status = "approving"
+    approval.decided_by = current_user.email
 
     # A malformed or non-ObjectId tool_id must land in the same "deny"
     # branch as a genuinely deleted tool, not raise into a 500 — the
@@ -123,10 +168,14 @@ async def deny(approval_id: str, current_user: User = Depends(get_current_user))
     if approval.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already {approval.status}")
 
+    # Same atomic claim as approve. Denying twice would be harmless in
+    # itself, but going through the same door means a deny racing an
+    # approve cannot both win — which is not harmless at all.
+    if not await _claim_for_decision(approval, "denied", current_user.email):
+        raise HTTPException(status_code=409, detail="This was already decided.")
     approval.status = "denied"
     approval.decided_at = datetime.now(UTC)
     approval.decided_by = current_user.email
-    await approval.save()
 
     await _notify(approval, granted=False)
     return _out(approval)

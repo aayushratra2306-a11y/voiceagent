@@ -70,6 +70,38 @@ def _verify_signature(secret: str, raw_body: bytes, provided: str) -> bool:
     return hmac.compare_digest(expected, provided.strip())
 
 
+async def _forward_to_customer(session: PaymentSession, paid: bool) -> None:
+    """Pass a settled payment on to the customer's own webhooks (task 3.8).
+
+    Wrapped, like every other emit() in this codebase: this route's job is
+    to record what the provider said and answer it promptly. A failure to
+    notify must not turn into a non-2xx back to the payment provider,
+    which would make it retry a webhook that was, in fact, processed
+    correctly.
+
+    Nothing is sent for a session created before this field existed
+    (user_id blank) — emit() logs and drops it rather than guessing whose
+    payment it was.
+    """
+    try:
+        from app.services.webhooks import emit
+
+        await emit(
+            "payment.received" if paid else "payment.failed",
+            user_id=session.user_id,
+            payload={
+                "reference": session.reference,
+                "status": session.status,
+                "amount": session.amount,
+                "currency": session.currency,
+                "bot_id": session.bot_id,
+                "link_url": session.link_url,
+            },
+        )
+    except Exception as e:
+        logger.warning(f"[PAYMENT] Could not queue a notification for {session.reference}: {e}")
+
+
 @router.post("/webhook/{tool_id}")
 async def payment_webhook(tool_id: str, request: Request) -> dict[str, Any]:
     """Receive a payment provider's callback for one configured tool.
@@ -119,7 +151,18 @@ async def payment_webhook(tool_id: str, request: Request) -> dict[str, Any]:
         )
         raise HTTPException(status_code=400, detail="Could not process this webhook")
 
-    session = await PaymentSession.find_one(PaymentSession.reference == str(reference))
+    # Scoped to THIS tool, not to the reference alone. A reference is a
+    # string somebody else's system chose — "order_1042" is an entirely
+    # plausible thing for two different customers' providers to both
+    # produce — and a global lookup by reference would let one customer's
+    # verified webhook resolve to, and mark paid, another customer's
+    # payment session. The signature check above proves the request came
+    # from the provider configured on THIS tool; it proves nothing about
+    # any other tool's payments, so the query says so.
+    session = await PaymentSession.find_one(
+        PaymentSession.reference == str(reference),
+        PaymentSession.tool_id == str(tool.id),
+    )
     if session is None:
         # Verified, so this is a real message from a real provider — it just
         # doesn't match a link this system created. Worth a log, not an error.
@@ -132,6 +175,15 @@ async def payment_webhook(tool_id: str, request: Request) -> dict[str, Any]:
     session.last_webhook = payload if isinstance(payload, dict) else {"raw": str(payload)}
     await session.save()
     logger.info(f"[PAYMENT] {session.reference} -> {session.status}")
+
+    # Task 3.8 doing for this what it does for every other event. The live
+    # announcement below only reaches a caller who is still on the line,
+    # and a payment link is very often paid minutes after the call ended —
+    # so without this, the single most important outcome in the whole
+    # payment flow is the one the customer's own systems never hear about.
+    # Queued (not sent) here, so a customer's slow endpoint cannot delay
+    # answering the payment provider, which retries if we are slow to 200.
+    await _forward_to_customer(session, paid)
 
     # Best-effort, and last: the record above is what must not be lost. If
     # the call ended while the caller was paying, there is simply nobody to

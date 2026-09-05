@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app.core.auth import get_current_user
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
+from app.core.url_safety import rejection_reason
 from app.models.user import User
 from app.models.webhook import EVENT_TYPES, WebhookDelivery, WebhookSubscription
 from app.services.webhooks import deliver_now
@@ -42,6 +43,24 @@ def _out(sub: WebhookSubscription) -> dict:
     }
 
 
+def _validated(event: str, url: str) -> str:
+    """Both things a subscription can be wrong about, refused at the door.
+
+    The URL check is the same one delivery applies (app/core/url_safety.py)
+    — this server is what makes the request, so an internal address is not
+    the customer's to choose. Rejecting it here, with the reason, is much
+    better feedback than a subscription that saves cleanly and then only
+    ever shows blocked attempts in its delivery log.
+    """
+    if event not in EVENT_TYPES:
+        raise HTTPException(status_code=422, detail=f"event must be one of {sorted(EVENT_TYPES)}")
+    url = url.strip()
+    unsafe = rejection_reason(url)
+    if unsafe:
+        raise HTTPException(status_code=422, detail=unsafe)
+    return url
+
+
 async def _owned_subscription(sub_id: str, user_id: str) -> WebhookSubscription:
     try:
         sub = await WebhookSubscription.get(PydanticObjectId(sub_id))
@@ -68,15 +87,11 @@ async def list_subscriptions(current_user: User = Depends(get_current_user)):
 
 @router.post("/", status_code=201)
 async def create_subscription(body: SubscriptionIn, current_user: User = Depends(get_current_user)):
-    if body.event not in EVENT_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"event must be one of {sorted(EVENT_TYPES)}",
-        )
+    url = _validated(body.event, body.url)
     sub = WebhookSubscription(
         user_id=str(current_user.id),
         event=body.event,
-        url=body.url.strip(),
+        url=url,
         enabled=body.enabled,
         secret_encrypted=encrypt_secret(body.secret or ""),
     )
@@ -88,11 +103,10 @@ async def create_subscription(body: SubscriptionIn, current_user: User = Depends
 async def update_subscription(
     sub_id: str, body: SubscriptionIn, current_user: User = Depends(get_current_user)
 ):
-    if body.event not in EVENT_TYPES:
-        raise HTTPException(status_code=422, detail=f"event must be one of {sorted(EVENT_TYPES)}")
+    url = _validated(body.event, body.url)
     sub = await _owned_subscription(sub_id, str(current_user.id))
     sub.event = body.event
-    sub.url = body.url.strip()
+    sub.url = url
     sub.enabled = body.enabled
     if body.secret is not None:
         sub.secret_encrypted = encrypt_secret(body.secret)

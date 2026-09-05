@@ -422,7 +422,11 @@ export interface PendingApproval {
   arguments: Record<string, unknown>
   amount: number
   threshold: number
-  status: 'pending' | 'approved' | 'denied'
+  // 'approving' is brief and real: claimed the instant someone presses
+  // approve, before the action runs, so a second press cannot run it
+  // again. It only persists if the server died mid-action — in which case
+  // it correctly means "nobody knows whether this went through".
+  status: 'pending' | 'approving' | 'approved' | 'denied'
   created_at: string
   decided_at: string | null
   decided_by: string
