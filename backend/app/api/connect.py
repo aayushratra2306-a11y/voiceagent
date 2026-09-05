@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from multiprocessing.synchronize import Event as EventClass
 
+import psutil
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel
@@ -149,6 +150,75 @@ class _PooledWorker:
 
 _idle_pool: list[_PooledWorker] = []
 
+# Task 4.3 — the pool's current target size, grown and shrunk between
+# call_worker_pool_min and call_worker_pool_max by maintain_worker_pool_loop.
+# Seeded from the pre-4.3 fixed setting (call_worker_pool_size) so an
+# operator's existing .env keeps behaving exactly as before until they
+# actually set the new min/max — clamped into range in case that old value
+# sits outside whatever min/max ends up configured.
+_pool_target = min(max(settings.call_worker_pool_size, settings.call_worker_pool_min),
+                    settings.call_worker_pool_max)
+
+# Task 4.3 — set by connect() the moment a call has to fall back to a cold
+# spawn because the pool was empty: unambiguous evidence that demand
+# exceeded supply, checked and cleared once per autoscale tick.
+_pool_exhausted_since_last_check = False
+
+# How many consecutive quiet ticks (the pool was not exhausted) before
+# shrinking by one. Short growth reaction (immediate, on any exhaustion) but
+# slower to shrink — the manual's own tradeoff for autoscaling in general:
+# reacting instantly to a burst avoids callers ever seeing it; shrinking
+# eagerly would then just re-grow on the very next call and repeat forever.
+_SHRINK_AFTER_QUIET_TICKS = 4
+
+
+def next_pool_target(
+    current_target: int,
+    exhausted: bool,
+    quiet_ticks: int,
+    available_memory_mb: float,
+    pool_min: int,
+    pool_max: int,
+    min_free_memory_mb: int,
+    # Rough per-worker cost — see the latency note in config.py: a warm
+    # worker holds an imported pipecat stack before it has done anything
+    # call-specific, measured at roughly 300MB.
+    worker_memory_mb: int = 300,
+) -> int:
+    """Task 4.3's actual decision, pulled out as a pure function so it can be
+    tested without spawning a single real process.
+
+    Three rules, in priority order:
+      1. Demand beat supply since the last check (a cold-spawn fallback
+         happened) -> grow by one, but ONLY if there is comfortably enough
+         memory for another warm worker. Growing into an out-of-memory kill
+         during live calls is a worse outcome than the caller who paid the
+         slow cold-spawn path once.
+      2. The pool sat unclaimed for several checks running -> shrink by one.
+         Paying for idle capacity all night is exactly what the manual's own
+         framing of this task warns against.
+      3. Otherwise, hold steady.
+
+    Both directions are clamped to [pool_min, pool_max] — pool_max exists
+    specifically so unbounded growth under a sustained burst can't fill the
+    machine with idle workers once the burst passes, and pool_min exists so
+    a quiet server never scales all the way down to zero and starts paying
+    the full cold-start cost on every single call.
+    """
+    if exhausted:
+        if available_memory_mb < min_free_memory_mb + worker_memory_mb:
+            logger.warning(
+                f"[POOL] Demand exceeds supply but only {available_memory_mb:.0f}MB is free "
+                f"— holding at {current_target} rather than risking an OOM kill"
+            )
+            return current_target
+        return min(current_target + 1, pool_max)
+
+    if quiet_ticks >= _SHRINK_AFTER_QUIET_TICKS and current_target > pool_min:
+        return current_target - 1
+
+    return current_target
+
 
 def _spawn_pooled_worker() -> _PooledWorker:
     job_queue: mp.Queue = _MP.Queue()
@@ -168,18 +238,39 @@ def _spawn_pooled_worker() -> _PooledWorker:
 
 
 def _top_up_pool() -> None:
-    """Bring the pool back to size. Blocking (Process.start forks a process),
-    so callers on the event loop run it in an executor."""
-    while len(_idle_pool) < settings.call_worker_pool_size:
+    """Bring the pool to its current target. Blocking (Process.start forks a
+    process), so callers on the event loop run it in an executor."""
+    while len(_idle_pool) < _pool_target:
         _idle_pool.append(_spawn_pooled_worker())
 
 
+def _shrink_pool_by_one() -> None:
+    """The other half of _top_up_pool: retire one warm worker when the pool
+    is bigger than it needs to be. Terminated rather than sent the shutdown
+    sentinel — it is sitting in run_in_executor(None, job_queue.get) (see
+    pooled_worker_main), which nothing but an actual item on that queue or
+    the process dying will interrupt."""
+    if not _idle_pool:
+        return
+    worker = _idle_pool.pop()
+    worker.process.terminate()
+    worker.process.join(timeout=1)
+    logger.info(f"[POOL] Retired idle worker pid={worker.process.pid} — demand has settled")
+
+
 async def maintain_worker_pool_loop(interval_seconds: int = 15) -> None:
-    """Background loop (started from main.py's lifespan). Fills the pool at
-    startup and replaces workers that die while idle — a worker that fails
-    during import would otherwise silently shrink the pool to nothing and
-    every call would quietly fall back to the slow path."""
+    """Background loop (started from main.py's lifespan). Fills the pool to
+    its current target at startup, replaces workers that die while idle (a
+    worker that fails during import would otherwise silently shrink the pool
+    to nothing with every call quietly falling back to the slow path), and —
+    task 4.3 — grows or shrinks that target itself based on recent demand
+    and available memory. See next_pool_target()'s docstring for the actual
+    decision.
+    """
+    global _pool_target, _pool_exhausted_since_last_check
     loop = asyncio.get_event_loop()
+    quiet_ticks = 0
+
     while True:
         dead = [w for w in _idle_pool if not w.process.is_alive()]
         for w in dead:
@@ -187,10 +278,27 @@ async def maintain_worker_pool_loop(interval_seconds: int = 15) -> None:
             w.process.join(timeout=1)
             logger.warning(f"[POOL] Idle worker pid={w.process.pid} died before use, replacing")
 
+        exhausted, _pool_exhausted_since_last_check = _pool_exhausted_since_last_check, False
+        quiet_ticks = 0 if exhausted else quiet_ticks + 1
+
+        available_mb = psutil.virtual_memory().available / (1024 * 1024)
+        new_target = next_pool_target(
+            _pool_target, exhausted, quiet_ticks, available_mb,
+            settings.call_worker_pool_min, settings.call_worker_pool_max,
+            settings.pool_min_free_memory_mb,
+        )
+        if new_target != _pool_target:
+            logger.info(f"[POOL] Target {_pool_target} -> {new_target} "
+                        f"(exhausted={exhausted}, quiet_ticks={quiet_ticks})")
+            _pool_target = new_target
+
         before = len(_idle_pool)
-        await loop.run_in_executor(None, _top_up_pool)
+        if len(_idle_pool) > _pool_target:
+            await loop.run_in_executor(None, _shrink_pool_by_one)
+        else:
+            await loop.run_in_executor(None, _top_up_pool)
         if len(_idle_pool) != before:
-            logger.info(f"[POOL] {len(_idle_pool)} warm worker(s) ready")
+            logger.info(f"[POOL] {len(_idle_pool)} warm worker(s) ready (target {_pool_target})")
 
         await asyncio.sleep(interval_seconds)
 
@@ -346,6 +454,11 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
             # the original behaviour: spawn a worker for this call. Slower
             # to answer, but it answers, which beats queueing behind the
             # pool.
+            #
+            # Task 4.3 — this is the demand signal next_pool_target() acts
+            # on: unambiguous evidence that supply fell short this tick.
+            global _pool_exhausted_since_last_check
+            _pool_exhausted_since_last_check = True
             logger.warning("[POOL] Empty, spawning a cold worker for this call")
             answer_queue = _MP.Queue()
             ice_queue = _MP.Queue()
