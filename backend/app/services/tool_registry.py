@@ -167,6 +167,77 @@ def _render_map(mapping: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]
     return rendered
 
 
+# Enough for the real cases (a rename, a trailing slash, a canonical host)
+# without letting a chain of them eat a lookup's short timeout.
+MAX_REDIRECTS = 3
+# Only safe methods. Replaying a POST at a new URL could book or charge
+# twice, and no redirect is worth that risk.
+_REDIRECTABLE = {"GET", "HEAD"}
+
+
+async def _follow_redirects(client, tool: BotTool, response, url: str, headers: dict, plain_headers: dict):
+    """Follow a 3xx by hand, re-checking safety at every hop.
+
+    httpx does not follow redirects by default, and turning that on would
+    have been the wrong fix: `follow_redirects=True` checks nothing, so a
+    customer-configured URL answering "302 -> http://169.254.169.254/" would
+    walk the server straight into its own metadata service, which is exactly
+    what app/core/url_safety.py exists to prevent. Every hop is therefore
+    checked the same way the first URL was.
+
+    Found live on 2026-09-05: GitHub answers a renamed repository with a 301
+    and an empty body. Unfollowed, that reached the caller as "nothing was
+    found for that" — a lookup telling someone their record does not exist
+    because the API said "it is over here". A 3xx that cannot be followed is
+    reported as an error for the same reason: it is not a "not found".
+
+    Returns the final response, or a result dict if the chain was refused.
+    """
+    hops = 0
+    while 300 <= response.status_code < 400:
+        location = response.headers.get("location")
+        if not location or tool.method.upper() not in _REDIRECTABLE or hops >= MAX_REDIRECTS:
+            logger.warning(
+                f"[TOOL] {tool.name}: HTTP {response.status_code} not followed "
+                f"(location={location!r}, method={tool.method}, hops={hops})"
+            )
+            return {
+                "ok": False,
+                "error": f"http_{response.status_code}",
+                "status": response.status_code,
+                "message": (
+                    "That system redirected the request somewhere this could not follow. "
+                    "Tell the caller it is unavailable rather than saying nothing was found."
+                ),
+            }
+
+        target = str(httpx.URL(url).join(location))
+        unsafe = rejection_reason(target)
+        if unsafe:
+            logger.warning(f"[TOOL] {tool.name}: refused a redirect to {target} — {unsafe}")
+            return {
+                "ok": False,
+                "error": "blocked_url",
+                "message": "That system could not be reached. Tell the caller plainly rather than guessing an answer.",
+            }
+
+        # Same rule browsers use: a credential belongs to the host it was
+        # configured for, so crossing hosts drops it.
+        same_host = httpx.URL(target).host == httpx.URL(url).host
+        hop_headers = headers if same_host else plain_headers
+        if not same_host:
+            logger.info(f"[TOOL] {tool.name}: redirect crosses hosts — sending no credential")
+
+        hops += 1
+        logger.info(f"[TOOL] {tool.name}: following redirect to {target}")
+        url = target
+        # No params: whatever query the target needs is already in Location,
+        # and re-appending the original would duplicate it.
+        response = await client.request("GET", target, headers=hop_headers)
+
+    return response
+
+
 def _resolve_path(data: Any, path: str) -> Any:
     """Walk a dotted path ("data.order.status") into a parsed JSON response.
 
@@ -360,6 +431,10 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     }
     params = _render_map(tool.query, args)
     body = _render_map(tool.body, args) if tool.body else None
+    # Kept as they were before the credential went in: a redirect to another
+    # host is followed WITHOUT them, so an API key configured for one system
+    # is never handed to whatever another system points at.
+    plain_headers = dict(headers)
     _apply_auth(tool, headers, params)
 
     # Task 3.6: a lookup needs a much shorter fuse than the general default
@@ -377,6 +452,9 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
                 tool.method, url, headers=headers, params=params,
                 json=body if body else None,
             )
+            response = await _follow_redirects(client, tool, response, url, headers, plain_headers)
+            if isinstance(response, dict):     # refused mid-chain
+                return response
     except httpx.TimeoutException:
         logger.warning(f"[TOOL] {tool.name}: timed out after {timeout}s")
         return {

@@ -25,7 +25,7 @@ import pytest
 
 from app.core.crypto import encrypt_secret
 from app.models.approval import PendingApproval
-from app.models.bot_tool import BotTool
+from app.models.bot_tool import BotTool, ToolAuth
 from app.models.payment import PaymentSession
 from app.models.webhook import WebhookOutboxItem, WebhookSubscription
 from app.pipeline import call_context
@@ -755,3 +755,158 @@ async def test_two_tools_with_the_same_name_do_not_both_reach_the_model():
 
     await a.delete()
     await b.delete()
+
+
+# =========================================================================
+# 10. A redirect reached the caller as "nothing was found"
+#
+# Found live 2026-09-05 while testing 3.6 against GitHub: a renamed repo is
+# answered with 301 and an empty body. httpx does not follow redirects by
+# default, so every mapped field resolved to None and 3.6's "200 with
+# nothing in it means not found" path fired — a lookup telling the caller
+# their record does not exist because the API said "it is over here".
+#
+# The fix could not be follow_redirects=True: that checks nothing, and the
+# whole point of section 5 above is that this server must not fetch an
+# address just because something asked it to. So each hop is re-checked.
+# =========================================================================
+
+
+class _RedirectingClient(_Client):
+    """Answers with a queue of responses, one per request."""
+
+    def __init__(self, responses):
+        super().__init__()
+        self._responses = list(responses)
+        self.requests: list[dict] = []
+
+    async def request(self, method, url, **kw):
+        self.calls += 1
+        self.seen = {"method": method, "url": url, **kw}
+        self.requests.append(self.seen)
+        return self._responses.pop(0) if self._responses else _Resp()
+
+
+def _redirect(to: str, status: int = 301) -> _Resp:
+    resp = _Resp(status=status, text="")
+    resp.headers = {"location": to}
+    return resp
+
+
+def _final(text: str = '{"stargazers_count": 12, "owner": {"login": "facebook"}}') -> _Resp:
+    resp = _Resp(status=200, text=text)
+    resp.headers = {}
+    return resp
+
+
+async def test_a_redirect_is_followed_rather_than_reported_as_not_found(monkeypatch):
+    """The live case exactly: a 301 to the real record."""
+    client = _RedirectingClient([
+        _redirect("https://api.test/repos/facebook/react"),
+        _final(),
+    ])
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+    tool = BotTool(
+        bot_id="bot-1", name="lookup_repo", description="Look up.", kind="http",
+        method="GET", url="https://api.test/repos/facebook/React",
+        field_map={"stars": "stargazers_count", "owner_name": "owner.login"},
+    )
+
+    result = await call_http_tool(tool, {})
+
+    assert result["ok"] is True
+    assert result.get("found") is not False, "a redirect was reported as a missing record"
+    assert result["fields"]["stars"] == 12
+    assert result["fields"]["owner_name"] == "facebook"
+
+
+async def test_a_redirect_into_the_metadata_service_is_refused(monkeypatch):
+    """The reason follow_redirects=True was not the fix. A customer's own
+    endpoint answering "302 -> 169.254.169.254" would otherwise walk this
+    server into its own service-account token."""
+    client = _RedirectingClient([
+        _redirect("http://169.254.169.254/computeMetadata/v1/", status=302),
+        _final('{"token": "stolen"}'),
+    ])
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+    tool = BotTool(
+        bot_id="bot-1", name="lookup", description="Look up.", kind="http",
+        method="GET", url="https://api.test/x",
+    )
+
+    result = await call_http_tool(tool, {})
+
+    assert result["ok"] is False
+    assert result["error"] == "blocked_url"
+    assert client.calls == 1, "followed a redirect to an internal address"
+
+
+async def test_a_redirect_to_another_host_does_not_carry_the_credential(monkeypatch):
+    """A key configured for one system must not be handed to whatever
+    another system points at — the same rule browsers apply."""
+    client = _RedirectingClient([
+        _redirect("https://somewhere-else.test/x", status=302),
+        _final(),
+    ])
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+    tool = BotTool(
+        bot_id="bot-1", name="lookup", description="Look up.", kind="http",
+        method="GET", url="https://api.test/x",
+        auth=ToolAuth(kind="bearer", name="", secret_encrypted=encrypt_secret("sk_live_KEY")),
+    )
+
+    await call_http_tool(tool, {})
+
+    first, second = client.requests[0], client.requests[1]
+    assert "Bearer sk_live_KEY" in first["headers"]["Authorization"]
+    assert "Authorization" not in second["headers"], "leaked the API key to another host"
+
+
+async def test_a_same_host_redirect_keeps_the_credential(monkeypatch):
+    """The common case — a trailing slash, a canonical path — must still
+    authenticate, or every redirect would turn into a 401."""
+    client = _RedirectingClient([
+        _redirect("https://api.test/x/", status=301),
+        _final(),
+    ])
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+    tool = BotTool(
+        bot_id="bot-1", name="lookup", description="Look up.", kind="http",
+        method="GET", url="https://api.test/x",
+        auth=ToolAuth(kind="bearer", name="", secret_encrypted=encrypt_secret("sk_live_KEY")),
+    )
+
+    await call_http_tool(tool, {})
+
+    assert "Bearer sk_live_KEY" in client.requests[1]["headers"]["Authorization"]
+
+
+async def test_a_redirected_write_is_not_replayed(monkeypatch):
+    """Replaying a POST at a new URL could book or charge twice. It is
+    reported as an error — never as a missing record."""
+    client = _RedirectingClient([_redirect("https://api.test/orders/new", status=307)])
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+    tool = BotTool(
+        bot_id="bot-1", name="book", description="Book.", kind="http",
+        method="POST", url="https://api.test/orders",
+    )
+
+    result = await call_http_tool(tool, {})
+
+    assert result["ok"] is False
+    assert client.calls == 1, "replayed a write at the redirect target"
+    assert "found" not in result
+
+
+async def test_a_redirect_loop_gives_up_rather_than_spinning(monkeypatch):
+    client = _RedirectingClient([_redirect("https://api.test/x") for _ in range(10)])
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: client)
+    tool = BotTool(
+        bot_id="bot-1", name="lookup", description="Look up.", kind="http",
+        method="GET", url="https://api.test/x",
+    )
+
+    result = await call_http_tool(tool, {})
+
+    assert result["ok"] is False
+    assert client.calls <= tool_registry.MAX_REDIRECTS + 1, client.calls
