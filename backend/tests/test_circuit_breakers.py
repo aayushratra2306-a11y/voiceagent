@@ -182,6 +182,61 @@ def test_one_process_trip_is_visible_to_another():
     assert breaker.state("cartesia") == "open", "this process should see the other one's trip"
 
 
+def test_the_healthy_path_never_takes_a_write_lock():
+    """Found on a second read of Phase 4.
+
+    Every tool call on every live call passes through allows() and then
+    record_success(), each from its own process (task 2.4). SQLite permits
+    exactly ONE writer at a time — so opening a write transaction to answer
+    "is anything wrong?" put a server-wide lock in front of every customer
+    API request, to discover, virtually always, that nothing was. Six
+    simultaneous calls would queue behind each other for it.
+
+    Asserted by watching what actually reaches SQLite: on the healthy path
+    there must be no BEGIN IMMEDIATE at all.
+    """
+    breaker.configure("cartesia", FAST)
+    conn = breaker._connect()
+    statements: list[str] = []
+    # sqlite3's own tracer: Connection.execute is read-only and cannot be
+    # wrapped, and this reports exactly what reached the engine anyway.
+    conn.set_trace_callback(statements.append)
+    try:
+        assert breaker.allows("cartesia") is True
+        breaker.record_success("cartesia")
+    finally:
+        conn.set_trace_callback(None)
+
+    took_write_lock = [s for s in statements if "BEGIN IMMEDIATE" in s]
+    assert not took_write_lock, (
+        f"the healthy path opened {len(took_write_lock)} write transaction(s) — "
+        f"that serialises every tool call on the server behind one lock"
+    )
+
+
+def test_the_half_open_trial_still_takes_the_lock_it_needs():
+    """The optimisation must not go so far that two processes can both
+    claim the trial — that is the stampede half-open exists to prevent, and
+    it needs a real write transaction to stay atomic."""
+    breaker.configure("cartesia", FAST)
+    for _ in range(3):
+        breaker.record_failure("cartesia", "timeout")
+    time.sleep(0.25)
+
+    conn = breaker._connect()
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        assert breaker.allows("cartesia") is True  # the trial
+    finally:
+        conn.set_trace_callback(None)
+
+    assert any("BEGIN IMMEDIATE" in s for s in statements), (
+        "claiming the half-open trial no longer takes the write lock, so two "
+        "processes could both decide they are the trial"
+    )
+
+
 def test_the_snapshot_reports_enough_to_act_on():
     """A tripped breaker means callers are being served by a fallback.
     Whoever is on call needs to be able to see that without reading logs."""

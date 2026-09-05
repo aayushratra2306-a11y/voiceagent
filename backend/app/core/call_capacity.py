@@ -12,67 +12,119 @@ system goes over its own limit at the worst possible moment — the two-step
 version of this check is worse than not having a limit, because it creates
 the illusion of one.
 
-Two backends behind one interface, chosen the same way task 4.1 frames it:
-correct for what this project actually runs today (a single API process, so
-a lock in that process's own memory is genuinely atomic — no message ever
-has to leave the process for the check to be correct), with the Redis path
-ready for the day this project runs API replicas behind a load balancer,
-at which point an in-process lock stops being enough because two replicas
-would each allow up to the limit independently.
+**Slots are held by name, and can always be recovered.** That is the part
+worth reading, and the part a first pass at this got wrong.
+
+A counter that is only ever INCR'd and DECR'd cannot survive the process
+dying, and this process is *designed* to die: task 4.7's watchdog restarts
+it deliberately when a dependency stays broken. With a plain counter in
+Redis, every one of those restarts would strand however many calls were
+live at the time — permanently, since the registry that knew about them
+(`connect.py`'s `_active_calls`) is in-memory and comes back empty. After a
+few restarts the count would sit at the limit forever and the server would
+refuse every caller while running none. Exactly the "decrement reliably
+when a call ends, INCLUDING ON CRASHES" the manual asks for, and exactly
+what a naive counter cannot do.
+
+So a slot is a named member of a Redis sorted set, scored by the time it was
+taken, and there are two independent ways it comes back:
+
+  - Every acquire first sweeps out anything older than SLOT_TTL_SECONDS.
+    No call can outlive that (call_worker.py caps a call at one hour), so
+    an entry older than it is definitionally dead — whoever held it is not
+    coming back to release it.
+  - A node clears its OWN leftovers at startup. When this process boots,
+    `_active_calls` is empty by definition, so any slot still tagged with
+    this node's id belongs to a call that died with the last incarnation.
+    This is what makes a watchdog restart cost nothing at all rather than
+    an hour of degraded capacity.
+
+The in-process backend keeps the same token-based shape even though it
+cannot leak across a restart (its state dies with the process, which is
+exactly right) — one interface, so the difference between one replica and
+several is a setting and not a second code path.
 """
 
 from __future__ import annotations
 
 import asyncio
+import uuid
 
 from loguru import logger
 
 from app.core.config import settings
 
-# Task 4.5's own tip: an atomic INCR-then-compare, via a Lua script so the
-# read, the check and the write happen as a single operation on the Redis
-# server — nothing else can run between them, which is the same guarantee
-# asyncio.Lock gives the in-process version below.
+_KEY = "voiceagent:active_calls"
+
+# Nothing can legitimately hold a slot for longer than this. call_worker.py's
+# MAX_CALL_LIFETIME_SECONDS force-ends any call at one hour; the margin on
+# top is for the teardown that follows. Not imported from call_worker on
+# purpose — that module pulls in the whole pipecat stack, and this one is
+# imported by the metrics and health endpoints.
+SLOT_TTL_SECONDS = 3600 + 300
+
+# Identifies this process's slots so it can clean up after its own previous
+# incarnation without touching another replica's live calls.
+NODE_ID = uuid.uuid4().hex[:12]
+
+# Task 4.5's own tip, as a Lua script so the sweep, the count, the check and
+# the write happen as ONE operation on the Redis server: nothing else can run
+# between them, which is the same guarantee asyncio.Lock gives the
+# in-process version below.
 _LUA_TRY_ACQUIRE = """
-local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local cutoff = tonumber(ARGV[2]) - tonumber(ARGV[3])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', cutoff)
+local current = redis.call('ZCARD', KEYS[1])
 if current >= tonumber(ARGV[1]) then
     return 0
 end
-redis.call('INCR', KEYS[1])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[4])
 return 1
 """
 
-_KEY = "voiceagent:active_calls"
+
+def _new_token() -> str:
+    """Node-tagged so a restart can find its own abandoned slots, and unique
+    so two calls never collide on one member name."""
+    return f"{NODE_ID}:{uuid.uuid4().hex[:16]}"
 
 
 class _InProcessCapacity:
     """Correct as long as there is exactly one API process — see the module
     docstring. A plain asyncio.Lock is genuinely atomic here because nothing
-    else can interleave with an `async with` block on the same event loop."""
+    else can interleave with an `async with` block on the same event loop.
+
+    Nothing to recover on restart: this state lives and dies with the
+    process, which is the correct behaviour rather than a limitation.
+    """
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._count = 0
+        self._held: set[str] = set()
 
-    async def try_acquire(self, limit: int) -> bool:
+    async def try_acquire(self, limit: int) -> str | None:
+        token = _new_token()
         if limit <= 0:
-            return True  # 0 means "no cap", per config.py's own doc
+            return token  # 0 means "no cap", per config.py's own doc
         async with self._lock:
-            if self._count >= limit:
-                return False
-            self._count += 1
-            return True
+            if len(self._held) >= limit:
+                return None
+            self._held.add(token)
+            return token
 
-    async def release(self) -> None:
+    async def release(self, token: str) -> None:
         async with self._lock:
-            # max(0, ...): release() runs in a `finally`, and a bug or a
-            # double-release must never take this negative — a negative
-            # count would make the cap allow MORE calls than the limit,
-            # silently defeating the entire feature.
-            self._count = max(0, self._count - 1)
+            # discard, not remove: release() runs in a `finally`, and a
+            # double release must never raise, nor take the count negative
+            # — a negative count would let MORE calls through than the
+            # limit, silently defeating the entire feature.
+            self._held.discard(token)
 
     async def current(self) -> int:
-        return self._count
+        return len(self._held)
+
+    async def release_stale_for_this_node(self) -> int:
+        return 0  # nothing survives this process, so nothing to clean up
 
 
 class _RedisCapacity:
@@ -83,24 +135,47 @@ class _RedisCapacity:
         self._redis = redis_client
         self._script = redis_client.register_script(_LUA_TRY_ACQUIRE)
 
-    async def try_acquire(self, limit: int) -> bool:
-        if limit <= 0:
-            return True
-        result = await self._script(keys=[_KEY], args=[limit])
-        return bool(result)
+    async def _now(self) -> float:
+        """Redis's clock, not this process's.
 
-    async def release(self) -> None:
-        # DECR can legally go negative under a crash-then-restart race (a
-        # release for a call an earlier process instance never got to
-        # count); GET/compare/SET-to-0 is not worth the extra round trip
-        # for a counter that self-heals as soon as active calls end.
-        new_value = await self._redis.decr(_KEY)
-        if new_value < 0:
-            await self._redis.set(_KEY, 0)
+        Replicas do not agree on the time, and a slot's age decides when it
+        is swept. One replica running a few minutes fast would otherwise
+        expire another's live calls.
+        """
+        seconds, microseconds = await self._redis.time()
+        return float(seconds) + float(microseconds) / 1_000_000
+
+    async def try_acquire(self, limit: int) -> str | None:
+        token = _new_token()
+        if limit <= 0:
+            return token
+        now = await self._now()
+        granted = await self._script(
+            keys=[_KEY], args=[limit, now, SLOT_TTL_SECONDS, token]
+        )
+        return token if granted else None
+
+    async def release(self, token: str) -> None:
+        await self._redis.zrem(_KEY, token)
 
     async def current(self) -> int:
-        value = await self._redis.get(_KEY)
-        return max(0, int(value or 0))
+        now = await self._now()
+        await self._redis.zremrangebyscore(_KEY, "-inf", now - SLOT_TTL_SECONDS)
+        return int(await self._redis.zcard(_KEY))
+
+    async def release_stale_for_this_node(self) -> int:
+        """Drop every slot tagged with THIS node id.
+
+        Safe to call only at startup, and only then: at that moment this
+        process is running no calls at all, so anything still carrying its
+        node id is a leftover from the incarnation that died. Another
+        replica's slots have a different id and are never touched.
+        """
+        members = await self._redis.zrange(_KEY, 0, -1)
+        stale = [m for m in members if str(m).startswith(f"{NODE_ID}:")]
+        if stale:
+            await self._redis.zrem(_KEY, *stale)
+        return len(stale)
 
 
 _backend = None
@@ -115,7 +190,7 @@ def _get_backend():
         import redis.asyncio as redis
 
         logger.info(f"[CAPACITY] Using Redis for the call concurrency cap ({settings.redis_url})")
-        _backend = _RedisCapacity(redis.from_url(settings.redis_url))
+        _backend = _RedisCapacity(redis.from_url(settings.redis_url, decode_responses=True))
     else:
         _backend = _InProcessCapacity()
     return _backend
@@ -128,21 +203,45 @@ def use_backend(backend) -> None:
     _backend = backend
 
 
-async def try_acquire_call_slot() -> bool:
+async def try_acquire_call_slot() -> str | None:
     """Atomically claim one of the limited call slots.
 
-    True: a slot was claimed — the caller MUST call release_call_slot()
-    exactly once when the call ends, in a `finally`, or the slot leaks.
-    False: at capacity. Nothing was claimed; there is nothing to release.
+    Returns a slot TOKEN on success — the caller MUST pass it back to
+    release_call_slot() exactly once when the call ends, in a `finally`, or
+    the slot is held until its TTL sweeps it.
+    None means at capacity: nothing was claimed, and there is nothing to
+    release.
     """
     return await _get_backend().try_acquire(settings.max_concurrent_calls)
 
 
-async def release_call_slot() -> None:
-    await _get_backend().release()
+async def release_call_slot(token: str | None) -> None:
+    """Give a slot back. A None token (nothing was ever acquired) is a
+    deliberate no-op, so callers can release unconditionally in a `finally`
+    without first working out whether they hold anything."""
+    if token is None:
+        return
+    await _get_backend().release(token)
 
 
 async def active_call_count() -> int:
     """For the health/metrics endpoints — how close to the ceiling this
     node currently is."""
     return await _get_backend().current()
+
+
+async def release_slots_from_a_previous_life() -> None:
+    """Called once at startup (main.py's lifespan).
+
+    Task 4.7's watchdog restarts this process on purpose when a dependency
+    stays broken, and a crash can do the same at any time. Either way the
+    calls that were live are gone but their slots are not — this is what
+    stops a restart quietly costing capacity until the TTL catches up an
+    hour later.
+    """
+    released = await _get_backend().release_stale_for_this_node()
+    if released:
+        logger.warning(
+            f"[CAPACITY] Released {released} call slot(s) left behind by a previous run of "
+            f"this node — those calls did not survive the restart"
+        )

@@ -38,6 +38,7 @@ the right call and not a shortcut.
 
 from __future__ import annotations
 
+from loguru import logger
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, generate_latest
 
 from app.core import breaker
@@ -93,18 +94,54 @@ async def _build_registry() -> CollectorRegistry:
         ["name"], registry=registry,
     )
 
+    collection_errors = Gauge(
+        "voiceagent_metrics_collection_errors",
+        "How many of this scrape's own readings failed to collect (0 = a complete scrape)",
+        registry=registry,
+    )
+
     from app.api import connect as connect_module
 
-    active_calls.set(await active_call_count())
-    call_capacity_limit.set(settings.max_concurrent_calls)
-    warm_pool_size.set(len(connect_module._idle_pool))
-    warm_pool_target.set(connect_module._pool_target)
-    mongo_expected_max_connections.set(expected_max_connections())
+    # Each reading collected independently, because a monitoring endpoint
+    # that returns nothing when one dependency is broken is useless exactly
+    # when it is needed most. If Redis is unreachable, the active-call count
+    # is unknowable — but the circuit breakers, which are local and are very
+    # likely to say WHY, still are not. One failed reading must not take the
+    # rest of the scrape with it.
+    failures = 0
 
-    for name, info in breaker.snapshot().items():
-        breaker_state.labels(name=name).set(_BREAKER_STATE_VALUE.get(info["state"], -1))
-        breaker_trips.labels(name=name).set(info["trips"])
+    def _collect(gauge, produce, *labels):
+        nonlocal failures
+        try:
+            target = gauge.labels(*labels) if labels else gauge
+            target.set(produce())
+        except Exception as e:
+            failures += 1
+            logger.warning(f"[METRICS] could not collect {gauge._name}: {type(e).__name__}: {e}")
 
+    try:
+        active_calls.set(await active_call_count())
+    except Exception as e:
+        failures += 1
+        logger.warning(f"[METRICS] could not collect active call count: {type(e).__name__}: {e}")
+
+    _collect(call_capacity_limit, lambda: settings.max_concurrent_calls)
+    _collect(warm_pool_size, lambda: len(connect_module._idle_pool))
+    _collect(warm_pool_target, lambda: connect_module._pool_target)
+    _collect(mongo_expected_max_connections, expected_max_connections)
+
+    try:
+        for name, info in breaker.snapshot().items():
+            breaker_state.labels(name=name).set(_BREAKER_STATE_VALUE.get(info["state"], -1))
+            breaker_trips.labels(name=name).set(info["trips"])
+    except Exception as e:
+        failures += 1
+        logger.warning(f"[METRICS] could not collect breaker states: {type(e).__name__}: {e}")
+
+    # Reported rather than hidden: a scrape that silently dropped half its
+    # readings looks identical to a healthy quiet system, and an alert on
+    # this is how you find out the monitoring itself is broken.
+    collection_errors.set(failures)
     return registry
 
 

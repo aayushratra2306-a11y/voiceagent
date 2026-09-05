@@ -194,6 +194,14 @@ class Settings(BaseSettings):
     # Task 4.9 — the Prometheus scrape endpoint at /metrics. Reports counts
     # and timings only: no transcripts, no caller data, no secrets.
     metrics_enabled: bool = True
+    # ...but it DOES report which customer hostnames have tripped a circuit
+    # breaker, and how many calls are live right now, so it is never served
+    # to an anonymous request. A logged-in user always passes; setting this
+    # additionally lets a Prometheus scraper authenticate with a static
+    # bearer token, which is what Prometheus actually supports
+    # (`authorization: credentials:` in a scrape config). Generate one with
+    # `openssl rand -hex 32`.
+    metrics_token: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

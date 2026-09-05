@@ -128,21 +128,61 @@ class ProviderHealthObserver(BaseObserver):
 
     async def on_push_frame(self, data: FramePushed) -> None:
         try:
+            # `data.source` — who is pushing this frame RIGHT NOW — and never
+            # `frame.processor`, which is a different question with a
+            # dangerously similar-looking answer.
+            #
+            # FOUND on a second read of Phase 4, and it made this whole task
+            # close to useless. An ErrorFrame is pushed UPSTREAM and observed
+            # once per hop, and pipecat stamps `frame.processor` with the
+            # ORIGINATING service and never changes it. So keying on
+            # frame.processor recorded the same single failure again at every
+            # processor the frame passed through on its way back up the
+            # pipeline — about ten of them, since Cartesia sits near the end
+            # and the frame travels all the way to the front.
+            #
+            # With failure_threshold=3, that meant ONE transient error opened
+            # the breaker instantly and switched every following call to the
+            # local backup. The "3 failures in 45 seconds" this is configured
+            # for was never actually reachable: every error was worth ten.
+            #
+            # `data.source` is the provider itself for exactly one of those
+            # hops — the first — which is precisely one event per real
+            # failure.
+            name = _breaker_for(data.source)
+            if name is None:
+                return
+
             frame = data.frame
 
             if isinstance(frame, ErrorFrame):
-                # ErrorFrame carries the processor that raised it, which is
-                # the only reliable way to tell whose outage this is: by the
-                # time the frame reaches anywhere useful, the text alone
-                # ("Unknown error occurred") says nothing about the source.
-                name = _breaker_for(frame.processor) or _breaker_for(data.source)
-                if name:
-                    breaker.record_failure(name, frame.error[:200])
-                    self._reported.discard(name)
+                # Both conditions, not either: the pusher must be a provider
+                # AND must be the one that actually raised this.
+                #
+                # `data.source` alone is not enough, because the pipeline
+                # order is stt -> llm -> tts and an ErrorFrame goes UPSTREAM:
+                # a Cartesia failure is relayed back through the Groq service
+                # and the Deepgram service, both of which are themselves
+                # known providers. Keying on the source alone recorded one
+                # provider's outage against all three — and would then fail
+                # the next call over to local Whisper and OpenAI as well,
+                # over an error neither of them had anything to do with.
+                #
+                # pipecat stamps `processor` on the frame at push_error()
+                # time and never changes it, which is exactly what makes it
+                # the right tiebreak here even though it is the wrong thing
+                # to key on by itself.
+                origin = frame.processor
+                if origin is not None and origin is not data.source:
+                    return  # just passing through on its way upstream
+                breaker.record_failure(name, frame.error[:200])
+                self._reported.discard(name)
                 return
 
-            name = _breaker_for(data.source)
-            if name is None or name in self._reported:
+            # One success per provider per call is enough to close a breaker
+            # (see _reported): a healthy call produces thousands of audio
+            # frames and every one of them would otherwise be a disk write.
+            if name in self._reported:
                 return
             if isinstance(frame, _SUCCESS_FRAMES[name]):
                 self._reported.add(name)
@@ -184,13 +224,36 @@ def fallback_for(name: str) -> str | None:
     return backup
 
 
+# Whether a model is on disk changes about once in the life of a machine
+# (someone runs scripts/prefetch_local_models.py), but the answer was being
+# recomputed on every health check, every metrics scrape and every call
+# start — each one a huggingface-hub cache lookup and a directory glob.
+# Cached for a minute: long enough to keep that off the hot paths, short
+# enough that an operator who has just prefetched the models does not sit
+# there wondering why the report still says they are missing.
+_READINESS_TTL_SECONDS = 60.0
+_readiness_cache: dict[str, tuple[float, tuple[bool, str]]] = {}
+
+
 def backup_is_ready(backup: str) -> tuple[bool, str]:
     """Can this machine actually run the backup right now?
 
     Checked at call start, and cheaply — an import and a directory listing,
-    no model loading. The expensive part (loading weights) happens inside
-    the service itself, and by then it is too late to change our mind.
+    no model loading, and cached briefly on top of that. The expensive part
+    (loading weights) happens inside the service itself, and by then it is
+    too late to change our mind.
     """
+    import time
+
+    cached = _readiness_cache.get(backup)
+    if cached is not None and time.monotonic() - cached[0] < _READINESS_TTL_SECONDS:
+        return cached[1]
+    answer = _check_backup(backup)
+    _readiness_cache[backup] = (time.monotonic(), answer)
+    return answer
+
+
+def _check_backup(backup: str) -> tuple[bool, str]:
     if backup == "openai":
         if not settings.openai_api_key:
             return False, "OPENAI_API_KEY is not configured"

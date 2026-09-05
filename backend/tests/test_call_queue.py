@@ -119,6 +119,51 @@ async def test_a_job_still_being_worked_is_not_reclaimed_out_from_under_its_work
     assert recovered == []
 
 
+async def test_the_stream_does_not_grow_without_limit(monkeypatch):
+    """Found on a second read of Phase 4.
+
+    ack() removes an entry from the consumer group's pending list — which
+    is what stops it being redelivered — but it does NOT remove it from the
+    stream, and nothing else did either. Every call ever queued would have
+    stayed resident in Redis, several KB of SDP at a time, for the life of
+    the server.
+    """
+    monkeypatch.setattr(call_queue, "MAX_STREAM_ENTRIES", 5)
+
+    for i in range(25):
+        entry = await call_queue.enqueue(
+            BOT_CONFIG, sdp=f"offer-{i}", sdp_type="offer", pc_id=None
+        )
+        await call_queue.ack(entry)
+
+    client = call_queue._client()
+    try:
+        length = await client.xlen(call_queue.STREAM_KEY)
+    finally:
+        await client.aclose()
+
+    assert length < 25, (
+        f"the stream still holds {length} entries after 25 acked jobs — acking "
+        f"does not delete, so nothing was ever trimming it"
+    )
+
+
+async def test_trimming_never_drops_a_job_still_waiting_to_be_claimed():
+    """The cap is a backlog ceiling, not a queue depth limit. A handful of
+    jobs must still all be claimable."""
+    for i in range(5):
+        await call_queue.enqueue(BOT_CONFIG, sdp=f"offer-{i}", sdp_type="offer", pc_id=None)
+
+    claimed = []
+    while True:
+        job = await call_queue.claim_one("worker-1", block_ms=50)
+        if job is None:
+            break
+        claimed.append(job.sdp)
+
+    assert sorted(claimed) == [f"offer-{i}" for i in range(5)]
+
+
 async def test_calling_without_redis_configured_fails_loudly(monkeypatch):
     """This module must never be reachable by accident — see its own
     docstring on why it isn't the live default. A clear error here beats a

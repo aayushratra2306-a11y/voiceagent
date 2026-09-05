@@ -30,7 +30,22 @@
 	handle /documents/* {
 		reverse_proxy backend:8080
 	}
+	# Public liveness check — Docker's HEALTHCHECK and any load balancer
+	# need this without credentials, so its body is deliberately just
+	# {"status": "ok"}. Anything worth reading lives behind /health/detail.
 	handle /health {
+		reverse_proxy backend:8080
+	}
+
+	# Task 4.7/4.9 — the operator's views. Both AUTHENTICATED at the
+	# application layer (a logged-in user, or METRICS_TOKEN for a
+	# Prometheus scraper), which is what makes them safe to route publicly
+	# at all: between them they report which customer API hostnames have
+	# tripped a circuit breaker and how many calls are live right now.
+	handle /health/* {
+		reverse_proxy backend:8080
+	}
+	handle /metrics {
 		reverse_proxy backend:8080
 	}
 

@@ -42,8 +42,9 @@ def _cap(monkeypatch):
 
 
 async def test_slots_are_available_up_to_the_limit():
-    for _ in range(3):
-        assert await try_acquire_call_slot() is True
+    tokens = [await try_acquire_call_slot() for _ in range(3)]
+    assert all(t is not None for t in tokens)
+    assert len(set(tokens)) == 3, "two calls were handed the same slot token"
     assert await active_call_count() == 3
 
 
@@ -51,37 +52,44 @@ async def test_the_next_call_past_the_limit_is_refused():
     for _ in range(3):
         await try_acquire_call_slot()
 
-    assert await try_acquire_call_slot() is False
+    assert await try_acquire_call_slot() is None
     assert await active_call_count() == 3, "a refused acquire must not still count"
 
 
 async def test_a_released_slot_can_be_reused():
-    for _ in range(3):
-        await try_acquire_call_slot()
-    assert await try_acquire_call_slot() is False
+    tokens = [await try_acquire_call_slot() for _ in range(3)]
+    assert await try_acquire_call_slot() is None
 
-    await release_call_slot()
+    await release_call_slot(tokens[0])
 
-    assert await try_acquire_call_slot() is True
+    assert await try_acquire_call_slot() is not None
 
 
-async def test_release_never_goes_negative():
-    """A double-release (a bug elsewhere, or a call ending twice) must not
-    push the count below zero — a negative count would let more calls
-    through than the configured limit, silently defeating the cap."""
-    await release_call_slot()
-    await release_call_slot()
-    await release_call_slot()
+async def test_releasing_the_same_slot_twice_frees_exactly_one():
+    """A double release (a bug elsewhere, or a call ending twice) must not
+    hand back capacity that was never taken — with a bare counter that
+    would go negative and let MORE calls through than the configured
+    limit, silently defeating the cap. Named slots make it idempotent."""
+    tokens = [await try_acquire_call_slot() for _ in range(3)]
 
+    await release_call_slot(tokens[0])
+    await release_call_slot(tokens[0])
+    await release_call_slot(tokens[0])
+
+    assert await active_call_count() == 2, "a repeated release freed slots twice"
+
+
+async def test_releasing_nothing_is_a_safe_no_op():
+    """Callers release in a `finally` without first working out whether
+    they hold anything."""
+    await release_call_slot(None)
     assert await active_call_count() == 0
-    for _ in range(3):
-        assert await try_acquire_call_slot() is True
 
 
 async def test_a_zero_limit_means_no_cap(monkeypatch):
     monkeypatch.setattr(call_capacity.settings, "max_concurrent_calls", 0)
     for _ in range(50):
-        assert await try_acquire_call_slot() is True
+        assert await try_acquire_call_slot() is not None
 
 
 async def test_concurrent_acquires_never_exceed_the_limit():
@@ -89,7 +97,9 @@ async def test_concurrent_acquires_never_exceed_the_limit():
     race would show up as more than 3 successes."""
     results = await asyncio.gather(*[try_acquire_call_slot() for _ in range(20)])
 
-    assert sum(results) == 3, f"expected exactly 3 slots granted, got {sum(results)}"
+    granted = [t for t in results if t is not None]
+    assert len(granted) == 3, f"expected exactly 3 slots granted, got {len(granted)}"
+    assert len(set(granted)) == 3, "the same slot was granted to two callers"
     assert await active_call_count() == 3
 
 
@@ -241,6 +251,100 @@ async def test_a_setup_timeout_releases_the_slot_it_acquired(monkeypatch):
 
     assert excinfo.value.status_code == 504
     assert await active_call_count() == before, "the acquired slot was never released"
+
+
+# ---------------------------------------------------------------------------
+# Surviving a restart (the Redis backend)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def redis_capacity(monkeypatch):
+    """The real _RedisCapacity against an in-memory Redis, so the Lua
+    script, the sorted set and the sweep are all genuinely exercised
+    rather than mocked into agreeing with me."""
+    import fakeredis.aioredis as fakeredis
+
+    from app.core.call_capacity import _RedisCapacity
+
+    backend = _RedisCapacity(fakeredis.FakeRedis(decode_responses=True))
+    use_backend(backend)
+    yield backend
+    use_backend(_InProcessCapacity())
+
+
+async def test_the_redis_backend_enforces_the_same_limit(redis_capacity):
+    tokens = [await try_acquire_call_slot() for _ in range(3)]
+    assert all(t is not None for t in tokens)
+    assert await try_acquire_call_slot() is None
+    assert await active_call_count() == 3
+
+
+async def test_a_restart_does_not_permanently_cost_capacity(redis_capacity, monkeypatch):
+    """The defect a second read of Phase 4 turned up, and it would have
+    been a slow-acting disaster.
+
+    Task 4.7's watchdog restarts this process ON PURPOSE when a dependency
+    stays broken. The in-memory registry of live calls comes back empty, so
+    nothing would ever release the slots those calls were holding. With a
+    bare INCR/DECR counter in Redis, every restart permanently burned
+    however many calls were live — and after enough of them the server
+    would refuse every caller while running none, with no way back except
+    someone noticing and clearing the key by hand.
+    """
+    for _ in range(3):
+        await try_acquire_call_slot()
+    assert await active_call_count() == 3
+
+    # The process dies and comes back: same node, brand new (empty) call
+    # registry, nothing left that knows those tokens.
+    await call_capacity.release_slots_from_a_previous_life()
+
+    assert await active_call_count() == 0, "the restart stranded its own slots"
+    assert await try_acquire_call_slot() is not None
+
+
+async def test_a_restart_never_touches_another_replicas_live_calls(redis_capacity, monkeypatch):
+    """The cleanup is safe precisely because it is scoped to this node.
+    A second replica restarting must not free the slots of calls that are
+    still genuinely in progress somewhere else."""
+    # Scored NOW — this stands for a call that is genuinely in progress on
+    # another replica right this second, not an old leftover. (Dating it in
+    # the past would just prove the TTL sweep works, which is the test
+    # below, not this one.)
+    now_seconds, _micros = await redis_capacity._redis.time()
+    other_node_token = "othernode1234:aaaaaaaaaaaaaaaa"
+    await redis_capacity._redis.zadd(
+        "voiceagent:active_calls", {other_node_token: float(now_seconds)}
+    )
+
+    await try_acquire_call_slot()  # one of ours
+    await call_capacity.release_slots_from_a_previous_life()
+
+    remaining = await redis_capacity._redis.zrange("voiceagent:active_calls", 0, -1)
+    assert other_node_token in remaining, "freed another replica's live call"
+    assert await active_call_count() == 1, "the other replica's call stopped being counted"
+
+
+async def test_a_slot_older_than_any_possible_call_is_swept(redis_capacity):
+    """The second, independent recovery path: a node that never comes back
+    at all still has its slots reclaimed, because nothing can legitimately
+    hold one for longer than a call can last."""
+    ancient = "deadnode0001:bbbbbbbbbbbbbbbb"
+    await redis_capacity._redis.zadd("voiceagent:active_calls", {ancient: 1.0})  # 1970
+
+    assert await active_call_count() == 0, "a slot from a long-dead node was still counted"
+
+
+async def test_a_slot_within_its_lifetime_is_not_swept(redis_capacity):
+    """The sweep must not go so far that it frees calls that are genuinely
+    still running — two workers on one slot is the thing the cap exists to
+    prevent."""
+    now_seconds, _micros = await redis_capacity._redis.time()
+    recent = "othernode9999:cccccccccccccccc"
+    await redis_capacity._redis.zadd("voiceagent:active_calls", {recent: float(now_seconds) - 60})
+
+    assert await active_call_count() == 1
 
 
 async def _noop_async(*a, **k):

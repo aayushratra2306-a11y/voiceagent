@@ -32,7 +32,12 @@ asyncio_test = pytest.mark.asyncio(loop_scope="session")
 def _isolated_store(tmp_path: Path, monkeypatch):
     breaker.use_database(tmp_path / "breakers.db")
     monkeypatch.setattr(provider_health.settings, "provider_fallback_enabled", True)
+    # backup_is_ready caches for a minute (it is on the call-start and
+    # health-check paths); a stale entry would silently decide the next
+    # test's answer.
+    provider_health._readiness_cache.clear()
     yield
+    provider_health._readiness_cache.clear()
 
 
 def _trip(name: str) -> None:
@@ -95,6 +100,87 @@ async def test_a_provider_error_is_reported_to_its_own_breaker():
 
     assert breaker.state(TTS_CARTESIA) == "open"
     assert breaker.state(STT_DEEPGRAM) == "closed", "one provider's failure is not another's"
+
+
+@asyncio_test
+async def test_one_error_travelling_up_the_pipeline_counts_exactly_once():
+    """The defect a second read of Phase 4 turned up, and the one that made
+    the whole task close to useless.
+
+    pipecat pushes an ErrorFrame UPSTREAM and the observer sees it once per
+    hop — about ten of them, since Cartesia sits near the end of the
+    pipeline and the frame travels back to the front. `frame.processor`
+    keeps naming the ORIGINATING service the whole way, so keying on it
+    counted one real failure ten times over: with failure_threshold=3, a
+    single transient error opened the breaker instantly and moved every
+    subsequent caller onto the local backup.
+
+    Simulated exactly: one frame object, relayed by the real pipeline's
+    other processors, each hop still carrying processor=cartesia.
+    """
+    observer = ProviderHealthObserver()
+    cartesia = _service("ResilientCartesiaTTSService")
+    frame = _error_frame("websocket handshake failed", cartesia)
+
+    relays = [
+        cartesia,                            # hop 1: the provider itself
+        _service("TranscriptRecorder"),      # and then back up the pipeline
+        _service("MarkdownStripper"),
+        _service("GroqLLMService"),
+        _service("RAGContextProcessor"),
+        _service("LLMUserContextAggregator"),
+        _service("RequestBoundary"),
+        _service("AudioDebugger"),
+        _service("DeepgramSTTService"),
+        _service("SmallWebRTCInputTransport"),
+    ]
+    for hop in relays:
+        await observer.on_push_frame(_Pushed(frame, source=hop))
+
+    snapshot = breaker.snapshot()
+    assert snapshot[TTS_CARTESIA]["recent_failures"] == 1, (
+        f"one error was counted {snapshot[TTS_CARTESIA]['recent_failures']} times — "
+        f"every hop up the pipeline recorded it again"
+    )
+    assert breaker.state(TTS_CARTESIA) == "closed", (
+        "a single transient error opened the breaker, so the configured "
+        "'3 failures in 45s' threshold was never actually reachable"
+    )
+
+
+@asyncio_test
+async def test_an_error_relayed_by_another_provider_is_not_blamed_on_it():
+    """The same frame passes back through Deepgram and Groq on its way
+    upstream. Neither of them failed."""
+    observer = ProviderHealthObserver()
+    cartesia = _service("ResilientCartesiaTTSService")
+    frame = _error_frame("cartesia is down", cartesia)
+
+    await observer.on_push_frame(_Pushed(frame, source=cartesia))
+    await observer.on_push_frame(_Pushed(frame, source=_service("GroqLLMService")))
+    await observer.on_push_frame(_Pushed(frame, source=_service("DeepgramSTTService")))
+
+    snapshot = breaker.snapshot()
+    assert snapshot[TTS_CARTESIA]["recent_failures"] == 1
+    assert LLM_GROQ not in snapshot, "blamed the LLM for the TTS service's error"
+    assert STT_DEEPGRAM not in snapshot, "blamed speech recognition for the TTS service's error"
+
+
+@asyncio_test
+async def test_three_separate_errors_still_open_the_breaker():
+    """The counting fix must not go so far that real repeated failure stops
+    tripping it — three genuinely separate errors are exactly what this is
+    configured to act on."""
+    observer = ProviderHealthObserver()
+    cartesia = _service("ResilientCartesiaTTSService")
+
+    for i in range(3):
+        frame = _error_frame(f"handshake failed {i}", cartesia)
+        # each one still relayed up the pipeline, as really happens
+        await observer.on_push_frame(_Pushed(frame, source=cartesia))
+        await observer.on_push_frame(_Pushed(frame, source=_service("MarkdownStripper")))
+
+    assert breaker.state(TTS_CARTESIA) == "open"
 
 
 @asyncio_test

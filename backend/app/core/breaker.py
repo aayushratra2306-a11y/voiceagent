@@ -93,6 +93,11 @@ _configs: dict[str, BreakerConfig] = {}
 
 _local = threading.local()
 
+# Bumped by use_database(). Every thread's cached connection carries the
+# generation it was opened at, so a switch is picked up by all of them and
+# not only by whichever thread happened to call it. See _connect().
+_generation = 0
+
 
 def configure(name: str, config: BreakerConfig) -> None:
     """Give one breaker its own thresholds. Anything not registered uses the
@@ -109,10 +114,20 @@ def _connect() -> sqlite3.Connection:
 
     A sqlite3.Connection is not safe to share across threads, and this is
     called from FastAPI's executor threads as well as the event loop.
+
+    The generation check is what makes use_database() actually take effect
+    everywhere: a connection is bound to the path it was opened with, and
+    only the calling thread's could be closed directly. Any OTHER thread
+    would have carried on writing to the old file — which in tests means
+    one test's breaker state quietly leaking into the next, and on a
+    developer machine means a test run writing into the real server's
+    store.
     """
     conn = getattr(_local, "conn", None)
-    if conn is not None:
+    if conn is not None and getattr(_local, "generation", -1) == _generation:
         return conn
+    if conn is not None:
+        conn.close()
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     # timeout: how long to wait for another PROCESS's write lock rather than
@@ -136,6 +151,7 @@ def _connect() -> sqlite3.Connection:
         ")"
     )
     _local.conn = conn
+    _local.generation = _generation
     return conn
 
 
@@ -181,18 +197,38 @@ def allows(name: str) -> bool:
     cfg = config_for(name)
     now = time.time()
 
-    # BEGIN IMMEDIATE takes the write lock up front. Without it, two
-    # processes could both read "cooldown elapsed" and both decide they are
-    # the trial — the stampede this is here to prevent.
+    # The healthy path first, WITHOUT a transaction — a plain read.
+    #
+    # This matters more than it looks. Every tool call on every live call
+    # goes through here, from its own process (task 2.4), and SQLite allows
+    # exactly one writer at a time: opening BEGIN IMMEDIATE up front, as
+    # this first did, put a global write lock in front of every customer
+    # API request the whole server makes. Six simultaneous calls would have
+    # been queueing behind each other for a lock taken to answer "is
+    # anything wrong?" — with the answer, virtually always, "no". Under WAL
+    # a reader never blocks and never waits.
+    _, opened_at, _, _, _ = _row(conn, name)
+    if opened_at is None:
+        return True  # closed, which is the overwhelmingly common case
+
+    if now - opened_at < cfg.cooldown_seconds:
+        return False  # open and still cooling down: also decidable by reading
+
+    # Only a breaker whose cooldown has actually elapsed needs the write
+    # lock, because only then is there something to claim. BEGIN IMMEDIATE
+    # takes it up front: without it two processes could both read "cooldown
+    # elapsed" and both decide they are the trial — the stampede half-open
+    # exists to prevent. Re-read inside the transaction, since the state
+    # can have changed since the read above.
     conn.execute("BEGIN IMMEDIATE")
     try:
         _, opened_at, trial_at, _, _ = _row(conn, name)
 
         if opened_at is None:
-            return True  # closed
+            return True  # someone else's trial succeeded while we waited
 
         if now - opened_at < cfg.cooldown_seconds:
-            return False  # open, still cooling down
+            return False
 
         # Half-open. One trial at a time; a trial that never reports back
         # (its process died mid-call) must not wedge the breaker shut
@@ -211,11 +247,21 @@ def record_success(name: str) -> None:
     """Report that a call worked. Closes a half-open breaker and clears the
     failure history."""
     conn = _connect()
+
+    # Checked by reading first, for the same reason as allows(): this runs
+    # after EVERY successful tool call in every call process, and the
+    # answer is almost always "nothing to write". Taking SQLite's single
+    # write lock to discover that would put every customer API request on
+    # the server behind one lock, purely to confirm all was well.
+    stamps, opened_at, _, _, _ = _row(conn, name)
+    if opened_at is None and not stamps:
+        return
+
     conn.execute("BEGIN IMMEDIATE")
     try:
         stamps, opened_at, _, _, trips = _row(conn, name)
         if opened_at is None and not stamps:
-            return  # already healthy, nothing to write
+            return  # another process got there first
         if opened_at is not None:
             logger.info(f"[BREAKER] {name}: trial call succeeded, closing the breaker")
         conn.execute(
@@ -333,9 +379,10 @@ def use_database(path: Path) -> None:
     Tests use it so a run never touches the real store; nothing in the
     application calls it.
     """
-    global DB_PATH, STATE_DIR
+    global DB_PATH, STATE_DIR, _generation
     DB_PATH = path
     STATE_DIR = path.parent
+    _generation += 1
     conn = getattr(_local, "conn", None)
     if conn is not None:
         conn.close()

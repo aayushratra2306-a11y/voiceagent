@@ -62,6 +62,10 @@ class _ActiveCall:
     # minutes after the link was sent and needs to reach the call that is
     # still in progress. See get_payment_queue() below.
     payment_queue: "mp.Queue | None" = None
+    # Task 4.5 — this call's capacity slot, released when the call ends.
+    # Held here rather than counted, so the slot given back is always the
+    # exact one this call took; see call_capacity.py on why slots are named.
+    slot_token: str | None = None
 
 
 _active_calls: dict[str, _ActiveCall] = {}
@@ -111,7 +115,7 @@ async def _end_previous_calls_for(user_id: str) -> None:
         # next pass. The exact case this matters for: the same user
         # reconnecting should never be blocked by their OWN stale call still
         # holding the slot their new one needs.
-        await release_call_slot()
+        await release_call_slot(call.slot_token)
 
 
 # Latency (2026-09-03) — the pre-warmed worker pool.
@@ -205,6 +209,13 @@ def next_pool_target(
     a quiet server never scales all the way down to zero and starts paying
     the full cold-start cost on every single call.
     """
+    # A max below the min is a configuration typo, not an instruction to
+    # do something clever. Clamped rather than raised: a bad number in a
+    # .env should not stop a server booting, and the floor is the value
+    # with a real cost attached (drop below it and every caller starts
+    # paying the 13.7s cold start).
+    pool_max = max(pool_min, pool_max)
+
     if exhausted:
         if available_memory_mb < min_free_memory_mb + worker_memory_mb:
             logger.warning(
@@ -320,7 +331,7 @@ async def reap_dead_calls_loop(interval_seconds: int = 10) -> None:
             # ended. _end_previous_calls_for above covers the other path
             # (this same user starting a new call before this loop's next
             # pass would have caught the old one).
-            await release_call_slot()
+            await release_call_slot(call.slot_token)
             logger.info(
                 f"[CALL] Cleaned up finished call pc_id={pc_id} "
                 f"(exitcode={call.process.exitcode})"
@@ -388,7 +399,8 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
     # (see call_capacity.py) — a check-then-increment done in two separate
     # steps is exactly how two requests both squeeze through when only one
     # slot is actually free.
-    if not await try_acquire_call_slot():
+    slot_token = await try_acquire_call_slot()
+    if slot_token is None:
         current = await active_call_count()
         logger.warning(
             f"[CAPACITY] Refusing a new call — at the cap of "
@@ -408,7 +420,7 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
     except BaseException:
         # The slot was claimed above; an unknown/unowned bot_id must not
         # hold it forever.
-        await release_call_slot()
+        await release_call_slot(slot_token)
         raise
 
     # Task 2.4 — plain picklable data passed across the process boundary as
@@ -435,7 +447,17 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         # Take a warm worker if one is waiting. The pool is topped up
         # straight afterwards, off the event loop, so the replacement is
         # already importing while this call negotiates.
-        worker = _idle_pool.pop(0) if _idle_pool else None
+        #
+        # try/except rather than the bare `if _idle_pool` this used to be:
+        # _shrink_pool_by_one() (task 4.3) runs in an executor THREAD and
+        # pops from the other end of the same list, so between the check
+        # and the pop the last worker can legitimately disappear. Falling
+        # through to a cold spawn is the correct answer to that; a 500 for
+        # the caller is not.
+        try:
+            worker = _idle_pool.pop(0)
+        except IndexError:
+            worker = None
 
         if worker is not None:
             proc, answer_queue, ice_queue = worker.process, worker.answer_queue, worker.ice_queue
@@ -484,11 +506,11 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
             proc.terminate()
             raise HTTPException(status_code=504, detail="Call setup timed out") from e
     except BaseException:
-        await release_call_slot()
+        await release_call_slot(slot_token)
         raise
 
     _active_calls[answer["pc_id"]] = _ActiveCall(
-        proc, ice_queue, str(current_user.id), payment_queue
+        proc, ice_queue, str(current_user.id), payment_queue, slot_token
     )
     logger.info(f"[CALL] Started call worker pid={proc.pid} pc_id={answer['pc_id']} bot={bot.name}")
     return answer

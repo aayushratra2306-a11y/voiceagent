@@ -1,11 +1,13 @@
 import asyncio
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import sentry_sdk
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from jose import JWTError, jwt
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -13,6 +15,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.api import approvals, auth, bot_tools, bots, connect, documents, payments, webhooks
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
 from app.core import health, metrics
+from app.core.auth import get_current_user
+from app.core.call_capacity import release_slots_from_a_previous_life
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.mongo import init_db
@@ -46,6 +50,15 @@ async def lifespan(app: FastAPI):
                    RevokedRefreshToken, BotTool, PaymentSession,
                    WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
     await seed_fake_orders()
+    # Task 4.5 — hand back any capacity slots this node was still holding
+    # when it last stopped. Nothing is running yet, so anything tagged with
+    # this node's id belongs to a call that died with the previous
+    # incarnation — and task 4.7's watchdog restarts this process
+    # deliberately, so that is a routine event, not an exotic one. Without
+    # this, every restart would permanently cost however many calls were
+    # live at the time. No-op unless Redis is configured (see
+    # call_capacity.py — in-process state dies with the process anyway).
+    await release_slots_from_a_previous_life()
     # Task 2.4 — reaps finished/crashed per-call worker processes so the
     # registry and the OS process table don't grow unbounded.
     reaper_task = asyncio.create_task(reap_dead_calls_loop())
@@ -105,28 +118,78 @@ app.include_router(approvals.router)
 
 @app.get("/health")
 async def health_endpoint():
-    """Task 4.7 — actually verifies something, per the manual's own
-    warning: a database ping, the warm pool's state, current call
-    capacity, and every circuit breaker (task 4.6) this process knows
-    about. A load balancer or Docker's HEALTHCHECK should read the status
-    code (200 healthy, 503 not); a person should read the body.
+    """Task 4.7 — actually verifies something (a real database ping, the
+    warm pool, the circuit breakers), but says almost nothing.
+
+    This route is PUBLIC — deploy/Caddyfile proxies it straight through to
+    the internet, because Docker's HEALTHCHECK and any load balancer need
+    to reach it without credentials. So the body is deliberately just a
+    word, and the real answer is the status code: 200 healthy, 503 not.
+
+    FOUND on a second read of Phase 4: this briefly returned the full
+    report, which meant an anonymous request to a public URL got back the
+    hostnames of every customer API that had tripped a breaker, how many
+    calls were live at that moment, and the database's own error text. A
+    health check has to be reachable by anyone, which is exactly why it
+    must not be worth reading. The detail moved to /health/detail below.
     """
+    result = await health.report()
+    return JSONResponse(
+        status_code=200 if result["healthy"] else 503,
+        content={"status": "ok" if result["healthy"] else "degraded"},
+    )
+
+
+@app.get("/health/detail")
+async def health_detail_endpoint(current_user: User = Depends(get_current_user)):
+    """The full report — database, warm pool, capacity, every circuit
+    breaker, provider fallback readiness. Behind authentication for the
+    reason above: this is the operator's view, not the public one."""
     result = await health.report()
     return JSONResponse(status_code=200 if result["healthy"] else 503, content=result)
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics_endpoint():
-    """Task 4.9 — the scrape endpoint. Off via settings.metrics_enabled only
-    if an operator wants it off; the numbers themselves (breaker/capacity/
-    pool state, never a transcript or a caller's data) are safe to expose.
-    Not authenticated for the same reason /health isn't — see metrics.py's
-    module docstring for exactly what is and isn't reported here versus
-    task 2.7's Langfuse traces.
+async def metrics_endpoint(request: Request):
+    """Task 4.9 — the Prometheus scrape endpoint.
+
+    Authenticated, for the same reason /health/detail is: this reports
+    which customer hostnames have tripped a breaker and how many calls are
+    live right now. Either credential works —
+
+      - a logged-in user's normal access token, so the account owner can
+        just open it; or
+      - settings.metrics_token as a bearer token, which is what a
+        Prometheus scrape config can actually send (`authorization:
+        credentials:`) since it has no way to refresh a JWT.
+
+    Never a transcript or a caller's data either way — see metrics.py's
+    module docstring for exactly what is and isn't reported here.
     """
     if not settings.metrics_enabled:
         return JSONResponse(status_code=404, content={"detail": "metrics are disabled"})
-    from fastapi import Response
+
+    header = request.headers.get("authorization", "")
+    token = header[len("Bearer ") :] if header.startswith("Bearer ") else ""
+
+    authorised = False
+    if settings.metrics_token and token:
+        # compare_digest, not ==: a plain comparison leaks the token one
+        # character at a time to anyone willing to time the responses.
+        authorised = secrets.compare_digest(token, settings.metrics_token)
+    if not authorised and token:
+        try:
+            payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+            authorised = payload.get("type") == "access" and bool(payload.get("sub"))
+        except JWTError:
+            authorised = False
+
+    if not authorised:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "metrics require an access token or METRICS_TOKEN"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     body, content_type = await metrics.render()
     return Response(content=body, media_type=content_type)

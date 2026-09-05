@@ -92,26 +92,51 @@ async def report() -> dict:
     db_ok, db_detail = await check_database()
     pool_ok, pool_detail = check_worker_pool()
 
+    # The reporting extras below are gathered defensively and never affect
+    # `healthy`. Two separate reasons, both mattering:
+    #
+    #   - This is what the WATCHDOG reads, and it restarts the process on
+    #     three unhealthy readings. A bug in a reporting line — or Redis
+    #     being unreachable, which the active-call count needs and a live
+    #     call does not — must never be able to present itself as "the
+    #     system is broken" and reboot a working server.
+    #   - An operator opening /health/detail during an incident wants
+    #     whatever is knowable, not a 500 because one of six readings threw.
+    def _safe(produce, fallback, what: str):
+        try:
+            return produce()
+        except Exception as e:
+            logger.warning(f"[HEALTH] could not report {what}: {type(e).__name__}: {e}")
+            return fallback
+
+    try:
+        active_calls = await active_call_count()
+    except Exception as e:
+        logger.warning(f"[HEALTH] could not read the active call count: {type(e).__name__}: {e}")
+        active_calls = None
+
     return {
+        # Only the two real checks decide this. Everything else is context.
         "healthy": db_ok and pool_ok,
         "database": {"ok": db_ok, "detail": db_detail or "reachable"},
         "worker_pool": {"ok": pool_ok, "detail": pool_detail},
         "capacity": {
-            "active_calls": await active_call_count(),
+            "active_calls": active_calls,
             "limit": settings.max_concurrent_calls or None,
         },
         # Every breaker this node knows about (both the per-host tool
         # breakers from task 4.6 and the provider ones), plus the provider
         # entries repeated with their backup readiness — the tool ones have
         # no backup concept, so they only ever appear in the first dict.
-        "circuit_breakers": breaker.snapshot(),
-        "providers": provider_health.health(),
+        "circuit_breakers": _safe(breaker.snapshot, {}, "circuit breakers"),
+        "providers": _safe(provider_health.health, {}, "provider fallbacks"),
     }
 
 
 class Watchdog:
     """Runs `report()` on a timer and restarts the process after enough
-    CONSECUTIVE unhealthy readings in a row.
+    CONSECUTIVE unhealthy readings in a row — and, where it can, not while
+    somebody is mid-call.
 
     Consecutive, not cumulative: a database blip that clears itself a second
     later is exactly what task 2.1's retry logic and Motor's own connection
@@ -119,6 +144,14 @@ class Watchdog:
     over one bad reading would turn brief, ordinary flakiness into a dropped
     call every time it happened. Requiring several IN A ROW is what turns
     this into "this is not coming back on its own."
+
+    And even then it waits, for up to max_deferrals checks, if calls are
+    actually running. Found on a second read of Phase 4: as first written
+    this would hang up on every live caller the moment Mongo was
+    unreachable for a minute — but a live call does not need Mongo at all
+    (the audio path is Deepgram/Groq/Cartesia end to end), so it was
+    trading three real conversations for a transcript write. See
+    check_once() for why the wait is bounded rather than indefinite.
 
     `on_unhealthy` defaults to a hard process exit — deliberately `os._exit`
     rather than `sys.exit` or raising: this fires from a background task
@@ -134,12 +167,20 @@ class Watchdog:
         self,
         interval_seconds: float = 20.0,
         failure_threshold: int = 3,
+        max_deferrals: int = 15,
         on_unhealthy=None,
     ) -> None:
         self.interval_seconds = interval_seconds
         self.failure_threshold = failure_threshold
+        # How many extra checks a restart may be held back for while calls
+        # are actually in progress. 15 x 20s is about five minutes — long
+        # enough for any real call to finish, short enough that a process
+        # genuinely wedged with a stale call count still recovers on its
+        # own rather than waiting for a person.
+        self.max_deferrals = max_deferrals
         self._on_unhealthy = on_unhealthy or (lambda: os._exit(1))
         self.consecutive_failures = 0
+        self.deferrals = 0
         self.last_report: dict | None = None
         self.last_checked_at: float | None = None
 
@@ -155,19 +196,56 @@ class Watchdog:
                     f"consecutive unhealthy check(s)"
                 )
             self.consecutive_failures = 0
-        else:
-            self.consecutive_failures += 1
-            logger.warning(
-                f"[HEALTH] Unhealthy ({self.consecutive_failures}/"
-                f"{self.failure_threshold}): {result}"
-            )
-            if self.consecutive_failures >= self.failure_threshold:
-                logger.error(
-                    f"[HEALTH] {self.consecutive_failures} consecutive unhealthy checks "
-                    f"— restarting this process"
-                )
-                self._on_unhealthy()
+            self.deferrals = 0
+            return result
 
+        self.consecutive_failures += 1
+        logger.warning(
+            f"[HEALTH] Unhealthy ({self.consecutive_failures}/"
+            f"{self.failure_threshold}): {result}"
+        )
+        if self.consecutive_failures < self.failure_threshold:
+            return result
+
+        # Restarting drops every call in progress, and "the database is
+        # unreachable" is NOT a reason a live call has to end: the audio
+        # path is Deepgram, Groq and Cartesia, none of which touch Mongo.
+        # What actually breaks is saving the transcript. Killing three
+        # people's conversations to fix that trade is backwards, so a
+        # restart waits for the calls to finish where it reasonably can.
+        #
+        # Bounded, though, and that bound is the point: if the process is
+        # genuinely wedged, the call count it is reading may itself be
+        # stale and would never fall to zero. After max_deferrals the
+        # restart happens regardless — a hung server helps nobody, and by
+        # then those calls are almost certainly not real.
+        active = result.get("capacity", {}).get("active_calls", 0)
+        if active is None:
+            # The count itself could not be read (Redis unreachable, say).
+            # Treated as "there may well be calls in progress": not knowing
+            # is not a licence to hang up on people. The deferral cap below
+            # still applies, so this cannot become a reason never to
+            # restart.
+            active = "unknown"
+        if active != 0 and self.deferrals < self.max_deferrals:
+            self.deferrals += 1
+            logger.error(
+                f"[HEALTH] {self.consecutive_failures} consecutive unhealthy checks, but "
+                f"{active} call(s) are still in progress — holding off the restart "
+                f"({self.deferrals}/{self.max_deferrals}). The audio path does not need "
+                f"the database; saving transcripts does."
+            )
+            return result
+
+        why = "no calls in progress" if active == 0 else (
+            f"{active} call(s) still counted, but {self.deferrals} deferral(s) is long enough "
+            f"that this process is not recovering on its own"
+        )
+        logger.error(
+            f"[HEALTH] {self.consecutive_failures} consecutive unhealthy checks — "
+            f"restarting this process ({why})"
+        )
+        self._on_unhealthy()
         return result
 
     async def run_forever(self) -> None:

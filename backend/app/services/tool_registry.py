@@ -87,7 +87,23 @@ TOOL_BREAKER = breaker.BreakerConfig(
 
 
 def _breaker_name(url: str) -> str:
-    host = urlsplit(url).netloc.lower()
+    """`hostname`, not `netloc`.
+
+    netloc carries userinfo: a tool URL of
+    `https://key:secret@api.customer.com/orders` has a netloc of
+    `key:secret@api.customer.com`, and that string would then be the
+    breaker's NAME — written to the breaker store, logged on every trip,
+    and reported by /health/detail and /metrics. A customer's credential
+    would have leaked into monitoring output through nothing worse than a
+    URL written the way HTTP allows.
+
+    Port is kept: two services on one host are genuinely separate
+    dependencies and shouldn't share a breaker.
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.port:
+        host = f"{host}:{parts.port}"
     name = f"tool:{host}"
     breaker.configure(name, TOOL_BREAKER)
     return name
@@ -489,7 +505,9 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     circuit = _breaker_name(url)
     if not breaker.allows(circuit):
         logger.warning(
-            f"[TOOL] {tool.name}: not calling {urlsplit(url).netloc} — "
+            # circuit (not netloc) for the same reason _breaker_name uses
+            # hostname: netloc would put a URL-embedded credential in the log.
+            f"[TOOL] {tool.name}: not calling {circuit.removeprefix('tool:')} — "
             f"its circuit breaker is open after repeated failures"
         )
         return {

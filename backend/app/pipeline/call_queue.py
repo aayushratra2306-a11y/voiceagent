@@ -57,6 +57,11 @@ GROUP_NAME = "call-workers"
 # and one-call-per-process design exists to prevent.
 STALL_TIMEOUT_MS = 90_000
 
+# Ceiling on how many entries the stream retains. See the note in enqueue():
+# acking does not delete an entry, so without a cap this grows by one
+# several-KB record per call, forever.
+MAX_STREAM_ENTRIES = 10_000
+
 
 @dataclass(frozen=True)
 class QueuedCall:
@@ -108,12 +113,30 @@ async def enqueue(bot_config: dict, sdp: str, sdp_type: str, pc_id: str | None) 
     client = _client()
     try:
         await ensure_group(client)
-        entry_id = await client.xadd(STREAM_KEY, {
-            "bot_config": json.dumps(bot_config),
-            "sdp": sdp,
-            "sdp_type": sdp_type,
-            "pc_id": pc_id or "",
-        })
+        entry_id = await client.xadd(
+            STREAM_KEY,
+            {
+                "bot_config": json.dumps(bot_config),
+                "sdp": sdp,
+                "sdp_type": sdp_type,
+                "pc_id": pc_id or "",
+            },
+            # Without this the stream grows forever. ack() removes an entry
+            # from the consumer group's PENDING list, which is what stops it
+            # being redelivered — it does NOT remove it from the stream, and
+            # nothing else does either. Every call ever queued would stay
+            # resident in Redis, several KB of SDP at a time, for the life
+            # of the server.
+            #
+            # approximate (Redis's `MAXLEN ~`) trims on whole nodes rather
+            # than walking the stream to land on an exact count: far cheaper,
+            # and "roughly ten thousand" is exactly as good a bound here.
+            # The cap is a backlog ceiling, not a capacity limit — task 4.5
+            # is what actually limits concurrency, and 10k queued calls is
+            # already far past any state worth trying to serve.
+            maxlen=MAX_STREAM_ENTRIES,
+            approximate=True,
+        )
         return entry_id
     finally:
         await client.aclose()
