@@ -1,0 +1,1008 @@
+<title>Toolbox by Task</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+:root{
+  --paper:#F6F7FC; --surface:#FFFFFF; --surface-2:#EDEFF8;
+  --line:#E0E3F0; --line-soft:#EAECF5;
+  --text:#191B2E; --text-2:#535878; --text-3:#82879F;
+  --accent:#5B34C4; --accent-bg:#5B34C410;
+  --ok:#0B7250; --ok-bg:#0B725012;
+  --diverge:#8F5407; --diverge-bg:#8F540712;
+  --shadow:0 1px 2px rgba(25,27,46,.05);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#090A14; --surface:#13152A; --surface-2:#1B1E38;
+  --line:#282C4A; --line-soft:#1F2239;
+  --text:#ECEEF8; --text-2:#A5AAC8; --text-3:#767B9C;
+  --accent:#AE92FB; --accent-bg:#AE92FB16;
+  --ok:#47D8AA; --ok-bg:#47D8AA14;
+  --diverge:#EBAC5E; --diverge-bg:#EBAC5E14;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}}
+:root[data-theme="dark"]{
+  --paper:#090A14; --surface:#13152A; --surface-2:#1B1E38;
+  --line:#282C4A; --line-soft:#1F2239;
+  --text:#ECEEF8; --text-2:#A5AAC8; --text-3:#767B9C;
+  --accent:#AE92FB; --accent-bg:#AE92FB16;
+  --ok:#47D8AA; --ok-bg:#47D8AA14;
+  --diverge:#EBAC5E; --diverge-bg:#EBAC5E14;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}
+
+*{box-sizing:border-box}
+body{margin:0; background:var(--paper); color:var(--text);
+  font:400 15.5px/1.6 "DM Sans", system-ui, sans-serif; -webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px; margin:0 auto; padding:52px 22px 90px}
+h1,h2,h3,h4{font-family:"Barlow Condensed", system-ui, sans-serif; margin:0; text-wrap:balance}
+h1{font-size:clamp(38px,6vw,60px); font-weight:700; letter-spacing:.005em; line-height:1}
+h2{font-size:30px; font-weight:700; letter-spacing:.01em}
+h3{font-size:20px; font-weight:600}
+p{margin:0}
+code,.mono{font-family:"JetBrains Mono", ui-monospace, monospace; font-size:.85em}
+
+.eyebrow{font-family:"JetBrains Mono",monospace; font-size:10.5px; font-weight:500;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--accent)}
+
+header{display:flex; flex-direction:column; gap:14px}
+.lede{font-size:17.5px; color:var(--text-2); max-width:66ch}
+.howto{display:flex; flex-wrap:wrap; gap:10px; margin-top:6px}
+.key{display:flex; align-items:center; gap:7px; font-size:13px; color:var(--text-2);
+  background:var(--surface); border:1px solid var(--line); border-radius:20px; padding:5px 13px}
+.swatch{width:9px; height:9px; border-radius:2px; flex:none}
+.swatch.ok{background:var(--ok)} .swatch.dv{background:var(--diverge)}
+
+section{margin-top:52px; display:flex; flex-direction:column; gap:18px}
+.sec-head{display:flex; flex-direction:column; gap:6px; padding-bottom:4px;
+  border-bottom:2px solid var(--line)}
+.sec-desc{color:var(--text-2); max-width:72ch; font-size:15px}
+
+/* platform grid */
+.plat{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:13px}
+.p{background:var(--surface); border:1px solid var(--line); border-radius:10px;
+  padding:17px 18px; display:flex; flex-direction:column; gap:8px; box-shadow:var(--shadow)}
+.p-top{display:flex; align-items:baseline; justify-content:space-between; gap:10px}
+.p h3{color:var(--text)}
+.p .kind{font-family:"JetBrains Mono",monospace; font-size:10px; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--text-3); white-space:nowrap}
+.p p{font-size:14px; color:var(--text-2)}
+.p .plain{color:var(--text)}
+.p .cost{font-family:"JetBrains Mono",monospace; font-size:11.5px; color:var(--text-3);
+  padding-top:8px; margin-top:auto; border-top:1px dashed var(--line)}
+
+/* tasks */
+.tasks{display:flex; flex-direction:column; gap:11px}
+.task{background:var(--surface); border:1px solid var(--line); border-radius:10px;
+  overflow:hidden; box-shadow:var(--shadow); break-inside:avoid}
+.t-head{display:flex; align-items:center; gap:12px; padding:13px 17px;
+  background:var(--surface-2); border-bottom:1px solid var(--line)}
+.tid{font-family:"JetBrains Mono",monospace; font-size:12.5px; font-weight:500;
+  color:var(--accent); background:var(--accent-bg); padding:3px 8px; border-radius:5px; flex:none}
+.t-head h3{flex:1; min-width:0}
+.hrs{font-family:"JetBrains Mono",monospace; font-size:11.5px; color:var(--text-3); flex:none}
+.t-body{padding:15px 17px; display:flex; flex-direction:column; gap:13px}
+.t-body>p{font-size:14.5px; color:var(--text-2); max-width:74ch}
+.cols{display:grid; grid-template-columns:1fr 1fr; gap:13px}
+.col{display:flex; flex-direction:column; gap:7px}
+.col-h{font-family:"JetBrains Mono",monospace; font-size:10px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--text-3)}
+.chips{display:flex; flex-wrap:wrap; gap:5px}
+.chip{font-family:"JetBrains Mono",monospace; font-size:11.5px; padding:3px 8px;
+  border-radius:5px; background:var(--surface-2); color:var(--text-2); border:1px solid var(--line-soft)}
+.chip.used{background:var(--ok-bg); color:var(--ok); border-color:transparent}
+.terms{display:grid; gap:0; border-top:1px solid var(--line-soft); padding-top:12px}
+.terms .row{display:grid; grid-template-columns:186px 1fr; gap:14px; padding:6px 0;
+  border-bottom:1px solid var(--line-soft); align-items:start}
+.terms .row:last-child{border-bottom:0}
+.terms dt{font-family:"JetBrains Mono",monospace; font-size:11.5px; color:var(--accent);
+  padding-top:2px; word-break:break-word}
+.terms dd{margin:0; font-size:13.5px; color:var(--text-2)}
+.terms-h{font-family:"JetBrains Mono",monospace; font-size:10px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--text-3); padding-bottom:2px}
+@media (max-width:640px){.terms .row{grid-template-columns:1fr; gap:2px}}
+.note{display:flex; gap:9px; font-size:13.5px; padding:11px 13px; border-radius:8px;
+  background:var(--diverge-bg); color:var(--text-2); border-left:3px solid var(--diverge)}
+.note b{color:var(--text)}
+.note.same{background:var(--ok-bg); border-left-color:var(--ok)}
+
+.pending{background:var(--surface); border:1px dashed var(--line); border-radius:10px;
+  padding:20px; text-align:center; color:var(--text-3); font-size:14.5px}
+
+.deps{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:560px; font-size:14px}
+th,td{text-align:left; padding:10px 15px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+th{font-family:"JetBrains Mono",monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-3); background:var(--surface-2)}
+tbody tr:last-child td{border-bottom:0}
+td.m{font-family:"JetBrains Mono",monospace; font-size:12.5px; white-space:nowrap; color:var(--accent)}
+
+footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
+  font-family:"JetBrains Mono",monospace; font-size:11.5px; color:var(--text-3); line-height:1.8}
+
+@media (max-width:640px){
+  .wrap{padding:34px 15px 60px}
+  .cols{grid-template-columns:1fr}
+}
+@media print{
+  :root{--paper:#fff; --surface:#fff; --surface-2:#f4f4f8; --text:#000; --text-2:#333;
+        --text-3:#666; --line:#ccc; --line-soft:#ddd; --accent:#4423a0; --shadow:none}
+  body{font-size:10.5pt}
+  .wrap{max-width:none; padding:0}
+  .task,.p{break-inside:avoid; page-break-inside:avoid}
+  section{break-before:auto}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">Living document · updated after each task is built and tested</span>
+  <h1>Toolbox by Task</h1>
+  <p class="lede">
+    Every tool, library and service used in this project, listed against the task
+    it was used for — with what the plan called for, what was actually built, and
+    why they differ where they do.
+  </p>
+  <div class="howto">
+    <span class="key"><span class="swatch ok"></span>Built as the plan specified</span>
+    <span class="key"><span class="swatch dv"></span>Deliberately changed — reason given</span>
+    <span class="key">Print to PDF with Ctrl / Cmd + P</span>
+  </div>
+</header>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Part one</span>
+    <h2>The platforms, in plain words</h2>
+    <p class="sec-desc">
+      Ten outside services do work this project would otherwise have to do itself.
+      Each one below: what it is, what it does here, and why it and not something else.
+    </p>
+  </div>
+
+  <div class="plat">
+
+    <div class="p">
+      <div class="p-top"><h3>Deepgram</h3><span class="kind">Speech → text</span></div>
+      <p class="plain">Turns the caller's voice into written words, live, as they speak.</p>
+      <p>Words appear while the sentence is still being said rather than after it finishes — which is what makes a reply possible in under a second. Handles Indian-accented English and Hindi well, and lets us control how long a pause must be before it decides a sentence has ended.</p>
+      <p class="cost">Pre-paid credits · local Whisper available as a free substitute</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>Cartesia</h3><span class="kind">Text → speech</span></div>
+      <p class="plain">Reads the bot's reply out loud in a human-sounding voice.</p>
+      <p>Chosen because it starts speaking in about a tenth of a second — most rivals take noticeably longer, and on a phone call that gap is dead air. It also speaks Hindi, French, German and Spanish with genuine native voices rather than an English voice reading foreign words.</p>
+      <p class="cost">Credits per character spoken · Piper is the free local substitute</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>Groq</h3><span class="kind">The AI brain</span></div>
+      <p class="plain">Decides what the bot should actually say.</p>
+      <p>Not a model of its own — it runs open models on purpose-built chips. The same model that takes about 400 milliseconds to start replying elsewhere starts in roughly 80 here. In a conversation that is the difference between natural and stilted.</p>
+      <p class="cost">Free tier, generous limits</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>OpenAI</h3><span class="kind">Embeddings + rewriting</span></div>
+      <p class="plain">Converts documents into numbers a computer can search by meaning.</p>
+      <p>Used for two narrow jobs, not for conversation: turning uploaded documents into searchable form, and tidying spoken questions before searching. Also available as the alternative brain if Groq is ever unsuitable.</p>
+      <p class="cost">Pay per use, very small amounts</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>Pinecone</h3><span class="kind">Document search</span></div>
+      <p class="plain">Stores uploaded documents so the right passage can be found in milliseconds.</p>
+      <p>Holds two separate indexes: one that searches by <em>meaning</em>, one that searches for <em>exact words</em> like order numbers. It also scores how relevant each result really is, which is what makes it possible to say "nothing in your documents answers this" instead of guessing.</p>
+      <p class="cost">Free tier · 500 relevance checks per month</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>MongoDB Atlas</h3><span class="kind">The database</span></div>
+      <p class="plain">Remembers everything: users, bots, conversations, uploaded files.</p>
+      <p>A hosted database, so there is no database server to maintain. Original PDFs are stored inside it too, which is how a citation can open the actual document at the right page.</p>
+      <p class="cost">Free tier, permanently</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>Google Cloud</h3><span class="kind">The server</span></div>
+      <p class="plain">The actual computer everything runs on, in Mumbai.</p>
+      <p>An ordinary virtual machine rather than a modern app-hosting service — deliberately. Live audio needs network access that hosts like Vercel and Render do not permit, so this project has to run its own machine.</p>
+      <p class="cost">Free trial credit until 30 November 2026</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>Sentry</h3><span class="kind">Error tracking</span></div>
+      <p class="plain">Tells you when something breaks, without you having to look.</p>
+      <p>Every crash is captured with the full context of what led to it. Two separate projects — one for the server, one for the browser — because they fail in completely different ways.</p>
+      <p class="cost">Free tier</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>Langfuse</h3><span class="kind">AI monitoring</span></div>
+      <p class="plain">Shows what the AI did on every call, and what it cost.</p>
+      <p>Records each step of every conversation — how long the AI took, how many words it processed, what that was worth in rupees. Hosted in Europe, chosen so the data-residency question has a clean answer.</p>
+      <p class="cost">Free hobby tier with a hard cap — it can never bill you</p>
+    </div>
+
+    <div class="p">
+      <div class="p-top"><h3>GitHub Actions</h3><span class="kind">Automated checking</span></div>
+      <p class="plain">Runs every test automatically each time code changes.</p>
+      <p>Five checks on every push: code style, the full test suite, known security holes in dependencies, accidentally committed passwords, and document-search accuracy. Nothing reaches the main branch without passing.</p>
+      <p class="cost">Free for this usage</p>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Part two · complete</span>
+    <h2>Phase 1 — Foundation Quality</h2>
+    <p class="sec-desc">Eight tasks making the conversation itself good: natural turn-taking, fast replies, the ability to take actions, and document search that finds the right thing.</p>
+  </div>
+
+  <div class="tasks">
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.1</span><h3>Smart Turn detection + interruptions</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>Teaching the bot when the caller has actually finished speaking, and letting the caller cut in mid-sentence without the bot ploughing on.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">pipecat-ai[smart-turn]</span><span class="chip">Smart Turn v2</span>
+            <span class="chip">PipelineParams</span><span class="chip">VADParams</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">pipecat-ai[local-smart-turn]</span><span class="chip used">Smart Turn v3.2 (ONNX)</span>
+            <span class="chip used">SileroVADAnalyzer</span><span class="chip used">VADParams</span>
+            <span class="chip used">LLMUserAggregatorParams</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>pipecat-ai[smart-turn]</dt><dd>The voice framework, installed with its optional turn-detection extra. The square brackets are Python's way of saying &quot;also install the parts needed for this feature&quot;.</dd></div>
+          <div class="row"><dt>Smart Turn v2 / v3.2</dt><dd>A small AI model that listens to <em>how</em> a sentence trailed off and judges whether the person is finished. We use v3.2 as a local file, so the decision costs no network trip.</dd></div>
+          <div class="row"><dt>ONNX</dt><dd>A universal format for AI models, so one file runs anywhere without the framework it was trained in. It is why turn detection runs on the server with no GPU.</dd></div>
+          <div class="row"><dt>PipelineParams</dt><dd>Pipecat's settings object for the pipeline as a whole. The plan expected the speech detector to attach here &mdash; it does not, and passing it here was silently ignored.</dd></div>
+          <div class="row"><dt>VADParams</dt><dd>The four dials on speech detection: how confident, how loud, how long before &quot;started&quot;, how long before &quot;stopped&quot;. Tuning these is what stops it mishearing a fan as a voice.</dd></div>
+          <div class="row"><dt>SileroVADAnalyzer</dt><dd>The actual speech detector &mdash; an ML model that scores every fragment of audio for how likely it is to be human speech.</dd></div>
+          <div class="row"><dt>LLMUserAggregatorParams</dt><dd>The settings for the component that collects a caller's words into one complete turn. In Pipecat 1.7 the speech detector attaches <em>here</em>, which is the whole lesson of this task.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> v3 shipped by the time we built it, and it runs as a local ONNX file rather than a service. More importantly, in Pipecat 1.7 the speech detector attaches to the <em>conversation aggregator</em>, not to <code>PipelineParams</code> as the plan assumed — passing it the old way was silently ignored and none of the tuning applied.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.2</span><h3>Switch the AI to a faster provider</h3><span class="hrs">2h</span></div>
+      <div class="t-body">
+        <p>Moving the thinking part of the bot onto hardware that starts replying in about a fifth of the time.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Groq API</span><span class="chip">Llama 3.3 70B</span><span class="chip">Cerebras (alt)</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Groq API</span><span class="chip used">openai/gpt-oss-120b</span>
+            <span class="chip used">reasoning_effort=low</span><span class="chip used">GroqLLMService</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Groq API</dt><dd>Not an AI model &mdash; a company running open models on custom chips built for speed. Same model, roughly a fifth of the waiting time.</dd></div>
+          <div class="row"><dt>Llama 3.3 70B</dt><dd>Meta's open model, what the plan named. Perfectly good; simply superseded by a better option on the same platform.</dd></div>
+          <div class="row"><dt>Cerebras</dt><dd>A rival speed-focused chip company, listed as a backup. Never needed.</dd></div>
+          <div class="row"><dt>openai/gpt-oss-120b</dt><dd>The model actually used &mdash; an open-weights model, larger and stronger than the planned one, at the same speed on Groq.</dd></div>
+          <div class="row"><dt>reasoning_effort=low</dt><dd>A dial telling the model how long to think before answering. Thinking improves answers and costs seconds &mdash; seconds a phone call does not have.</dd></div>
+          <div class="row"><dt>GroqLLMService</dt><dd>Pipecat's ready-made connector for Groq, so the pipeline talks to it without custom code.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> a stronger open model than the plan named was available on the same platform at the same speed. <code>reasoning_effort=low</code> matters — the model can "think" before answering, and thinking costs the exact seconds a phone call cannot spare.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.3</span><h3>Build the function-calling framework</h3><span class="hrs">5h</span></div>
+      <div class="t-body">
+        <p>Letting the AI actually do things — look up an order, book a slot — rather than only talk about them.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">OpenAI function calling</span><span class="chip">FunctionSchema</span>
+            <span class="chip">register_function</span><span class="chip">Pydantic</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Pipecat direct functions</span><span class="chip used">Python type hints</span>
+            <span class="chip used">Docstrings as descriptions</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>OpenAI function calling</dt><dd>The industry-standard way of describing a tool to an AI so it can decide to use it. Groq and others follow the same format.</dd></div>
+          <div class="row"><dt>FunctionSchema</dt><dd>A hand-written description of a tool &mdash; its name, what it does, what inputs it needs. The plan assumed we would write these by hand.</dd></div>
+          <div class="row"><dt>register_function</dt><dd>The older way of telling the framework &quot;this description maps to this code&quot;. No longer needed in Pipecat 1.7.</dd></div>
+          <div class="row"><dt>Pydantic</dt><dd>Python's data-checking library. It verifies that what arrives is the right shape before your code touches it &mdash; used everywhere in this project.</dd></div>
+          <div class="row"><dt>Direct functions</dt><dd>Pipecat 1.7's approach: write a normal Python function, and it reads the description straight from your type hints and docstring.</dd></div>
+          <div class="row"><dt>Type hints</dt><dd>Python annotations saying what kind of value each input is (<code>date: str</code>). The framework turns these into the tool description automatically.</dd></div>
+          <div class="row"><dt>Docstrings</dt><dd>The description written inside a function. Here it becomes the text the AI reads to decide when to use that tool &mdash; so its wording genuinely matters.</dd></div>
+        </dl>
+        <div class="note"><span><b>Simpler than planned:</b> Pipecat 1.7 reads a plain Python function's type hints and docstring and builds the schema itself. No <code>FunctionSchema</code>, no <code>register_function</code> — writing the function and listing it is the whole registration.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.4</span><h3>Build two demonstration tools</h3><span class="hrs">4h</span></div>
+      <div class="t-body">
+        <p>Two real working examples, so the framework is proven rather than theoretical.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">FastAPI routes</span><span class="chip">MongoDB collections</span><span class="chip">Faker</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">get_order_status</span><span class="chip used">book_appointment</span>
+            <span class="chip used">get_current_datetime</span><span class="chip used">Beanie models</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>get_order_status</dt><dd>A tool that looks up an order and reports its status and delivery date.</dd></div>
+          <div class="row"><dt>book_appointment</dt><dd>A tool that checks a slot is free, books it, and refuses politely if taken.</dd></div>
+          <div class="row"><dt>get_current_datetime</dt><dd>A tool giving the AI today's real date. Without it, &quot;next Tuesday&quot; cannot be turned into an actual date &mdash; every booking depends on this.</dd></div>
+          <div class="row"><dt>Beanie models</dt><dd>Beanie is the library that lets Python classes map onto database records. Define a class, and saving and loading come free.</dd></div>
+          <div class="row"><dt>Faker</dt><dd>A library for generating fake test data. Planned, not needed &mdash; a handful of hand-written examples proved clearer.</dd></div>
+        </dl>
+        <div class="note"><span><b>Three, not two.</b> A date-and-time tool turned out to be essential: without it the AI cannot convert "next Tuesday" into a real date, so every booking tool depends on it.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.5</span><h3>Save conversation transcripts</h3><span class="hrs">2h</span></div>
+      <div class="t-body">
+        <p>Recording what was said on every call, and how long each part of the system took.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Beanie Document</span><span class="chip">MongoDB</span><span class="chip">Pipecat transcript processor</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Custom TranscriptRecorder</span><span class="chip used">ConversationTurn model</span>
+            <span class="chip used">Per-stage timings</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Beanie Document</dt><dd>A Python class that <em>is</em> a database record. <code>ConversationTurn</code> is one, holding what was said and how long each stage took.</dd></div>
+          <div class="row"><dt>Transcript processor</dt><dd>Pipecat's built-in transcript recorder. Not used, because it captures the words but not the timings.</dd></div>
+          <div class="row"><dt>TranscriptRecorder</dt><dd>Our own version, which records timing <em>as it happens</em>. That is why questions about speed are answerable from the database rather than by reading logs.</dd></div>
+          <div class="row"><dt>ConversationTurn</dt><dd>The record itself: caller's words, bot's reply, tools used, and the millisecond timings for each stage.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> a custom processor instead of Pipecat's built-in one, so timings are captured <em>as they happen</em>. That decision paid off repeatedly — "why does this feel slow" became a database query instead of an afternoon reading logs.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.6</span><h3>Rewrite spoken questions before searching</h3><span class="hrs">2h</span></div>
+      <div class="t-body">
+        <p>People speak differently from how they type. "Umm, what about the second one" is not a search query.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Groq</span><span class="chip">gpt-4o-mini (alt)</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Groq gpt-oss-20b</span><span class="chip used">Skip heuristic</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>gpt-oss-20b</dt><dd>A deliberately small, fast model. This job is tidying a sentence, not reasoning &mdash; a bigger model would only add delay.</dd></div>
+          <div class="row"><dt>gpt-4o-mini</dt><dd>OpenAI's small model, the listed alternative. Groq's was faster for the same quality.</dd></div>
+          <div class="row"><dt>Skip heuristic</dt><dd>A simple word list that recognises small talk. &quot;Hello&quot; and &quot;thank you&quot; skip document search entirely, saving about two seconds.</dd></div>
+        </dl>
+        <div class="note same"><span><b>As planned</b>, plus an addition: conversational filler ("hello", "thanks") now skips document search entirely, saving about two seconds on those turns.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.7</span><h3>Add reranking to document search</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>Fetching many possible answers, then having a second model actually read each one against the question and rank them properly.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Cohere Rerank</span><span class="chip">bge-reranker (free)</span><span class="chip">Pinecone</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">bge-reranker-v2-m3</span><span class="chip used">Hosted by Pinecone</span>
+            <span class="chip used">top_k 20 → top_n 4</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Reranking</dt><dd>Fetching many possible answers cheaply, then having a second model read each one <em>against the question</em> and score real relevance.</dd></div>
+          <div class="row"><dt>Cohere Rerank</dt><dd>A paid reranking service, the plan's first suggestion. Avoided &mdash; it would have meant another vendor and another bill.</dd></div>
+          <div class="row"><dt>bge-reranker-v2-m3</dt><dd>The open reranking model actually used, running inside Pinecone so no extra account was needed.</dd></div>
+          <div class="row"><dt>top_k 20 &rarr; top_n 4</dt><dd>Cast a wide net of 20 candidates, then keep only the 4 the reranker rates highest. Wide net, strict filter.</dd></div>
+          <div class="row"><dt>Threshold 0.15</dt><dd>The score below which a result counts as irrelevant. Possible only because reranked scores spread out; raw similarity scores cluster too tightly to draw a line.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> the reranker runs inside Pinecone, so Cohere never became a separate account, bill or point of failure. The proof it works: for one real question the correct page did not even reach the top five by ordinary search, and reranking placed it first.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">1.8</span><h3>Add keyword matching alongside meaning matching</h3><span class="hrs">1h</span></div>
+      <div class="t-body">
+        <p>Searching by meaning misses exact strings — order numbers, part codes. Keyword search finds those directly.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Pinecone sparse-dense</span><span class="chip">BM25</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Two separate indexes</span><span class="chip used">voiceagent + voiceagent-sparse</span>
+            <span class="chip used">Union, then rerank</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Dense search</dt><dd>Searching by meaning. &quot;Refund policy&quot; finds &quot;money back&quot; even with no shared words.</dd></div>
+          <div class="row"><dt>Sparse / keyword search</dt><dd>Searching for exact strings. This is how order numbers and part codes get found &mdash; meaning-based search represents them poorly.</dd></div>
+          <div class="row"><dt>BM25</dt><dd>The long-standing formula behind keyword search, weighing how rare a word is against how often it appears.</dd></div>
+          <div class="row"><dt>Two indexes</dt><dd>Pinecone's indexes hold one search type or the other, never both &mdash; confirmed by querying it directly. Hence one of each, searched together and merged.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed by necessity:</b> the plan assumed one index could hold both kinds of search. Checking Pinecone directly proved otherwise — their indexes are one type or the other. So there are two, searched at once and merged before ranking.</span></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Part three · complete</span>
+    <h2>Phase 2 — Swappable Architecture</h2>
+    <p class="sec-desc">Ten tasks making it a system rather than a demo: no vendor it cannot leave, no crash that takes everything down, and proof that it works.</p>
+  </div>
+
+  <div class="tasks">
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.1</span><h3>Build the provider switching layer</h3><span class="hrs">5h</span></div>
+      <div class="t-body">
+        <p>Nothing calls a vendor directly. One file decides which speech, voice and AI service to use, so swapping any of them is a setting.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Pydantic Settings</span><span class="chip">Factory pattern</span><span class="chip">Protocol / ABC</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">pydantic-settings</span><span class="chip used">Factory functions</span>
+            <span class="chip used">providers.py</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>pydantic-settings</dt><dd>Reads configuration from environment variables and checks it is valid at startup, so a missing key fails immediately rather than mid-call.</dd></div>
+          <div class="row"><dt>Factory pattern</dt><dd>A function that hands back the right object for the current configuration. Ask for &quot;the speech service&quot; and get Deepgram or Whisper depending on one setting.</dd></div>
+          <div class="row"><dt>Protocol / ABC</dt><dd>Two Python ways of saying &quot;anything used here must have these methods&quot;. Not needed &mdash; the factory functions were enough on their own.</dd></div>
+          <div class="row"><dt>providers.py</dt><dd>The one file that knows which vendors exist. Everything else asks it for a service and never names a vendor.</dd></div>
+        </dl>
+        <div class="note same"><span><b>As planned.</b> This is the single most valuable decision in the project — it is what makes "what if a vendor raises prices" a five-minute answer instead of a rewrite.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.2</span><h3>Run speech recognition and voice locally</h3><span class="hrs">6h</span></div>
+      <div class="t-body">
+        <p>Building free replacements for the two paid services, running on your own machine.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">faster-whisper</span><span class="chip">Piper TTS</span>
+            <span class="chip">Kyutai Pocket TTS</span><span class="chip">ONNX Runtime</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">faster-whisper 1.2.1</span><span class="chip used">piper-tts 1.7.0</span>
+            <span class="chip used">onnxruntime 1.24.4</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>faster-whisper</dt><dd>A re-engineered version of OpenAI's Whisper that runs on an ordinary CPU fast enough to be usable. The free replacement for Deepgram.</dd></div>
+          <div class="row"><dt>piper-tts</dt><dd>A small, fast, free speech synthesiser that runs locally &mdash; including a Hindi voice. The free replacement for Cartesia.</dd></div>
+          <div class="row"><dt>Kyutai Pocket TTS</dt><dd>A lighter, faster alternative &mdash; rejected because it ships no Hindi voice, which for a bilingual product settles it.</dd></div>
+          <div class="row"><dt>onnxruntime</dt><dd>The engine that runs ONNX model files. Shared with turn detection, so it was already present.</dd></div>
+        </dl>
+        <div class="note"><span><b>Kyutai rejected:</b> lighter and faster than Piper, but it ships no Hindi voice. For a bilingual product that ruled it out regardless of its other merits.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.3</span><h3>Self-host the call connection server</h3><span class="hrs">5h</span></div>
+      <div class="t-body">
+        <p>Running the live-audio infrastructure yourself instead of paying a service per minute of conversation.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">LiveKit self-hosted</span><span class="chip">Oracle Cloud free tier</span>
+            <span class="chip">Docker</span><span class="chip">coturn</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Pipecat SmallWebRTC</span><span class="chip used">aiortc 1.15</span>
+            <span class="chip used">coturn</span><span class="chip used">Caddy</span>
+            <span class="chip used">Docker Compose</span><span class="chip used">Google Cloud</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>WebRTC</dt><dd>The browser technology for live two-way audio &mdash; the same thing video calls use. The only realistic option for real-time voice on the web.</dd></div>
+          <div class="row"><dt>LiveKit</dt><dd>A separate server for managing live audio, the plan's choice. Dropped: Pipecat carries its own, so this was an entire extra system to run for nothing.</dd></div>
+          <div class="row"><dt>aiortc</dt><dd>The Python library implementing WebRTC on the server side, so Python can be one end of a live call.</dd></div>
+          <div class="row"><dt>coturn</dt><dd>A relay for callers whose network blocks direct connections &mdash; corporate firewalls and many mobile networks. Without it those callers simply cannot connect.</dd></div>
+          <div class="row"><dt>Caddy</dt><dd>A web server that obtains and renews HTTPS certificates automatically. Required, not optional: browsers refuse microphone access without real HTTPS.</dd></div>
+          <div class="row"><dt>Docker Compose</dt><dd>Describes all the pieces &mdash; app, relay, web server &mdash; in one file so the whole system starts with a single command.</dd></div>
+        </dl>
+        <div class="note"><span><b>Significantly changed:</b> LiveKit was unnecessary — Pipecat carries its own WebRTC transport, removing a whole extra server. Google Cloud over Oracle for the free credit, and Caddy was added because browsers refuse microphone access without real HTTPS.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.4</span><h3>Give every call its own process</h3><span class="hrs">5h</span></div>
+      <div class="t-body">
+        <p>Each conversation runs in its own isolated program, so one crashing cannot affect any other.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">multiprocessing</span><span class="chip">subprocess</span><span class="chip">Docker containers</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">multiprocessing (spawn)</span><span class="chip used">Queues for messaging</span>
+            <span class="chip used">Pre-warmed worker pool</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>multiprocessing</dt><dd>Python's way of running genuinely separate programs, each with its own memory. A crash in one cannot touch another.</dd></div>
+          <div class="row"><dt>spawn vs fork</dt><dd>Two ways to start a process. Linux defaults to <code>fork</code>, which inherits the parent's memory &mdash; including a database connection that no longer works. Forcing <code>spawn</code> everywhere fixed every call failing on first deploy.</dd></div>
+          <div class="row"><dt>Queues</dt><dd>How the main server and a call process pass messages, since they share no memory.</dd></div>
+          <div class="row"><dt>Worker pool</dt><dd>Processes started <em>before</em> anyone calls, so the caller never waits for one to boot. Setup went from 13.7 seconds to 0.04.</dd></div>
+        </dl>
+        <div class="note"><span><b>The production lesson:</b> Linux starts new processes differently from Windows by default, and that difference broke every call on first deploy. Forcing the Windows behaviour everywhere fixed it. A pool of pre-started workers was added later, cutting call setup from 13.7 seconds to 0.04.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.5</span><h3>Harden login security</h3><span class="hrs">4h</span></div>
+      <div class="t-body">
+        <p>Short-lived login tokens, the ability to revoke a stolen one, and limits on how often anyone can try.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">python-jose</span><span class="chip">Redis</span>
+            <span class="chip">slowapi</span><span class="chip">httpOnly cookies</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">python-jose 3.5</span><span class="chip used">MongoDB revocation list</span>
+            <span class="chip used">slowapi 0.1.10</span><span class="chip used">httpOnly refresh cookie</span>
+            <span class="chip used">bcrypt</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>JWT</dt><dd>A signed token proving who you are, which the server can verify without a database lookup. Ours expires after 15 minutes.</dd></div>
+          <div class="row"><dt>python-jose</dt><dd>The library that creates and verifies those tokens.</dd></div>
+          <div class="row"><dt>Refresh token</dt><dd>A longer-lived second token that quietly gets you a new 15-minute one, so short expiry does not mean logging in constantly.</dd></div>
+          <div class="row"><dt>httpOnly cookie</dt><dd>A cookie JavaScript cannot read. It means a script injected into the page still cannot steal the refresh token.</dd></div>
+          <div class="row"><dt>Redis</dt><dd>A fast in-memory store, planned for tracking revoked logins. Replaced by MongoDB &mdash; same result without running a second database for one small list.</dd></div>
+          <div class="row"><dt>slowapi</dt><dd>Rate limiting: caps how many times an address or account can try an action, which is what stops password guessing.</dd></div>
+          <div class="row"><dt>bcrypt</dt><dd>The algorithm that stores passwords in a form nobody can reverse, deliberately slow so guessing is impractical.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> MongoDB instead of Redis for tracking revoked logins. Functionally identical here, and it avoided running an entire extra database for one small list.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.6</span><h3>Verify ownership and block prompt attacks</h3><span class="hrs">2h</span></div>
+      <div class="t-body">
+        <p>Making sure one customer can never see another's bots, and that nobody can talk the AI into ignoring its instructions.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">FastAPI dependencies</span><span class="chip">Pydantic validators</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">One reusable dependency</span><span class="chip used">Injection blocklist</span>
+            <span class="chip used">Length cap</span><span class="chip used">pytest (first suite)</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>FastAPI dependency</dt><dd>A reusable check attached to a route. One of them here answers &quot;does this bot belong to the person asking?&quot;, replacing the same check copy-pasted everywhere.</dd></div>
+          <div class="row"><dt>Prompt injection</dt><dd>When a user writes instructions designed to override the AI's own &mdash; &quot;ignore your rules and&hellip;&quot;. Blocked by pattern matching before it is ever saved.</dd></div>
+          <div class="row"><dt>Pydantic validators</dt><dd>Rules attached to a field, so a bot's instructions are length-capped and pattern-checked automatically on the way in.</dd></div>
+        </dl>
+        <div class="note same"><span><b>As planned.</b> This task also produced the project's first automated tests — thirteen of them, covering cross-customer isolation.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.7</span><h3>Add error tracking and AI monitoring</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>Knowing when something breaks without being told, and seeing what every AI call cost.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Sentry</span><span class="chip">Langfuse (self-hosted)</span><span class="chip">OpenTelemetry</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">sentry-sdk (server)</span><span class="chip used">@sentry/react (browser)</span>
+            <span class="chip used">Langfuse Cloud, EU</span><span class="chip used">OpenTelemetry OTLP</span>
+            <span class="chip used">Error-spike alert</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Sentry</dt><dd>Captures crashes with the full context of what led to them, and emails when errors spike. Separate projects for server and browser.</dd></div>
+          <div class="row"><dt>Langfuse</dt><dd>Records every AI call &mdash; duration, words processed, cost &mdash; so &quot;what does a conversation cost&quot; has a real number behind it.</dd></div>
+          <div class="row"><dt>OpenTelemetry</dt><dd>A vendor-neutral standard for recording what a system did. Pipecat emits it already, so tracing was mostly plumbing rather than instrumentation.</dd></div>
+          <div class="row"><dt>OTLP</dt><dd>The wire format OpenTelemetry sends over. Langfuse accepts it, which is why no custom integration was written.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> self-hosting Langfuse needs 16&nbsp;GB of memory; the server has 4. Their free hosted tier in Europe gives the same result and a cleaner answer on where data lives. Model prices had to be entered by hand — the AI models used here were not in their pricing table, so costs showed as blank until added.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.8</span><h3>Build a document search test suite</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>Thirty-two real questions with known answers, so a change that quietly makes search worse is caught immediately.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">pytest</span><span class="chip">A representative test PDF</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">pytest</span><span class="chip used">32-question set</span>
+            <span class="chip used">Baseline 28/32</span><span class="chip used">Regression floor 24/32</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>pytest</dt><dd>Python's testing tool. The whole suite runs in about 25 seconds, which is what makes it worth running constantly.</dd></div>
+          <div class="row"><dt>Regression floor</dt><dd>The test asserts 24 of 32 rather than all 32. Normal variation then passes while a genuine drop still fails &mdash; a test that cries wolf gets ignored.</dd></div>
+        </dl>
+        <div class="note same"><span><b>As planned.</b> The floor matters: the test asserts a margin rather than perfection, so ordinary variation does not cause false alarms while a real regression still fails.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.9</span><h3>Set up automated testing and deployment</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>Every code change automatically checked five ways before it can reach the main branch.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">GitHub Actions</span><span class="chip">Docker</span><span class="chip">Fly.io / Railway</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">GitHub Actions</span><span class="chip used">ruff (style)</span>
+            <span class="chip used">pytest + Mongo service</span><span class="chip used">Dependency scan</span>
+            <span class="chip used">Secret scan</span><span class="chip used">Branch protection</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>GitHub Actions</dt><dd>Runs checks automatically on every push, on GitHub's machines rather than yours.</dd></div>
+          <div class="row"><dt>ruff</dt><dd>An extremely fast Python style and error checker &mdash; catches unused imports and mistakes before a human reads the code.</dd></div>
+          <div class="row"><dt>Service container</dt><dd>A throwaway database started just for the test run. Necessary because the real database only accepts a fixed list of addresses, which automated runners can never match.</dd></div>
+          <div class="row"><dt>Secret scan</dt><dd>Checks nobody has accidentally committed a password or API key. Public repositories get scraped for exactly that within minutes.</dd></div>
+          <div class="row"><dt>Branch protection</dt><dd>A rule that the main branch only accepts changes that passed the checks.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> deployment is deliberately <em>not</em> automated — the deploy step exists but stays switched off, so nothing reaches the live server without a decision. Tests run against a throwaway database inside the checking system rather than the real one, which also has a fixed address list that automated runners could never satisfy.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">2.10</span><h3>Show sources in the interface</h3><span class="hrs">2h</span></div>
+      <div class="t-body">
+        <p>While the bot speaks, the screen shows which document and page the answer came from — clickable, opening at that page.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">React</span><span class="chip">Existing page metadata</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">WebRTC data channel</span><span class="chip used">React</span>
+            <span class="chip used">GridFS for original PDFs</span><span class="chip used">Blob URL + #page=N</span></div></div>
+        </div>
+                <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Data channel</dt><dd>WebRTC can carry data alongside audio. Source citations travel down it, appearing on screen while the bot is still speaking.</dd></div>
+          <div class="row"><dt>GridFS</dt><dd>MongoDB's way of storing whole files. It holds the original PDFs, so a citation can open the real document.</dd></div>
+          <div class="row"><dt>Blob URL + #page=N</dt><dd>A temporary in-browser link to a file, with the page number attached &mdash; which is how a citation opens the PDF at the right page rather than page one.</dd></div>
+        </dl>
+        <div class="note"><span><b>Extended:</b> the original PDFs are now stored too, so a citation opens the real document at the right page rather than only naming it. When nothing was found the interface says so plainly — "general knowledge, not from your documents" — which is the honest answer.</span></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Part four · in progress</span>
+    <h2>Phase 3 — Tasks and Multi-Tasking</h2>
+    <p class="sec-desc">Nine tasks turning the bot from something that talks into something that does work. This section fills in as each task is built and tested.</p>
+  </div>
+  <div class="pending">
+    Task 3.1 — Build the tool plug-in system — is next.<br>
+    Each task will be added here once it is built <em>and</em> verified working, not when the code is written.
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Reference</span>
+    <h2>What is actually installed</h2>
+    <p class="sec-desc">The pinned versions, in case you are asked exactly what the project runs on.</p>
+  </div>
+  <div class="deps">
+    <table>
+      <thead><tr><th>Package</th><th>Version</th><th>What it does here</th></tr></thead>
+      <tbody>
+        <tr><td class="m">pipecat-ai</td><td>1.7.0</td><td>The voice pipeline that connects every stage</td></tr>
+        <tr><td class="m">fastapi</td><td>0.141.1</td><td>The web server the browser talks to</td></tr>
+        <tr><td class="m">uvicorn</td><td>0.52.3</td><td>Runs the web server</td></tr>
+        <tr><td class="m">aiortc</td><td>1.15.0</td><td>Live audio between browser and server</td></tr>
+        <tr><td class="m">beanie / motor</td><td>1.26.0 / 3.5.0</td><td>Talking to MongoDB</td></tr>
+        <tr><td class="m">pydantic</td><td>2.13.4</td><td>Validating every piece of data</td></tr>
+        <tr><td class="m">deepgram-sdk</td><td>7.7.0</td><td>Speech to text</td></tr>
+        <tr><td class="m">faster-whisper</td><td>1.2.1</td><td>Free local speech to text</td></tr>
+        <tr><td class="m">piper-tts</td><td>1.7.0</td><td>Free local voice</td></tr>
+        <tr><td class="m">onnxruntime</td><td>1.24.4</td><td>Runs the turn-detection model</td></tr>
+        <tr><td class="m">pinecone</td><td>9.1.0</td><td>Document search</td></tr>
+        <tr><td class="m">openai</td><td>2.54.0</td><td>Embeddings, and the alternative AI</td></tr>
+        <tr><td class="m">python-jose</td><td>3.5.0</td><td>Login tokens</td></tr>
+        <tr><td class="m">slowapi</td><td>0.1.10</td><td>Rate limiting</td></tr>
+        <tr><td class="m">sentry-sdk</td><td>2.68.1</td><td>Error tracking</td></tr>
+        <tr><td class="m">pypdf</td><td>6.16.2</td><td>Reading uploaded PDFs</td></tr>
+        <tr><td class="m">react / vite</td><td>19 / 8</td><td>The web interface</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  Voice agent · 18 of 68 tasks complete · Phases 1 and 2 built, deployed and verified on live calls<br>
+  Updated 4 September 2026 · next update when task 3.1 is built and tested
+</footer>
+
+</div>
+
+<style>
+/* ---- Ask panel ---------------------------------------------------- */
+#ask-launch{
+  position:fixed; right:20px; bottom:20px; z-index:40;
+  display:flex; align-items:center; gap:9px;
+  padding:11px 17px; border-radius:26px; cursor:pointer;
+  background:var(--accent); color:#fff; border:0;
+  font:600 14px/1 "DM Sans", system-ui, sans-serif;
+  box-shadow:0 4px 18px rgba(0,0,0,.22);
+}
+#ask-launch:hover{filter:brightness(1.08)}
+#ask-launch:focus-visible{outline:3px solid var(--accent); outline-offset:3px}
+#ask-launch[hidden]{display:none!important}
+
+#ask{
+  position:fixed; right:20px; bottom:20px; z-index:41;
+  width:min(420px, calc(100vw - 40px)); max-height:min(640px, calc(100vh - 40px));
+  display:flex; flex-direction:column;
+  background:var(--surface); border:1px solid var(--line); border-radius:14px;
+  box-shadow:0 10px 44px rgba(0,0,0,.28); overflow:hidden;
+}
+#ask[hidden]{display:none!important}
+.ask-hd{
+  display:flex; align-items:center; gap:10px; padding:13px 15px;
+  border-bottom:1px solid var(--line); background:var(--surface-2); flex:none;
+}
+.ask-hd strong{font-family:"Barlow Condensed",sans-serif; font-size:18px; font-weight:700; flex:1}
+.ask-hd .sub{font-family:"JetBrains Mono",monospace; font-size:10px; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--text-3)}
+.ask-x{background:none; border:0; cursor:pointer; color:var(--text-3); font-size:20px;
+  line-height:1; padding:2px 5px; border-radius:5px}
+.ask-x:hover{color:var(--text); background:var(--line-soft)}
+
+.ask-log{flex:1; overflow-y:auto; padding:15px; display:flex; flex-direction:column; gap:12px}
+.msg{display:flex; flex-direction:column; gap:4px; max-width:92%}
+.msg .who{font-family:"JetBrains Mono",monospace; font-size:9.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--text-3)}
+.msg .txt{font-size:14.5px; line-height:1.58; white-space:pre-wrap; word-wrap:break-word}
+.msg.me{align-self:flex-end; align-items:flex-end}
+.msg.me .txt{background:var(--accent-bg); color:var(--text); padding:9px 13px;
+  border-radius:12px 12px 3px 12px}
+.msg.ai .txt{color:var(--text-2)}
+.msg.err .txt{color:var(--diverge)}
+
+.ask-seed{display:flex; flex-direction:column; gap:8px}
+.ask-seed .hint{font-size:13.5px; color:var(--text-2)}
+.seeds{display:flex; flex-wrap:wrap; gap:6px}
+.seed{font:500 12.5px/1.3 "DM Sans",sans-serif; text-align:left; cursor:pointer;
+  padding:7px 11px; border-radius:8px; background:var(--surface-2);
+  border:1px solid var(--line); color:var(--text-2)}
+.seed:hover{border-color:var(--accent); color:var(--text)}
+
+.ask-ft{flex:none; border-top:1px solid var(--line); padding:11px; display:flex; gap:8px;
+  align-items:flex-end; background:var(--surface)}
+#ask-in{flex:1; resize:none; min-height:38px; max-height:120px; padding:9px 11px;
+  border-radius:9px; border:1px solid var(--line); background:var(--paper); color:var(--text);
+  font:400 14px/1.45 "DM Sans", system-ui, sans-serif}
+#ask-in:focus{outline:2px solid var(--accent); outline-offset:-1px; border-color:transparent}
+.ask-go{flex:none; border:0; cursor:pointer; border-radius:9px; padding:10px 15px;
+  background:var(--accent); color:#fff; font:600 13.5px/1 "DM Sans",sans-serif}
+.ask-go:disabled{opacity:.45; cursor:default}
+.ask-stop{flex:none; border:1px solid var(--line); background:var(--surface-2); cursor:pointer;
+  border-radius:9px; padding:10px 13px; color:var(--text-2); font:600 13.5px/1 "DM Sans",sans-serif}
+.ask-note{padding:0 15px 10px; font-size:11.5px; color:var(--text-3)}
+
+@media print{ #ask, #ask-launch{display:none!important} }
+@media (max-width:520px){
+  #ask{right:10px; bottom:10px; width:calc(100vw - 20px); max-height:calc(100vh - 20px)}
+  #ask-launch{right:12px; bottom:12px}
+}
+</style>
+
+<button id="ask-launch" hidden aria-expanded="false" aria-controls="ask">
+  <span aria-hidden="true">✳</span> Ask about this project
+</button>
+
+<div id="ask" hidden role="dialog" aria-label="Ask about this project">
+  <div class="ask-hd">
+    <strong>Ask about this project</strong>
+    <span class="sub" id="ask-tier">grounded in this page</span>
+    <button class="ask-x" id="ask-close" aria-label="Close">×</button>
+  </div>
+  <div class="ask-log" id="ask-log">
+    <div class="ask-seed">
+      <p class="hint">Answers come from this document plus general knowledge — useful for rehearsing how you would explain a choice out loud.</p>
+      <div class="seeds">
+        <button class="seed">Explain reranking as if I have never heard of it</button>
+        <button class="seed">Why did we drop Redis and LiveKit?</button>
+        <button class="seed">If an interviewer asks "how does this scale?", what do I say?</button>
+        <button class="seed">What is the difference between VAD and Smart Turn?</button>
+        <button class="seed">Quiz me on Phase 2</button>
+      </div>
+    </div>
+  </div>
+  <div class="ask-ft">
+    <textarea id="ask-in" rows="1" placeholder="Ask anything about the stack…"></textarea>
+    <button class="ask-go" id="ask-go">Ask</button>
+  </div>
+  <p class="ask-note" id="ask-note"></p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var launch = document.getElementById("ask-launch");
+  var panel  = document.getElementById("ask");
+  var log    = document.getElementById("ask-log");
+  var input  = document.getElementById("ask-in");
+  var go     = document.getElementById("ask-go");
+  var note   = document.getElementById("ask-note");
+  var seedBox;
+
+  var sample = null, turns = null, busy = false, ctl = null;
+
+  // The page's own text becomes the assistant's knowledge. Built from the DOM
+  // rather than kept as a second copy, so it can never drift from what is on
+  // screen. Sliced well under the 64 KiB input cap to leave room for the
+  // conversation itself.
+  function buildContext() {
+    var out = [];
+    document.querySelectorAll("section").forEach(function (sec) {
+      var h = sec.querySelector("h2");
+      if (h) out.push("\n## " + h.textContent.trim());
+      sec.querySelectorAll(".p").forEach(function (c) {
+        var n = c.querySelector("h3"), k = c.querySelector(".kind");
+        out.push("\n### " + (n ? n.textContent.trim() : "") + " (" + (k ? k.textContent.trim() : "") + ")");
+        c.querySelectorAll("p").forEach(function (p) { out.push(p.textContent.trim()); });
+      });
+      sec.querySelectorAll(".task").forEach(function (t) {
+        var id = t.querySelector(".tid"), ti = t.querySelector("h3");
+        out.push("\n### Task " + (id ? id.textContent.trim() : "") + " — " + (ti ? ti.textContent.trim() : ""));
+        var lead = t.querySelector(".t-body > p");
+        if (lead) out.push(lead.textContent.trim());
+        t.querySelectorAll(".col").forEach(function (col) {
+          var head = col.querySelector(".col-h");
+          var chips = [];
+          col.querySelectorAll(".chip").forEach(function (c) { chips.push(c.textContent.trim()); });
+          if (chips.length) out.push((head ? head.textContent.trim() : "") + ": " + chips.join(", "));
+        });
+        t.querySelectorAll(".terms .row").forEach(function (r) {
+          var d = r.querySelector("dt"), v = r.querySelector("dd");
+          if (d && v) out.push("- " + d.textContent.trim() + ": " + v.textContent.trim());
+        });
+        var nt = t.querySelector(".note");
+        if (nt) out.push("Note: " + nt.textContent.trim());
+      });
+      sec.querySelectorAll("tbody tr").forEach(function (tr) {
+        var c = tr.querySelectorAll("td");
+        if (c.length >= 3) out.push("- " + c[0].textContent.trim() + " " + c[1].textContent.trim() + " — " + c[2].textContent.trim());
+      });
+    });
+    return out.join("\n").slice(0, 38000);
+  }
+
+  var RULES =
+    "You are helping the person who BUILT the voice agent described below revise it for a " +
+    "technical job interview. Everything below is their own project.\n\n" +
+    "How to answer:\n" +
+    "- Ground every answer in the project notes. Say plainly when something is not covered.\n" +
+    "- Plain language first, the technical term second. They are still learning the vocabulary.\n" +
+    "- Be concise: a few short paragraphs, no headings, no markdown formatting, no bullet symbols.\n" +
+    "- When they ask how to answer an interview question, give them words they could actually say.\n" +
+    "- If asked to quiz them, ask ONE question and stop.\n\n" +
+    "=== PROJECT NOTES ===\n";
+
+  function bubble(kind, who, text) {
+    var d = document.createElement("div");
+    d.className = "msg " + kind;
+    var w = document.createElement("div"); w.className = "who"; w.textContent = who;
+    var t = document.createElement("div"); t.className = "txt"; t.textContent = text;
+    d.appendChild(w); d.appendChild(t); log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return t;
+  }
+
+  var COPY = {
+    not_granted: "You declined access, so answering is switched off for this visit. Reload the page to be asked again.",
+    sampling_disabled: "Claude is not available on this account.",
+    rate_limited: "Too many questions too quickly. Wait a moment and ask again.",
+    session_expired: "Your Claude session expired — sign in again and reload.",
+    refused: "Claude declined to answer that one. Try rephrasing it.",
+    empty_completion: "No answer came back. Try asking it a different way.",
+    prompt_too_large: "That was too long to send. Ask something shorter.",
+    invalid_request: "Something was wrong with the request."
+  };
+
+  function send(question) {
+    if (busy || !sample || !question.trim()) return;
+    if (seedBox && seedBox.parentNode) { seedBox.parentNode.removeChild(seedBox); seedBox = null; }
+
+    busy = true; go.disabled = true; note.textContent = "";
+    bubble("me", "You", question.trim());
+    var out = bubble("ai", "Claude", "Thinking…");
+    var streamed = false;
+
+    // A fresh controller per call — a reused one stays aborted forever.
+    ctl = new AbortController();
+    var stop = document.createElement("button");
+    stop.className = "ask-stop"; stop.textContent = "Stop";
+    stop.onclick = function () { if (ctl) ctl.abort(); };
+    go.parentNode.insertBefore(stop, go);
+
+    if (turns === null) turns = [{ role: "user", content: RULES + buildContext() }];
+    turns.push({ role: "user", content: question.trim() });
+
+    sample(turns, {
+      signal: ctl.signal,
+      cache: false,                       // every turn of a chat must be a real answer
+      onText: function (u) { streamed = true; out.textContent = u.text; log.scrollTop = log.scrollHeight; }
+    }).then(function (res) {
+      out.textContent = res.text;
+      turns.push({ role: "assistant", content: res.text });
+      if (res.truncated) note.textContent = "That answer was cut short — ask for less at a time.";
+      // Keep the conversation inside the input cap: drop oldest exchanges,
+      // never the instructions turn.
+      while (turns.length > 13) turns.splice(1, 2);
+    }).catch(function (e) {
+      var code = (e && e.code) || "upstream_error";
+      if (code === "cancelled") {
+        out.textContent = (e && e.text) || "Stopped.";
+        turns.pop();
+      } else {
+        if (e && e.text && streamed) { out.textContent = e.text; }
+        else { out.parentNode.className = "msg err"; out.textContent = COPY[code] || "Something went wrong. Try again."; }
+        turns.pop();
+        if (code === "not_granted" || code === "sampling_disabled" || code === "not_declared") {
+          go.disabled = true; input.disabled = true; sample = null;
+        }
+      }
+    }).then(function () {
+      busy = false;
+      if (sample) { go.disabled = false; }
+      if (stop.parentNode) stop.parentNode.removeChild(stop);
+      ctl = null;
+      log.scrollTop = log.scrollHeight;
+    });
+  }
+
+  function open() {
+    panel.hidden = false; launch.hidden = true;
+    launch.setAttribute("aria-expanded", "true");
+    input.focus();
+  }
+  function close() {
+    panel.hidden = true; launch.hidden = false;
+    launch.setAttribute("aria-expanded", "false");
+  }
+
+  launch.addEventListener("click", open);
+  document.getElementById("ask-close").addEventListener("click", close);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !panel.hidden) close();
+  });
+  go.addEventListener("click", function () { var q = input.value; input.value = ""; send(q); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); var q = input.value; input.value = ""; send(q); }
+  });
+  input.addEventListener("input", function () {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 120) + "px";
+  });
+  seedBox = log.querySelector(".ask-seed");
+  log.addEventListener("click", function (e) {
+    var b = e.target.closest(".seed");
+    if (b) send(b.textContent);
+  });
+
+  // The feature appears only once the runtime answers. Absent viewer, no
+  // capability, or a refusal to load all resolve null — and the page is a
+  // perfectly good document without it.
+  if (window.claude && typeof window.claude.use === "function") {
+    window.claude.use("sample").then(function (fn) {
+      if (!fn) return;
+      sample = fn;
+      launch.hidden = false;
+    }).catch(function () {});
+  }
+})();
+</script>
