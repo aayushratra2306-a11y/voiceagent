@@ -12,7 +12,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.api import approvals, auth, bot_tools, bots, connect, documents, payments, webhooks
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
-from app.core import health
+from app.core import health, metrics
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.mongo import init_db
@@ -113,6 +113,23 @@ async def health_endpoint():
     """
     result = await health.report()
     return JSONResponse(status_code=200 if result["healthy"] else 503, content=result)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint():
+    """Task 4.9 — the scrape endpoint. Off via settings.metrics_enabled only
+    if an operator wants it off; the numbers themselves (breaker/capacity/
+    pool state, never a transcript or a caller's data) are safe to expose.
+    Not authenticated for the same reason /health isn't — see metrics.py's
+    module docstring for exactly what is and isn't reported here versus
+    task 2.7's Langfuse traces.
+    """
+    if not settings.metrics_enabled:
+        return JSONResponse(status_code=404, content={"detail": "metrics are disabled"})
+    from fastapi import Response
+
+    body, content_type = await metrics.render()
+    return Response(content=body, media_type=content_type)
 
 
 @app.get("/test", response_class=HTMLResponse, include_in_schema=False)
