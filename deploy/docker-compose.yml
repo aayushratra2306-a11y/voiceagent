@@ -41,6 +41,24 @@ services:
       - caddy_data:/data      # Let's Encrypt certs — MUST persist, or every
       - caddy_config:/config  # restart re-requests certs and hits rate limits
 
+  # Task 4.1/4.2/4.5 — shared state, ready for whenever a second API
+  # replica exists. Starting this container changes NOTHING on its own:
+  # the backend only talks to it once deploy/.env sets REDIS_URL (blank by
+  # default — see app/core/config.py), so today's single-replica deployment
+  # keeps every one of those in its own process memory exactly as before.
+  # Tiny footprint idle (a few MB of RAM), no external account, no cost —
+  # self-hosted the same way coturn is.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    # No password by default: reachable only from inside this compose
+    # project's own Docker network (nothing here publishes 6379 to the
+    # host), the same trust boundary the backend already has with MongoDB.
+
   coturn:
     image: coturn/coturn:latest
     restart: unless-stopped
@@ -86,3 +104,4 @@ volumes:
   caddy_data:
   caddy_config:
   local_models:
+  redis_data:
