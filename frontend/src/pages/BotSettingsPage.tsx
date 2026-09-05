@@ -194,6 +194,9 @@ export default function BotSettingsPage() {
               webhook_paid_value: 'paid',
             },
             approval: { enabled: false, amount_parameter: 'amount', threshold: 0 },
+            // A builtin has nothing to undo, and saying so is the point:
+            // an empty url is what tells the saga this cannot be taken back.
+            undo: { url: '', method: 'DELETE', headers: {}, body: {} },
           })))
         }
       } else {
