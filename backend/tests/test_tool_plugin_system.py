@@ -426,6 +426,54 @@ def stored_id(tool_id):
     return PydanticObjectId(tool_id)
 
 
+# Task 3.4's undo was readable by the saga and writable by nothing: it was
+# absent from ToolIn, so a client that sent one had it silently dropped by
+# pydantic and every tool's undo.url stayed "". The rollback path could not
+# be reached by any tool a customer could actually configure, which is worth
+# an API-level test rather than only the saga's own unit tests.
+
+
+async def test_a_declared_undo_survives_the_api(client, user_a_token):
+    bot_id = await _make_bot(client, user_a_token, "Undo bot")
+    body = {**TOOL_BODY, "undo": {
+        "url": "https://api.example.com/stock/{sku}/release",
+        "method": "POST", "headers": {"X-Reason": "rollback"}, "body": {},
+    }}
+
+    created = await client.post(f"/bots/{bot_id}/tools/", json=body, headers=auth_headers(user_a_token))
+    assert created.status_code == 201, created.text
+    assert created.json()["undo"]["url"].endswith("/release")
+    assert created.json()["undo"]["method"] == "POST"
+
+    stored = await BotTool.get(stored_id(created.json()["id"]))
+    assert stored.undo.url.endswith("/release")
+    assert stored.undo.headers == {"X-Reason": "rollback"}
+
+
+async def test_an_undo_can_be_added_to_an_existing_tool(client, user_a_token):
+    bot_id = await _make_bot(client, user_a_token, "Undo edit bot")
+    tool_id = (await client.post(f"/bots/{bot_id}/tools/", json=TOOL_BODY,
+                                 headers=auth_headers(user_a_token))).json()["id"]
+
+    edit = {**TOOL_BODY, "undo": {"url": "https://api.example.com/cancel/{sku}",
+                                  "method": "DELETE", "headers": {}, "body": {}}}
+    resp = await client.patch(f"/bots/{bot_id}/tools/{tool_id}", json=edit,
+                              headers=auth_headers(user_a_token))
+    assert resp.status_code == 200, resp.text
+
+    stored = await BotTool.get(stored_id(tool_id))
+    assert stored.undo.url.endswith("/cancel/{sku}")
+
+
+async def test_a_tool_with_no_undo_declares_none(client, user_a_token):
+    """The absence is meaningful: it is what tells the saga this cannot be
+    taken back, so it must not acquire a default url."""
+    bot_id = await _make_bot(client, user_a_token, "No undo bot")
+    created = await client.post(f"/bots/{bot_id}/tools/", json=TOOL_BODY,
+                                headers=auth_headers(user_a_token))
+    assert created.json()["undo"]["url"] == ""
+
+
 async def test_another_user_cannot_see_or_touch_your_tools(client, user_a_token, user_b_token):
     bot_id = await _make_bot(client, user_a_token, "Private bot")
     tool_id = (await client.post(f"/bots/{bot_id}/tools/", json=TOOL_BODY,

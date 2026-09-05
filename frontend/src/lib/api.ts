@@ -174,7 +174,18 @@ export interface BotTool {
   /** Task 3.10 — above this value on the named parameter, the underlying
    *  action waits for a person instead of running automatically. */
   approval: ApprovalGateConfig
+  /** Task 3.4 — how this tool takes back what it did. Only a tool that
+   *  declares this is ever rolled back when a later step in the same turn
+   *  fails; an empty url means "cannot be undone". */
+  undo: ToolUndoConfig
   auth: { kind: string; name: string; secret_masked: string; has_secret: boolean }
+}
+
+export interface ToolUndoConfig {
+  url: string
+  method: string
+  headers: Record<string, string>
+  body: Record<string, unknown>
 }
 
 export interface ApprovalGateConfig {

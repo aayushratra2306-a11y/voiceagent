@@ -37,6 +37,7 @@ const BLANK: BotToolInput = {
     webhook_paid_value: 'paid', webhook_secret: '',
   },
   approval: { enabled: false, amount_parameter: 'amount', threshold: 0 },
+  undo: { url: '', method: 'DELETE', headers: {}, body: {} },
 }
 
 /** Key/value maps are edited as rows so a customer never types JSON. */
@@ -64,6 +65,7 @@ export default function BotToolsPage() {
   const [headerRows, setHeaderRows] = useState<Pair[]>([])
   const [queryRows, setQueryRows] = useState<Pair[]>([])
   const [fieldMapRows, setFieldMapRows] = useState<Pair[]>([])
+  const [undoHeaderRows, setUndoHeaderRows] = useState<Pair[]>([])
   const [secretTouched, setSecretTouched] = useState(false)
   const [paymentSecretTouched, setPaymentSecretTouched] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -86,7 +88,7 @@ export default function BotToolsPage() {
 
   function startNew() {
     setEditingId('new'); setForm(BLANK)
-    setHeaderRows([]); setQueryRows([]); setFieldMapRows([])
+    setHeaderRows([]); setQueryRows([]); setFieldMapRows([]); setUndoHeaderRows([])
     setSecretTouched(false); setPaymentSecretTouched(false)
     setTestArgs({}); setTestResult('')
   }
@@ -106,9 +108,10 @@ export default function BotToolsPage() {
       // server never returns it, and omitting it means "keep the stored one".
       payment: { ...t.payment, webhook_secret: undefined },
       approval: t.approval,
+      undo: t.undo,
     })
     setHeaderRows(toPairs(t.headers)); setQueryRows(toPairs(t.query))
-    setFieldMapRows(toPairs(t.field_map))
+    setFieldMapRows(toPairs(t.field_map)); setUndoHeaderRows(toPairs(t.undo.headers))
     setSecretTouched(false); setPaymentSecretTouched(false)
     setTestArgs({}); setTestResult('')
   }
@@ -131,6 +134,7 @@ export default function BotToolsPage() {
       headers: fromPairs(headerRows),
       query: fromPairs(queryRows),
       field_map: fromPairs(fieldMapRows),
+      undo: { ...form.undo, headers: fromPairs(undoHeaderRows) },
       payment: paymentSecretTouched
         ? form.payment
         : { ...form.payment, webhook_secret: undefined },
@@ -436,6 +440,41 @@ export default function BotToolsPage() {
                     anyone else claiming a payment succeeded. Point your provider's webhook at{' '}
                     <code className="font-mono text-slate-400">/payments/webhook/{editingId !== 'new' ? editingId : '<save first>'}</code>
                   </p>
+                </div>
+              )}
+            </div>
+
+            {/* Task 3.4 — how this tool takes itself back */}
+            <div className="border border-white/8 rounded-xl p-4">
+              <label className={label}>Undoing this</label>
+              <p className="text-xs text-slate-500 mb-3">
+                If the caller asks for several things at once and a later one fails, this tool
+                is taken back automatically — but only if you say how here. Leave it empty for
+                anything that cannot be undone (a sent message, a charged card); the caller is
+                then told plainly that it still stands.
+              </p>
+              <div className="flex gap-2">
+                <select value={form.undo.method}
+                  onChange={e => set('undo', { ...form.undo, method: e.target.value })}
+                  className={`${field} max-w-[120px]`}>
+                  {METHODS.map(m => <option key={m} value={m} className="bg-[#12121f]">{m}</option>)}
+                </select>
+                <input value={form.undo.url}
+                  onChange={e => set('undo', { ...form.undo, url: e.target.value })}
+                  placeholder="https://your-system.com/bookings/{booking_id}" className={`${field} font-mono`} />
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                It runs with the same values the original call used, so {'{booking_id}'} here
+                means the same thing it did above.
+              </p>
+              {form.undo.url && (
+                <div className="mt-4">
+                  <p className="text-xs text-slate-500 mb-2">
+                    Extra headers for the undo call. Leave empty to reuse the tool's own headers
+                    and key.
+                  </p>
+                  <PairEditor rows={undoHeaderRows} onChange={setUndoHeaderRows}
+                    placeholderKey="Header" placeholderValue="value" />
                 </div>
               )}
             </div>
