@@ -390,6 +390,16 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
         if cached is not None:
             logger.info(f"[TOOL] {tool.name}: served from this call's own cache, not asked again")
             return cached
+        # Says why the same question is being asked twice, which is
+        # otherwise invisible: the key carries the arguments, so a model
+        # that passed them slightly differently the second time looks
+        # identical in the URL and still misses.
+        logger.info(f"[TOOL] {tool.name}: not in this call's cache yet (key={cache_key})")
+    else:
+        logger.info(
+            f"[TOOL] {tool.name}: not cacheable "
+            f"(method={method}, payment={tool.payment.enabled}, in_call={_inside_a_call()})"
+        )
 
     # .strip(): BotTool.url is trimmed on save (see models/bot_tool.py) so a
     # pasted-in leading space can't reach here for anything saved from now
