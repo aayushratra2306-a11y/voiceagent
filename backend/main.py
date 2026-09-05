@@ -5,13 +5,14 @@ from pathlib import Path
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.api import approvals, auth, bot_tools, bots, connect, documents, payments, webhooks
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
+from app.core import health
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.mongo import init_db
@@ -58,10 +59,20 @@ async def lifespan(app: FastAPI):
     # can span minutes, which cannot safely live in a process that can
     # exit within seconds of the caller hanging up.
     webhook_task = asyncio.create_task(webhook_delivery_loop())
+    # Task 4.7 — the watchdog half of "health checks and automatic
+    # restarts". /health below answers a single request; this is what
+    # notices the SAME checks failing repeatedly on their own and acts on
+    # it rather than waiting for a person, or Docker's own HEALTHCHECK
+    # (deploy/Dockerfile), to find out. See health.py's docstring for why
+    # both exist.
+    watchdog = health.Watchdog()
+    app.state.watchdog = watchdog
+    watchdog_task = asyncio.create_task(watchdog.run_forever())
     yield
     reaper_task.cancel()
     pool_task.cancel()
     webhook_task.cancel()
+    watchdog_task.cancel()
 
 
 app = FastAPI(title="Voice Agent API", lifespan=lifespan)
@@ -93,8 +104,15 @@ app.include_router(approvals.router)
 
 
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
+async def health_endpoint():
+    """Task 4.7 — actually verifies something, per the manual's own
+    warning: a database ping, the warm pool's state, current call
+    capacity, and every circuit breaker (task 4.6) this process knows
+    about. A load balancer or Docker's HEALTHCHECK should read the status
+    code (200 healthy, 503 not); a person should read the body.
+    """
+    result = await health.report()
+    return JSONResponse(status_code=200 if result["healthy"] else 503, content=result)
 
 
 @app.get("/test", response_class=HTMLResponse, include_in_schema=False)

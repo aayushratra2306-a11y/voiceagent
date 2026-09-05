@@ -32,6 +32,7 @@ docopt==0.6.2
 docstring_parser==0.18.0
 ecdsa==0.19.2
 email-validator==2.3.0
+fakeredis==2.37.1
 fastapi==0.141.1
 faster-whisper==1.2.1
 filelock==3.32.4
@@ -85,6 +86,10 @@ passlib==1.7.4
 pathvalidate==3.3.1
 pillow==12.3.0
 pinecone==9.1.0
+# Task 4.3/4.7 — reads real memory/CPU figures from the OS. Used to decide
+# whether the worker pool may grow (4.3) and as one of the "actually verify
+# a dependency" checks behind /health (4.7), not just a static OK.
+psutil==7.2.2
 pip-api==0.0.34
 pip-requirements-parser==32.0.1
 pip_audit==2.10.1
@@ -98,6 +103,11 @@ py-serializable==2.1.0
 pyaml==26.7.0
 pyasn1==0.6.4
 pycparser==3.0
+# Task 4.9 — the /metrics scrape endpoint. Just an exporter library; nothing
+# is scraped until an operator points a Prometheus instance at this server,
+# which is why turning this dependency on carries zero cost or behaviour
+# change by itself.
+prometheus_client==0.26.0
 pydantic==2.13.4
 pydantic-settings==2.15.0
 pydantic_core==2.46.4
@@ -116,6 +126,11 @@ python-jose==3.5.0
 python-multipart==0.0.32
 PyYAML==6.0.3
 regex==2026.7.19
+# Task 4.1/4.2/4.5 — shared state across API replicas (the active-call
+# registry, the call queue, the concurrency counter). Inert unless
+# settings.redis_url is set; a blank REDIS_URL (the default) keeps every one
+# of those in the single process's own memory, exactly as before Phase 4.
+redis==8.1.0
 requests==2.34.2
 resampy==0.4.3
 rich==15.0.0

@@ -47,6 +47,7 @@ from app.pipeline.language import (
     system_language_note,
     voice_gender,
 )
+from app.pipeline.provider_health import ProviderHealthObserver
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
 from app.pipeline.rag_processor import RAGContextProcessor
 from app.pipeline.saga import SAGA_RULE, RequestBoundary, TurnSaga
@@ -726,6 +727,11 @@ async def run_voice_pipeline(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
+        # Task 4.6 — watches for a provider failing or recovering and tells
+        # its circuit breaker. An observer rather than a processor because
+        # a service pushes its error frames UPSTREAM, where a processor
+        # placed after it would never see them. See provider_health.py.
+        observers=[ProviderHealthObserver()],
         enable_tracing=tracing_enabled,
         # Ties every span from this call together under one trace, so the
         # dashboard shows a conversation rather than loose per-stage spans.

@@ -112,7 +112,16 @@ def get_stt_service(language: str = "en"):
     """Task 2.1/2.2 — speech-to-text factory. settings.stt_provider:
     'deepgram' (cloud, default) or 'whisper' (local, free, via faster-whisper).
     """
-    if settings.stt_provider == "whisper":
+    # Task 4.6 — if Deepgram's breaker is open, this call does not wait to
+    # find that out for itself. fallback_for() returns None unless there is
+    # a tripped breaker AND a backup that actually works on this machine.
+    from app.pipeline.provider_health import STT_DEEPGRAM, fallback_for
+
+    provider = settings.stt_provider
+    if provider == "deepgram" and fallback_for(STT_DEEPGRAM) == "whisper":
+        provider = "whisper"
+
+    if provider == "whisper":
         # Imported here, not at module level — see the note by the imports.
         from pipecat.services.whisper.stt import WhisperSTTService
 
@@ -230,8 +239,18 @@ def get_llm_service(llm_model: str):
     'groq', or 'openai'. llm_model is the bot's own stored OpenAI model name
     (per-bot config, not a global setting) — only used on the OpenAI path.
     """
+    from app.pipeline.provider_health import LLM_GROQ, fallback_for
+
     provider = settings.llm_provider
     use_groq = provider == "groq" or (provider == "auto" and bool(settings.groq_api_key))
+
+    # Task 4.6 — Groq's backup is OpenAI rather than a local model, unlike
+    # the other two. There is no local LLM in this deployment that could
+    # hold a conversation on a 4GB VM, and an explicitly-chosen provider
+    # ('groq', not 'auto') is still overridden here: a caller hearing
+    # nothing is a worse outcome than a call answered by the other vendor.
+    if use_groq and fallback_for(LLM_GROQ) == "openai":
+        use_groq = False
 
     if use_groq:
         if not settings.groq_api_key:
@@ -264,7 +283,13 @@ def get_tts_service(voice_id: str, language: str = "en"):
     fully out of their own codebase's license scope; swap to that if this
     project's distribution plans ever need it.
     """
-    if settings.tts_provider == "piper":
+    from app.pipeline.provider_health import TTS_CARTESIA, fallback_for
+
+    provider = settings.tts_provider
+    if provider == "cartesia" and fallback_for(TTS_CARTESIA) == "piper":
+        provider = "piper"
+
+    if provider == "piper":
         # Imported here, not at module level — see the note by the imports.
         from pipecat.services.piper.tts import PiperTTSService
 

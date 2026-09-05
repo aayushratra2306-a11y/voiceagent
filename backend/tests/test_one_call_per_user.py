@@ -36,6 +36,11 @@ import pytest
 from app.api import connect as connect_module
 from app.api.connect import _active_calls, _ActiveCall, _end_previous_calls_for
 
+# Task 4.5 — _end_previous_calls_for is now async: it releases the ended
+# call's capacity slot (call_capacity.py) as part of ending it, which needs
+# an await. See test_capacity_cap.py for the slot-release behaviour itself.
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
 
 def _idle_process(ctx) -> mp.Process:
     """A real, live process standing in for a call worker."""
@@ -58,12 +63,12 @@ def registry():
     _active_calls.update(saved)
 
 
-def test_a_users_previous_call_is_terminated_when_they_start_another(registry):
+async def test_a_users_previous_call_is_terminated_when_they_start_another(registry):
     ctx = mp.get_context("spawn")
     old = _idle_process(ctx)
     registry["pc-old"] = _ActiveCall(old, ctx.Queue(), user_id="user-1")
 
-    _end_previous_calls_for("user-1")
+    await _end_previous_calls_for("user-1")
 
     old.join(timeout=5)
     assert not old.is_alive(), (
@@ -73,14 +78,14 @@ def test_a_users_previous_call_is_terminated_when_they_start_another(registry):
     assert "pc-old" not in registry, "terminated call left behind in the registry"
 
 
-def test_another_users_call_is_left_completely_alone(registry):
+async def test_another_users_call_is_left_completely_alone(registry):
     """The rule is per-user. Two people on two calls is normal operation."""
     ctx = mp.get_context("spawn")
     mine, theirs = _idle_process(ctx), _idle_process(ctx)
     registry["pc-mine"] = _ActiveCall(mine, ctx.Queue(), user_id="user-1")
     registry["pc-theirs"] = _ActiveCall(theirs, ctx.Queue(), user_id="user-2")
 
-    _end_previous_calls_for("user-1")
+    await _end_previous_calls_for("user-1")
 
     mine.join(timeout=5)
     assert not mine.is_alive()
@@ -88,14 +93,14 @@ def test_another_users_call_is_left_completely_alone(registry):
     assert "pc-theirs" in registry
 
 
-def test_every_stale_call_is_cleared_not_just_the_first(registry):
+async def test_every_stale_call_is_cleared_not_just_the_first(registry):
     """If two already leaked, starting a call must not leave one behind."""
     ctx = mp.get_context("spawn")
     first, second = _idle_process(ctx), _idle_process(ctx)
     registry["pc-1"] = _ActiveCall(first, ctx.Queue(), user_id="user-1")
     registry["pc-2"] = _ActiveCall(second, ctx.Queue(), user_id="user-1")
 
-    _end_previous_calls_for("user-1")
+    await _end_previous_calls_for("user-1")
 
     for proc in (first, second):
         proc.join(timeout=5)
@@ -103,13 +108,13 @@ def test_every_stale_call_is_cleared_not_just_the_first(registry):
     assert not registry, f"stale entries survived: {list(registry)}"
 
 
-def test_no_previous_call_is_a_no_op(registry):
+async def test_no_previous_call_is_a_no_op(registry):
     """The overwhelmingly common case: the first call of a session."""
-    _end_previous_calls_for("user-nobody")
+    await _end_previous_calls_for("user-nobody")
     assert not registry
 
 
-def test_an_already_dead_call_is_reaped_without_error(registry):
+async def test_an_already_dead_call_is_reaped_without_error(registry):
     """A worker that crashed on its own must still leave the registry clean,
     and must not raise on the way out."""
     ctx = mp.get_context("spawn")
@@ -118,12 +123,12 @@ def test_an_already_dead_call_is_reaped_without_error(registry):
     dead.join(timeout=5)
     registry["pc-dead"] = _ActiveCall(dead, ctx.Queue(), user_id="user-1")
 
-    _end_previous_calls_for("user-1")
+    await _end_previous_calls_for("user-1")
 
     assert "pc-dead" not in registry
 
 
-def test_connect_ends_the_previous_call_before_claiming_a_worker():
+async def test_connect_ends_the_previous_call_before_claiming_a_worker():
     """Ordering matters: freeing the old pipeline first means a caller who
     restarts never briefly holds two workers, which on a 2-worker pool would
     otherwise push their own new call onto the slow cold-spawn path."""

@@ -9,6 +9,11 @@ from loguru import logger
 from pydantic import BaseModel
 
 from app.core.auth import get_current_user
+from app.core.call_capacity import (
+    active_call_count,
+    release_call_slot,
+    try_acquire_call_slot,
+)
 from app.core.config import settings
 from app.core.deps import fetch_owned_bot
 from app.models.user import User
@@ -61,7 +66,7 @@ class _ActiveCall:
 _active_calls: dict[str, _ActiveCall] = {}
 
 
-def _end_previous_calls_for(user_id: str) -> None:
+async def _end_previous_calls_for(user_id: str) -> None:
     """Enforce one live call per user, killing any earlier one.
 
     FOUND 2026-09-03, from a call the user reported as "not a proper call".
@@ -101,6 +106,11 @@ def _end_previous_calls_for(user_id: str) -> None:
                 f"— same user started a new one"
             )
         call.process.join(timeout=1)
+        # Task 4.5 — freed immediately, not left for reap_dead_calls_loop's
+        # next pass. The exact case this matters for: the same user
+        # reconnecting should never be blocked by their OWN stale call still
+        # holding the slot their new one needs.
+        await release_call_slot()
 
 
 # Latency (2026-09-03) — the pre-warmed worker pool.
@@ -198,6 +208,11 @@ async def reap_dead_calls_loop(interval_seconds: int = 10) -> None:
         for pc_id in dead_pc_ids:
             call = _active_calls.pop(pc_id)
             call.process.join(timeout=1)
+            # Task 4.5 — the normal path a slot is freed: the call simply
+            # ended. _end_previous_calls_for above covers the other path
+            # (this same user starting a new call before this loop's next
+            # pass would have caught the old one).
+            await release_call_slot()
             logger.info(
                 f"[CALL] Cleaned up finished call pc_id={pc_id} "
                 f"(exitcode={call.process.exitcode})"
@@ -251,10 +266,42 @@ async def ice_servers(current_user: User = Depends(get_current_user)):
 
 @router.post("/connect")
 async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_user)):
-    # Task 2.6: bot_id here comes from the request body, not the URL path,
-    # so it uses fetch_owned_bot directly rather than the get_owned_bot
-    # FastAPI dependency (which resolves bot_id from a path parameter).
-    bot = await fetch_owned_bot(body.bot_id, current_user)
+    # Before anything else, including the database lookup below: this
+    # caller gets exactly one live pipeline. A previous one still running
+    # would otherwise keep hearing them and keep answering over the new one
+    # — see _end_previous_calls_for(). Also frees that call's capacity slot
+    # immediately, ahead of the check below, so a user reconnecting is
+    # never blocked by their own stale call.
+    await _end_previous_calls_for(str(current_user.id))
+
+    # Task 4.5 — the hard ceiling, checked before the bot lookup on purpose:
+    # a system already at capacity should not spend a database round trip
+    # finding that out. Checked, and its increment made, in one atomic step
+    # (see call_capacity.py) — a check-then-increment done in two separate
+    # steps is exactly how two requests both squeeze through when only one
+    # slot is actually free.
+    if not await try_acquire_call_slot():
+        current = await active_call_count()
+        logger.warning(
+            f"[CAPACITY] Refusing a new call — at the cap of "
+            f"{settings.max_concurrent_calls} ({current} active)"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="This system is at capacity right now. Please try again in a moment.",
+        )
+
+    try:
+        # Task 2.6: bot_id here comes from the request body, not the URL
+        # path, so it uses fetch_owned_bot directly rather than the
+        # get_owned_bot FastAPI dependency (which resolves bot_id from a
+        # path parameter).
+        bot = await fetch_owned_bot(body.bot_id, current_user)
+    except BaseException:
+        # The slot was claimed above; an unknown/unowned bot_id must not
+        # hold it forever.
+        await release_call_slot()
+        raise
 
     # Task 2.4 — plain picklable data passed across the process boundary as
     # multiprocessing.Process args, not the ORM object itself.
@@ -271,58 +318,61 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         "user_id": str(bot.user_id),
     }
 
-    # Before anything else: this caller gets exactly one live pipeline. A
-    # previous one still running would otherwise keep hearing them and keep
-    # answering over the new one — see _end_previous_calls_for().
-    _end_previous_calls_for(str(current_user.id))
-
     loop = asyncio.get_event_loop()
 
-    # Take a warm worker if one is waiting. The pool is topped up straight
-    # afterwards, off the event loop, so the replacement is already importing
-    # while this call negotiates.
-    worker = _idle_pool.pop(0) if _idle_pool else None
-
-    if worker is not None:
-        proc, answer_queue, ice_queue = worker.process, worker.answer_queue, worker.ice_queue
-        payment_queue = worker.payment_queue
-        worker.job_queue.put({
-            "bot_config": bot_config,
-            "sdp": body.sdp,
-            "sdp_type": body.type,
-            "pc_id": body.pc_id,
-        })
-        warm = "warm" if worker.ready.is_set() else "still starting"
-        logger.info(f"[POOL] Claimed {warm} worker pid={proc.pid} ({len(_idle_pool)} left)")
-        loop.run_in_executor(None, _top_up_pool)
-    else:
-        # Pool exhausted — a burst of simultaneous calls. Fall back to the
-        # original behaviour: spawn a worker for this call. Slower to answer,
-        # but it answers, which beats making the caller queue behind the pool.
-        logger.warning("[POOL] Empty, spawning a cold worker for this call")
-        answer_queue = _MP.Queue()
-        ice_queue = _MP.Queue()
-        payment_queue = _MP.Queue()
-        proc = _MP.Process(
-            target=call_worker_main,
-            args=(
-                bot_config, body.sdp, body.type, body.pc_id,
-                answer_queue, ice_queue, payment_queue,
-            ),
-            daemon=True,
-        )
-        proc.start()
-
+    # Task 4.5 — from here until the call is registered in _active_calls,
+    # any failure must release the slot just acquired above, or it leaks
+    # forever (nothing else in the system knows this call ever existed).
     try:
-        # answer_queue.get() is a blocking call — run it off the event loop
-        # so the API server keeps serving other requests while this call's
-        # process negotiates its WebRTC connection.
-        answer = await loop.run_in_executor(
-            None, lambda: answer_queue.get(timeout=CALL_SETUP_TIMEOUT_SECONDS)
-        )
-    except Exception as e:
-        proc.terminate()
-        raise HTTPException(status_code=504, detail="Call setup timed out") from e
+        # Take a warm worker if one is waiting. The pool is topped up
+        # straight afterwards, off the event loop, so the replacement is
+        # already importing while this call negotiates.
+        worker = _idle_pool.pop(0) if _idle_pool else None
+
+        if worker is not None:
+            proc, answer_queue, ice_queue = worker.process, worker.answer_queue, worker.ice_queue
+            payment_queue = worker.payment_queue
+            worker.job_queue.put({
+                "bot_config": bot_config,
+                "sdp": body.sdp,
+                "sdp_type": body.type,
+                "pc_id": body.pc_id,
+            })
+            warm = "warm" if worker.ready.is_set() else "still starting"
+            logger.info(f"[POOL] Claimed {warm} worker pid={proc.pid} ({len(_idle_pool)} left)")
+            loop.run_in_executor(None, _top_up_pool)
+        else:
+            # Pool exhausted — a burst of simultaneous calls. Fall back to
+            # the original behaviour: spawn a worker for this call. Slower
+            # to answer, but it answers, which beats queueing behind the
+            # pool.
+            logger.warning("[POOL] Empty, spawning a cold worker for this call")
+            answer_queue = _MP.Queue()
+            ice_queue = _MP.Queue()
+            payment_queue = _MP.Queue()
+            proc = _MP.Process(
+                target=call_worker_main,
+                args=(
+                    bot_config, body.sdp, body.type, body.pc_id,
+                    answer_queue, ice_queue, payment_queue,
+                ),
+                daemon=True,
+            )
+            proc.start()
+
+        try:
+            # answer_queue.get() is a blocking call — run it off the event
+            # loop so the API server keeps serving other requests while
+            # this call's process negotiates its WebRTC connection.
+            answer = await loop.run_in_executor(
+                None, lambda: answer_queue.get(timeout=CALL_SETUP_TIMEOUT_SECONDS)
+            )
+        except Exception as e:
+            proc.terminate()
+            raise HTTPException(status_code=504, detail="Call setup timed out") from e
+    except BaseException:
+        await release_call_slot()
+        raise
 
     _active_calls[answer["pc_id"]] = _ActiveCall(
         proc, ice_queue, str(current_user.id), payment_queue

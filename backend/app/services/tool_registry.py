@@ -43,12 +43,13 @@ import asyncio
 import base64
 import json
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 
+from app.core import breaker
 from app.core.crypto import decrypt_secret
 from app.core.url_safety import rejection_reason
 from app.models.bot_tool import BotTool
@@ -67,6 +68,29 @@ HTTP_TIMEOUT_SECONDS = 8.0
 # customer API returning a large document would otherwise push the actual
 # conversation out of the context window.
 MAX_RESPONSE_CHARS = 4000
+
+# Task 4.6 — one breaker per customer HOST, not per tool.
+#
+# Per host because that is where the failure actually is. A customer whose
+# API is down usually has three tools pointing at it, and the third one
+# should not have to discover the outage all over again from scratch.
+#
+# The threshold is deliberately lower and the cooldown shorter than a web
+# backend would use. On a phone call there is no spinner: two callers hearing
+# eight seconds of silence is already two callers too many, and if the
+# provider is genuinely back, twenty seconds is a short wait to find out.
+TOOL_BREAKER = breaker.BreakerConfig(
+    failure_threshold=3,
+    window_seconds=60.0,
+    cooldown_seconds=20.0,
+)
+
+
+def _breaker_name(url: str) -> str:
+    host = urlsplit(url).netloc.lower()
+    name = f"tool:{host}"
+    breaker.configure(name, TOOL_BREAKER)
+    return name
 
 # Task 3.7. Appended to the system prompt only for a bot with a
 # payment-enabled tool, so a bot without one carries no such instruction as
@@ -455,6 +479,26 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
     # one meant to be dialled down.
     timeout = tool.timeout_seconds or HTTP_TIMEOUT_SECONDS
 
+    # Task 4.6 — has this host already proved it is not answering?
+    #
+    # If so, do not spend the timeout finding that out again. Every second
+    # of it is dead air on a live call, and a host that has just timed out
+    # three times running is not going to answer this one either. Failing
+    # here costs microseconds and gets the caller a real sentence instead
+    # of silence.
+    circuit = _breaker_name(url)
+    if not breaker.allows(circuit):
+        logger.warning(
+            f"[TOOL] {tool.name}: not calling {urlsplit(url).netloc} — "
+            f"its circuit breaker is open after repeated failures"
+        )
+        return {
+            "ok": False,
+            "error": "unavailable",
+            "message": "That system is not responding at the moment. Tell the caller it is temporarily "
+                       "unavailable and offer to help another way, rather than guessing an answer.",
+        }
+
     logger.info(f"[TOOL] {tool.name} -> {tool.method} {url}")
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -467,6 +511,7 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
                 return response
     except httpx.TimeoutException:
         logger.warning(f"[TOOL] {tool.name}: timed out after {timeout}s")
+        breaker.record_failure(circuit, f"timed out after {timeout}s")
         return {
             "ok": False,
             "error": "timeout",
@@ -474,11 +519,25 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
         }
     except Exception as e:
         logger.warning(f"[TOOL] {tool.name}: {type(e).__name__}: {e}")
+        breaker.record_failure(circuit, f"{type(e).__name__}: {e}")
         return {
             "ok": False,
             "error": "unreachable",
             "message": "That system could not be reached. Tell the caller plainly rather than guessing an answer.",
         }
+
+    # What counts as the host being broken, and what does not.
+    #
+    # A 5xx is the customer's system failing, and repeating it is what the
+    # breaker is for. A 4xx is NOT: "no order with that number" is a
+    # perfectly healthy API giving a correct answer, and tripping a breaker
+    # on it would take a working integration offline because a few callers
+    # misread their order numbers. That distinction is the whole reason this
+    # is not simply "any non-200".
+    if response.status_code >= 500:
+        breaker.record_failure(circuit, f"HTTP {response.status_code}")
+    else:
+        breaker.record_success(circuit)
 
     # Parsed in FULL, then bounded by `_capped` at the point it goes to the
     # model — never truncated first. See _capped's docstring: truncating

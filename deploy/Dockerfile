@@ -34,6 +34,20 @@ COPY backend/ .
 
 EXPOSE 8080
 
+# Task 4.7 — orchestrator-level detection, complementing the in-process
+# watchdog (app/core/health.py) rather than duplicating it: that watchdog
+# restarts on a broken DEPENDENCY (the database unreachable) even while the
+# event loop is otherwise responsive; this catches the process not being
+# able to answer AT ALL — wedged, or dead — from outside it entirely, which
+# a check running on that same possibly-wedged loop cannot.
+#
+# python -c ... rather than curl/wget: keeps the image free of an extra
+# apt package for a single GET request. --start-period gives the pipeline
+# stack (Silero VAD, Smart Turn's ONNX model) time to import on the first
+# boot before failed checks start counting.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request as u; import sys; sys.exit(0 if u.urlopen('http://localhost:8080/health', timeout=4).status == 200 else 1)"
+
 # One uvicorn worker on purpose: Task 2.4 already gives every CALL its own
 # process, and the in-memory call registry in app/api/connect.py assumes a
 # single API process (a second worker wouldn't find another worker's
