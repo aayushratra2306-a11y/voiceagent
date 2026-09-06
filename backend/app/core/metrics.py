@@ -1,13 +1,16 @@
 """Task 4.9 — the Prometheus scrape endpoint.
 
-Building the actual dashboard (Grafana panels, alert routing) is not
-something this can do unattended: it is the user's own Grafana instance,
-their own account, their own alert destinations (Slack, email, PagerDuty) —
-an infrastructure and access decision, exactly like the Sentry DSN and
-Langfuse credentials already sitting blank in config.py waiting for the
-same kind of decision. What belongs in code, and what this file is, is the
-exporter: a `/metrics` endpoint any Prometheus instance can be pointed at
-the moment one exists, reporting real numbers rather than nothing.
+This file is the exporter. The screens that read it are real and live
+alongside it: deploy/docker-compose.monitoring.yml brings up a self-hosted
+Prometheus and Grafana with the datasource and dashboard already
+provisioned, and deploy/alerts.yml carries the rules. Only alert ROUTING is
+left open, because a destination (Slack, email, a phone) is a choice only
+the account holder can make.
+
+Everything named here is therefore plotted or alerted on somewhere, and
+tests/test_monitoring_config.py enforces that in both directions — rename a
+metric without updating the dashboard and its panel keeps rendering as an
+empty graph, which looks exactly like a healthy quiet system.
 
 Two things distinguish what is exported here from a metric that would need
 real work to get right, given task 2.4's architecture:
@@ -89,7 +92,7 @@ async def _build_registry() -> CollectorRegistry:
         ["name"], registry=registry,
     )
     breaker_trips = Gauge(
-        "voiceagent_circuit_breaker_trips_total",
+        "voiceagent_circuit_breaker_trips",
         "How many times this breaker has opened since the process started",
         ["name"], registry=registry,
     )
@@ -110,14 +113,17 @@ async def _build_registry() -> CollectorRegistry:
     # rest of the scrape with it.
     failures = 0
 
-    def _collect(gauge, produce, *labels):
+    def _collect(name: str, gauge, produce):
+        # `name` passed in rather than read off the gauge: the only place it
+        # is used is the failure path, and reaching for a private
+        # prometheus_client attribute from inside an exception handler is
+        # how a handler ends up raising instead of handling.
         nonlocal failures
         try:
-            target = gauge.labels(*labels) if labels else gauge
-            target.set(produce())
+            gauge.set(produce())
         except Exception as e:
             failures += 1
-            logger.warning(f"[METRICS] could not collect {gauge._name}: {type(e).__name__}: {e}")
+            logger.warning(f"[METRICS] could not collect {name}: {type(e).__name__}: {e}")
 
     try:
         active_calls.set(await active_call_count())
@@ -125,10 +131,11 @@ async def _build_registry() -> CollectorRegistry:
         failures += 1
         logger.warning(f"[METRICS] could not collect active call count: {type(e).__name__}: {e}")
 
-    _collect(call_capacity_limit, lambda: settings.max_concurrent_calls)
-    _collect(warm_pool_size, lambda: len(connect_module._idle_pool))
-    _collect(warm_pool_target, lambda: connect_module._pool_target)
-    _collect(mongo_expected_max_connections, expected_max_connections)
+    _collect("call capacity limit", call_capacity_limit, lambda: settings.max_concurrent_calls)
+    _collect("warm pool size", warm_pool_size, lambda: len(connect_module._idle_pool))
+    _collect("warm pool target", warm_pool_target, lambda: connect_module._pool_target)
+    _collect("expected mongo connections", mongo_expected_max_connections,
+             expected_max_connections)
 
     try:
         for name, info in breaker.snapshot().items():

@@ -123,7 +123,7 @@
       "title": "Times each breaker has tripped",
       "description": "A breaker that keeps re-opening is a different problem from one that opened once during an outage and stayed shut afterwards. This is what separates them.",
       "gridPos": { "h": 9, "w": 8, "x": 16, "y": 11 },
-      "targets": [{ "expr": "voiceagent_circuit_breaker_trips_total", "legendFormat": "{{name}}", "refId": "A" }],
+      "targets": [{ "expr": "voiceagent_circuit_breaker_trips", "legendFormat": "{{name}}", "refId": "A" }],
       "fieldConfig": { "defaults": { "min": 0, "custom": { "fillOpacity": 0, "lineWidth": 2, "showPoints": "never" } } }
     },
     {
