@@ -1,0 +1,71 @@
+# Task 6.7 — automated dependency updates.
+#
+# Different from pip-audit in ci.yml, and both are needed for different
+# reasons: pip-audit checks the dependencies ALREADY in requirements.txt
+# against known vulnerabilities on every push — it catches a vulnerability
+# disclosed AFTER a package was already pinned, but it never moves the pin
+# forward on its own. Dependabot is what actually opens the pull request
+# that bumps a version, on a schedule, whether or not a CVE has been filed
+# yet — it is how a fix actually gets proposed rather than only detected.
+#
+# Weekly rather than daily: this is a small team's project, and a PR flood
+# every single day would train "close without reading" faster than it
+# would train "review promptly" — the opposite of what a security update
+# needs. `open-pull-requests-limit` caps how many sit open at once for the
+# same reason.
+
+version: 2
+updates:
+  # Python dependencies (backend/requirements.txt).
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    # Groups routine patch/minor bumps into one PR instead of one per
+    # package — dozens of individual "bump X from 1.2.3 to 1.2.4" PRs is
+    # exactly the flood this task's own reasoning above is trying to avoid.
+    # A major-version bump is excluded from grouping (see below) because
+    # those are the ones actually worth a human reading in isolation — a
+    # major bump is far more likely to change behavior than to just patch
+    # a vulnerability.
+    groups:
+      python-patch-and-minor:
+        update-types: ["minor", "patch"]
+    ignore:
+      # torch/torchaudio are deliberately NOT in requirements.txt at all —
+      # see the long comment there on why (nothing needs them, and pip
+      # would otherwise resolve the ~10GB CUDA build on Linux). Nothing to
+      # ignore here in practice; this entry exists so a future contributor
+      # who re-adds one of these does not accidentally reopen that
+      # incident via an automated bump they never asked for.
+      - dependency-name: "torch"
+      - dependency-name: "torchaudio"
+
+  # Frontend dependencies (frontend/package.json).
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      npm-patch-and-minor:
+        update-types: ["minor", "patch"]
+
+  # The Dockerfile's own base image (deploy/Dockerfile) and any GitHub
+  # Actions this workflow uses — both are dependencies too, and both are
+  # outside pip's/npm's own ecosystem so neither of the entries above
+  # would ever see an update to either.
+  - package-ecosystem: "docker"
+    directory: "/deploy"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
