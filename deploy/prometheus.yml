@@ -1,0 +1,36 @@
+# Task 4.9 — what Prometheus scrapes, and what it shouts about.
+#
+# Mounted read-only into the prometheus container by
+# docker-compose.monitoring.yml. Reachable at http://<vm>:9090 once that
+# file is brought up (bind it to localhost or put it behind Caddy with auth
+# before exposing it — see the note in the compose file).
+
+global:
+  # 15s rather than the usual 60s: the numbers here move on the timescale
+  # of a phone call. A capacity ceiling hit for forty seconds is a real
+  # incident that a minute-resolution graph would render as a single blip
+  # or miss entirely.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: voiceagent
+    metrics_path: /metrics
+    # The backend container by its compose service name, on the internal
+    # network — no need to go out through Caddy and back.
+    static_configs:
+      - targets: ["backend:8080"]
+    # /metrics is never anonymous: it names the customer API hostnames that
+    # have tripped a breaker and reports how many calls are live. A static
+    # bearer token is the only credential a scrape config can actually
+    # send, which is what METRICS_TOKEN exists for.
+    #
+    # Prometheus does not expand ${VARS} in this file, so this is a real
+    # value: put the same string here and in deploy/.env's METRICS_TOKEN.
+    # Generate one with `openssl rand -hex 32`.
+    authorization:
+      type: Bearer
+      credentials: "REPLACE_WITH_YOUR_METRICS_TOKEN"

@@ -1,0 +1,13 @@
+# Task 4.9 — provisioned so the stack comes up already wired, rather than
+# needing a setup session that nobody writes down.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # The compose service name on the monitoring network, not localhost —
+    # inside the Grafana container, localhost is Grafana.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

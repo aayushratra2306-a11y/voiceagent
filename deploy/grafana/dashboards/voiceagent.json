@@ -1,0 +1,157 @@
+{
+  "uid": "voiceagent-health",
+  "title": "Voice Agent — system health",
+  "tags": ["voiceagent", "phase-4"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Is it up, and is it turning anyone away?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Backend",
+      "description": "The scrape itself. If this is down, nothing else on this dashboard is telling you anything current.",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "expr": "up{job=\"voiceagent\"}", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 } } },
+            { "type": "value", "options": { "1": { "text": "up", "color": "green", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "type": "timeseries",
+      "title": "Live calls against the ceiling",
+      "description": "Task 4.5. Once active calls reach the limit, new callers get a clean 503 rather than everyone's call degrading — which is the right behaviour and completely invisible without this panel.",
+      "gridPos": { "h": 9, "w": 12, "x": 4, "y": 1 },
+      "targets": [
+        { "expr": "voiceagent_active_calls", "legendFormat": "live calls", "refId": "A" },
+        { "expr": "voiceagent_call_capacity_limit", "legendFormat": "ceiling (MAX_CONCURRENT_CALLS)", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "custom": { "fillOpacity": 12, "lineWidth": 2, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ceiling (MAX_CONCURRENT_CALLS)" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 6] } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Readings this scrape could not take",
+      "description": "The monitoring reporting on itself. Anything above zero means the panels here are incomplete — usually a dependency the reading needs (Redis, for the call count) being unreachable. Without this, a half-broken scrape looks exactly like a quiet system.",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+      "targets": [{ "expr": "voiceagent_metrics_collection_errors", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat",
+      "title": "Worst-case Mongo connections",
+      "description": "Task 4.4. Every call slot and warm worker busy at once. Compare against the connection limit of the MongoDB tier actually in use — Atlas's shared tiers cap well below what a generous config here would ask for.",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+      "targets": [{ "expr": "voiceagent_mongo_expected_max_connections", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 400 }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat",
+      "title": "Warm workers",
+      "description": "Zero is not an outage — a cold spawn still answers — but every caller is then paying ~13.7s of interpreter startup after pressing Start, and nothing else would tell you.",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 6 },
+      "targets": [{ "expr": "voiceagent_warm_pool_size", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "type": "row",
+      "title": "Circuit breakers — who is failing, and is anyone noticing",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 }
+    },
+    {
+      "type": "state-timeline",
+      "title": "Breaker state over time",
+      "description": "0 closed · 1 half-open (one trial call is being let through) · 2 open (calls are being refused instantly instead of hanging). A provider:* name is a cloud provider, and calls fall back locally if the backup is installed. A tool:* name is one customer's own API, and their bot is telling callers it is unavailable.",
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 11 },
+      "targets": [{ "expr": "voiceagent_circuit_breaker_state", "legendFormat": "{{name}}", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 0, "fillOpacity": 90 },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "closed", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "1": { "text": "half-open", "color": "orange", "index": 1 } } },
+            { "type": "value", "options": { "2": { "text": "OPEN", "color": "red", "index": 2 } } }
+          ]
+        }
+      },
+      "options": { "mergeValues": true, "showValue": "auto" }
+    },
+    {
+      "type": "timeseries",
+      "title": "Times each breaker has tripped",
+      "description": "A breaker that keeps re-opening is a different problem from one that opened once during an outage and stayed shut afterwards. This is what separates them.",
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 11 },
+      "targets": [{ "expr": "voiceagent_circuit_breaker_trips_total", "legendFormat": "{{name}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "min": 0, "custom": { "fillOpacity": 0, "lineWidth": 2, "showPoints": "never" } } }
+    },
+    {
+      "type": "row",
+      "title": "Worker pool (task 4.3 autoscaling)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Warm pool: actual vs target",
+      "description": "The target moves on demand — it grows when a call had to cold-spawn, and shrinks after several quiet checks. A target pinned at its maximum while actual sits below it means the autoscaler wants to grow and the free-memory guard is refusing, which is the point at which the VM, not the config, is the limit.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 21 },
+      "targets": [
+        { "expr": "voiceagent_warm_pool_size", "legendFormat": "warm workers idle", "refId": "A" },
+        { "expr": "voiceagent_warm_pool_target", "legendFormat": "autoscale target", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": { "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "autoscale target" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [8, 6] } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

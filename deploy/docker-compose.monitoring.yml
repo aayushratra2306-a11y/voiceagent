@@ -1,0 +1,86 @@
+# Task 4.9 — self-hosted Prometheus + Grafana for the /metrics endpoint.
+#
+# Separate from the main compose file, like docker-compose.langfuse.yml, so
+# monitoring is brought up deliberately and can be taken down again without
+# touching anything that serves calls:
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.monitoring.yml up -d
+#
+# BEFORE bringing it up:
+#
+#   1. free -h
+#      Prometheus and Grafana together want roughly 300-400MB. That is far
+#      lighter than the Langfuse stack (see that file's warning) but it is
+#      not free, and the VM is a 4GB e2-medium already running the backend,
+#      Caddy, coturn and its warm call workers. A dashboard is never worth
+#      an OOM kill during a live call. If memory is tight, lower
+#      CALL_WORKER_POOL_MAX first, or run this on a separate machine and
+#      point it at the domain instead of the compose network.
+#
+#   2. Set METRICS_TOKEN in deploy/.env, and put the SAME value in
+#      deploy/prometheus.yml. /metrics refuses anonymous requests: it names
+#      the customer API hostnames that have tripped a breaker and reports
+#      how many calls are live.
+#
+#        openssl rand -hex 32
+#
+# ⚠ NEITHER PORT IS PUBLISHED PUBLICLY, deliberately. Both are bound to
+# 127.0.0.1, so reaching them means an SSH tunnel from your own machine:
+#
+#     ssh -L 3000:localhost:3000 -L 9090:localhost:9090 <user>@<vm>
+#
+# then open http://localhost:3000. Grafana's default admin password and an
+# unauthenticated Prometheus have no business on a public IP, and this is
+# the one setup step where getting it wrong is silent.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 15 days rather than the 15-day default's larger cousins: this is a
+      # small disk (30GB, shared with Docker images and the local models),
+      # and Phase 4's questions are all "what happened during that
+      # incident", not "what did last quarter look like".
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "127.0.0.1:9090:9090"   # localhost only — see the warning above
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      # Change this before first login, or set it here from deploy/.env.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      # Nothing here is public, and phoning home from a server that handles
+      # call data is not something to leave on by default.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      # Provisioned rather than clicked together by hand: the datasource and
+      # the dashboard come up already configured, so this is one command
+      # rather than a setup session nobody wrote down.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"   # localhost only — see the warning above
+
+# ALERT ROUTING is the one part of task 4.9 left deliberately unset. The
+# rules in alerts.yml fire and are visible at http://localhost:9090/alerts,
+# but getting them to Slack/email/a phone needs an Alertmanager container
+# and a destination only the account holder can choose. The manual's own
+# framing applies: an alert nobody looks at is the failure this task exists
+# to prevent, so treat routing as the last step rather than an optional one.
+
+volumes:
+  prometheus_data:
+  grafana_data:

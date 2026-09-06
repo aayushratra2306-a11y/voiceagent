@@ -1,0 +1,115 @@
+# Task 4.9 — "set alerts on error rate, queue depth and cost. Route alerts
+# somewhere you will actually see them."
+#
+# These are the conditions worth waking up for, expressed against the
+# metrics app/core/metrics.py actually exports. They fire in Prometheus's
+# own UI (http://<vm>:9090/alerts) with no extra setup.
+#
+# ROUTING to Slack/email/phone needs Alertmanager and a destination only
+# the account holder can choose — see docker-compose.monitoring.yml. An
+# alert nobody is looking at is the failure mode the manual is warning
+# about, so treat that as the last step of this task rather than an
+# optional extra.
+
+groups:
+  - name: voiceagent
+    rules:
+      - alert: BackendDown
+        # The most important one by a distance: nothing else here can fire
+        # if the scrape itself is failing, so an absent-signal alert is the
+        # only thing standing between "the server is down" and "the
+        # dashboard has been suspiciously quiet for a while".
+        expr: up{job="voiceagent"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The voice agent backend is not answering /metrics"
+          description: >-
+            Either the process is down, wedged, or METRICS_TOKEN no longer
+            matches the one in prometheus.yml. Check `docker compose ps` and
+            the container logs.
+
+      - alert: CircuitBreakerOpen
+        # A tripped breaker is not itself an outage — it means the system is
+        # coping with someone else's. But it means callers are being served
+        # a fallback or a "temporarily unavailable", and somebody should
+        # know that rather than hear it from a customer.
+        expr: voiceagent_circuit_breaker_state > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} is open"
+          description: >-
+            Repeated failures against {{ $labels.name }}. A provider:* name
+            means a cloud provider and calls are falling back locally if the
+            backup is installed; a tool:* name means that customer's own API
+            is failing and their bot is telling callers so.
+
+      - alert: CallCapacityNearLimit
+        # Task 4.5's cap turns a spike into clean refusals rather than
+        # degraded calls for everyone — which is the right behaviour, and
+        # also completely invisible unless something watches for it. Callers
+        # are being turned away at this point.
+        expr: >-
+          voiceagent_call_capacity_limit > 0
+          and voiceagent_active_calls >= voiceagent_call_capacity_limit * 0.8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Live calls are within 80% of the configured ceiling"
+          description: >-
+            {{ $value }} calls against MAX_CONCURRENT_CALLS. Past the limit,
+            new callers get a 503 "at capacity". Raise the limit only with
+            `free -h` in hand and a load test (scripts/load_test.py) behind
+            the number.
+
+      - alert: WarmPoolEmpty
+        # Not an outage — a cold spawn still answers (task 2.4) — but every
+        # caller is paying ~13.7s of interpreter startup after pressing
+        # Start, and nothing else would ever say so.
+        expr: voiceagent_warm_pool_size == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No warm call workers — every caller is paying cold-start latency"
+          description: >-
+            The pool has been empty for five minutes. Either demand is
+            outrunning it (check whether the task 4.3 autoscaler is hitting
+            CALL_WORKER_POOL_MAX or the free-memory guard), or workers are
+            dying during startup — look for "died before use" in the logs.
+
+      - alert: MetricsCollectionDegraded
+        # The monitoring reporting on itself. Without this, a scrape that
+        # silently dropped half its readings looks exactly like a healthy,
+        # quiet system.
+        expr: voiceagent_metrics_collection_errors > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The backend could not collect {{ $value }} of its own readings"
+          description: >-
+            Some metrics are missing from every scrape, so the panels above
+            are incomplete. Usually a dependency the reading needs (Redis,
+            for the active-call count) being unreachable.
+
+      - alert: MongoConnectionCeilingHigh
+        # Task 4.4's own number, which is a planning figure rather than a
+        # live one: it changes when the config changes, not minute to
+        # minute. Worth an alert precisely because nobody re-checks it after
+        # raising a limit, and the failure mode is everything stopping at
+        # once.
+        expr: voiceagent_mongo_expected_max_connections > 400
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Configured limits could open {{ $value }} Mongo connections"
+          description: >-
+            Worst case if every call slot and warm worker were busy at once.
+            Compare against the connection limit of the actual MongoDB tier
+            in use — Atlas's shared tiers cap well below this.
