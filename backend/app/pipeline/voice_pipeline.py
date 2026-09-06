@@ -11,8 +11,12 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    EndFrame,
     Frame,
     FunctionCallResultFrame,
+    InterimTranscriptionFrame,
+    LLMContextFrame,
+    LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMMessagesAppendFrame,
     TextFrame,
@@ -31,12 +35,13 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from pipecat.utils.string import match_endofsentence
 
-from app.core import redaction
+from app.core import guardrails, redaction
 from app.core.tracing import setup_call_tracing
 from app.models.consent import ConsentRecord
 from app.models.conversation import ConversationTurn
@@ -51,7 +56,7 @@ from app.pipeline.language import (
 )
 from app.pipeline.provider_health import ProviderHealthObserver
 from app.pipeline.providers import get_llm_service, get_stt_service, get_tts_service
-from app.pipeline.rag_processor import RAGContextProcessor
+from app.pipeline.rag_processor import RAGContextProcessor, latest_user_text
 from app.pipeline.saga import SAGA_RULE, RequestBoundary, TurnSaga
 from app.pipeline.tool_telemetry import PARTIAL_FAILURE_RULE, ToolCallTimer
 from app.services.rag import query_context
@@ -266,6 +271,160 @@ def strip_markdown_for_speech(text: str) -> str:
     # a fully-stripped rule/table line collapses to), never the original
     # fragment's own edges.
     return text
+
+
+class GuardrailInputMonitor(FrameProcessor):
+    """Task 6.1 — detects known manipulation phrasing in what the CALLER
+    actually said, on each real completed turn, and logs it for review.
+
+    Fires on `LLMContextFrame`, the same signal rag_processor.py's own
+    RAGContextProcessor uses and for the identical reason (see
+    `latest_user_text`'s docstring): reacting to raw STT fragments instead
+    would mean one spoken sentence with a mid-thought pause gets checked
+    as two unrelated half-sentences, missing a phrase that only reads as
+    manipulation once the two halves are joined.
+
+    Detection here is defense-in-depth, not the primary defense —
+    GUARDRAIL_RULE, baked into every bot's system prompt unconditionally,
+    already instructs the model to resist every one of these regardless of
+    whether this processor ever runs or ever sees the request in time.
+    What this adds is VISIBILITY: the manual's own "log every blocked
+    attempt for review," which is otherwise not knowable at all — a model
+    that successfully resisted an attack leaves no trace of the attempt
+    ever having happened.
+
+    Read-only with respect to the frame: never mutates the context or
+    blocks the turn. A caller's phrasing is not proof the MODEL will
+    misbehave, and refusing to answer, or altering what the model sees,
+    on a pattern match alone would punish a caller for asking an
+    ordinary question that happens to share wording with an attack (see
+    the adversarial test suite in tests/test_guardrails.py for exactly
+    which ordinary phrasings this was checked against to avoid that).
+    """
+
+    def __init__(self, session_id: str, bot_id: str | None, user_id: str | None):
+        super().__init__()
+        self._session_id = session_id
+        self._bot_id = bot_id
+        self._user_id = user_id
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        # direction guard: only the aggregator's own downstream commit, the
+        # same reasoning RAGContextProcessor's own comment gives for the
+        # identical check — an LLMContextFrame flowing the OTHER way (e.g.
+        # from the assistant-side aggregator further down the pipeline) is
+        # not a caller turn at all.
+        if isinstance(frame, LLMContextFrame) and direction == FrameDirection.DOWNSTREAM:
+            text = latest_user_text(frame.context.messages)
+            if text:
+                category = guardrails.check_caller_input(text)
+                if category:
+                    await guardrails.log_incident(
+                        session_id=self._session_id, bot_id=self._bot_id,
+                        user_id=self._user_id, direction="input",
+                        category=category, snippet=text,
+                    )
+
+        await self.push_frame(frame, direction)
+
+
+class GuardrailOutputFilter(FrameProcessor):
+    """Task 6.1 — checks the bot's own reply, one full SENTENCE at a time,
+    and replaces a sentence that leaks the system prompt or mentions a
+    per-bot forbidden topic with a safe deflection — before it ever
+    reaches TTS.
+
+    Why sentences, not the raw streamed chunks pipecat hands this
+    processor: confirmed by reading pipecat's own OpenAI-compatible
+    streaming code directly (services/openai/base_llm.py) — an LLM
+    service pushes each provider delta as its own TextFrame with NO
+    coalescing ("we just yield each chunk as we receive it and count on
+    consumers to do whatever coalescing they need"). An ordinary phrase
+    like "you are a helpful voice assistant" routinely arrives split
+    across several small frames, so checking each one individually would
+    miss almost every real leak — only ever catching one that happens to
+    fall entirely within a single chunk.
+
+    Buffering to sentence boundaries here is NOT a new latency cost added
+    on top of what this pipeline already pays. Every TTS service in this
+    project already buffers incoming text to sentence boundaries before
+    synthesis by default (pipecat's own tts_service.py: "SENTENCE: Buffer
+    text until sentence boundaries are detected before synthesis...
+    ~200-300ms per sentence") — this simply relocates that same wait one
+    step earlier in the pipeline, so a complete sentence reaches TTS
+    exactly as it always did. Modeled directly on pipecat's own
+    SentenceAggregator (processors/aggregators/sentence.py), which uses
+    the identical `match_endofsentence` boundary test.
+
+    Honest limit, stated rather than hidden: this catches a leak or a
+    forbidden-topic mention that is itself in the current sentence's own
+    text. A model spreading a leak across a sentence boundary in a way
+    that reads as innocuous in each half but not together would not be
+    caught — the same class of limitation `latest_user_text` documents on
+    the input side, for the same underlying reason (the pipeline processes
+    real units of meaning, not everything a determined adversary could in
+    principle construct).
+    """
+
+    def __init__(
+        self, session_id: str, bot_id: str | None, user_id: str | None,
+        system_prompt: str, forbidden_topics: list[str],
+    ):
+        super().__init__()
+        self._session_id = session_id
+        self._bot_id = bot_id
+        self._user_id = user_id
+        self._system_prompt = system_prompt
+        self._forbidden_topics = forbidden_topics
+        self._aggregation = ""
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        # Interim STT output is not this processor's concern at all (it
+        # never originates from `llm`, this processor's only real input),
+        # but pipecat frames flow through every processor in the pipeline —
+        # passed through untouched rather than accidentally absorbed into
+        # the text aggregation below.
+        if isinstance(frame, InterimTranscriptionFrame):
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, TextFrame) and direction == FrameDirection.DOWNSTREAM:
+            self._aggregation += frame.text
+            if match_endofsentence(self._aggregation):
+                await self._flush()
+            return
+
+        if isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
+            # Whatever is left is the end of the reply even if it never hit
+            # a sentence-ending punctuation mark — a reply ending "...right
+            # now" with no final period must still reach TTS.
+            if self._aggregation:
+                await self._flush()
+            await self.push_frame(frame, direction)
+            return
+
+        await self.push_frame(frame, direction)
+
+    async def _flush(self) -> None:
+        sentence = self._aggregation
+        self._aggregation = ""
+
+        hit = guardrails.check_output(sentence, self._system_prompt, self._forbidden_topics)
+        if hit is None:
+            await self.push_frame(TextFrame(sentence))
+            return
+
+        category, replacement = hit
+        logger.warning(f"[GUARDRAIL] Intercepted output ({category}) before it reached TTS")
+        await guardrails.log_incident(
+            session_id=self._session_id, bot_id=self._bot_id, user_id=self._user_id,
+            direction="output", category=category, snippet=sentence,
+        )
+        await self.push_frame(TextFrame(replacement))
 
 
 class MarkdownStripper(FrameProcessor):
@@ -511,10 +670,17 @@ async def run_voice_pipeline(
     # change this adds is disclosure, not a new decision to record.
     recording_enabled: bool = True,
     consent_announcement: str = "",
+    # Task 6.1 — topics THIS bot must never discuss, on top of the
+    # universal rules baked into GUARDRAIL_RULE below unconditionally. See
+    # models/bot.py for why there is no safe default list to guess at here.
+    guardrail_topics: list[str] | None = None,
 ):
     session_id = str(uuid.uuid4())
     call_started_at = datetime.now(UTC)  # task 3.8 — call.ended's duration
     logger.info(f"[PIPELINE] Starting for bot: {bot_name} (session {session_id})")
+    # Task 6.1 — normalized once here rather than at every later use site
+    # (the prompt assembly below, and GuardrailOutputFilter's construction).
+    guardrail_topics = guardrail_topics or []
 
     # Task 3.5 — the built-in tools are plain module-level functions, so they
     # get no bot and no session, only the arguments the model supplied. The
@@ -621,6 +787,17 @@ async def run_voice_pipeline(
         # text message failed is how a customer ends up believing they have a
         # cab they do not have.
         + PARTIAL_FAILURE_RULE
+        # Task 6.1 — unconditional, every bot, the same way PARTIAL_FAILURE_RULE
+        # is: never reveal instructions, never give medical/legal/financial
+        # advice, never claim an unconfirmed action succeeded, never be
+        # hostile, never deny being an AI. Phrased to survive a caller
+        # claiming authority, claiming the rules changed, or asking for a
+        # roleplay/hypothetical version of the same request.
+        + guardrails.GUARDRAIL_RULE
+        # Appended only when this bot has customer-specified topics — see
+        # forbidden_topics_rule's own docstring for why it is a no-op
+        # (empty string) otherwise.
+        + guardrails.forbidden_topics_rule(guardrail_topics)
     )
 
     # Task 1.3: pass the tool functions straight into `tools=` — pipecat 1.7.0
@@ -770,6 +947,12 @@ async def run_voice_pipeline(
     # same turn frames are already being watched.
     pipeline_steps = [
         transport.input(), stt, AudioDebugger(), RequestBoundary(saga), user_aggregator,
+        # Task 6.1 — checks what the CALLER said, on each real completed
+        # turn. Always present, independent of bot_id: this is defense-in-
+        # depth logging (GUARDRAIL_RULE below already instructs the model
+        # to resist every one of these regardless of whether this ever
+        # runs), and every bot gets the same protection.
+        GuardrailInputMonitor(session_id=session_id, bot_id=bot_id, user_id=user_id),
     ]
 
     # Bug found 2026-09-03: this used to sit BEFORE user_aggregator and react
@@ -794,6 +977,17 @@ async def run_voice_pipeline(
 
     pipeline_steps += [
         llm,
+        # Task 6.1 — checks the bot's own reply, one full sentence at a
+        # time, and replaces a sentence that leaks the system prompt or
+        # mentions a per-bot forbidden topic BEFORE it reaches TTS. Placed
+        # before MarkdownStripper so what it checks is the model's actual
+        # words, not text already rewritten for speech (immaterial to the
+        # checks themselves, but keeps "what was checked" and "what was
+        # spoken" unambiguous when reviewing an incident).
+        GuardrailOutputFilter(
+            session_id=session_id, bot_id=bot_id, user_id=user_id,
+            system_prompt=voice_system_prompt, forbidden_topics=guardrail_topics,
+        ),
         MarkdownStripper(),
         TranscriptRecorder(
             session_id=session_id, bot_id=bot_id, bot_name=bot_name,

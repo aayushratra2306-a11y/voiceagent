@@ -28,6 +28,7 @@ from app.models.bot_tool import BotTool
 from app.models.consent import ConsentRecord
 from app.models.conversation import ConversationTurn
 from app.models.document import Document
+from app.models.guardrail_incident import GuardrailIncident
 from app.models.order import Order
 from app.models.payment import PaymentSession
 from app.models.revoked_token import RevokedRefreshToken
@@ -51,7 +52,7 @@ async def lifespan(app: FastAPI):
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
                    WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
-                   ConsentRecord])
+                   ConsentRecord, GuardrailIncident])
     await seed_fake_orders()
     # Task 4.5 — hand back any capacity slots this node was still holding
     # when it last stopped. Nothing is running yet, so anything tagged with

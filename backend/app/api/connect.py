@@ -466,6 +466,10 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         # the Bot document, not something the call itself needs to know.
         "recording_enabled": bot.recording_enabled,
         "consent_announcement": bot.consent_announcement,
+        # Task 6.1 — topics this bot must never discuss. list(...) for the
+        # same reason as redact_transcripts above: bot_config crosses a
+        # multiprocessing.Process boundary and must be plain picklable data.
+        "guardrail_topics": list(bot.guardrail_topics),
     }
 
     loop = asyncio.get_event_loop()

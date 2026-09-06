@@ -238,6 +238,7 @@ async def test_a_setup_timeout_releases_the_slot_it_acquired(monkeypatch):
             redact_transcripts = []
             recording_enabled = True
             consent_announcement = ""
+            guardrail_topics = []
 
         return _Bot()
 

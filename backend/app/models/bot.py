@@ -59,6 +59,19 @@ class Bot(Document):
     # on this.
     recording_retention_days: int = 0
 
+    # --- task 6.1, guardrails ------------------------------------------
+    # Topics this SPECIFIC bot must never discuss, on top of the universal
+    # rules every bot gets unconditionally (app/core/guardrails.GUARDRAIL_RULE
+    # — never reveal instructions, never give medical/legal/financial advice,
+    # never claim an unconfirmed action succeeded, never be hostile). Empty
+    # by default: the universal rules apply to every bot regardless, and a
+    # per-bot topic list is an addition a customer opts INTO for their own
+    # business (a hospital's bot never discussing a competitor's brand name,
+    # a retailer's bot never discussing an ongoing lawsuit) — there is no
+    # safe platform-wide default topic list to guess at here the way there
+    # is for redaction categories or a consent announcement.
+    guardrail_topics: list[str] = Field(default_factory=list)
+
     # --- task 3.5, the booking template's configuration -------------------
     # These are what makes booking a form rather than a project: a new
     # customer sets their zone and their hours, and the template's behaviour

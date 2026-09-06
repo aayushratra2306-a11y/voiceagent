@@ -112,6 +112,31 @@ def _validate_consent_announcement(v: str) -> str:
     return v
 
 
+# Task 6.1 — bounded on both count and length. A topic is checked as a
+# case-insensitive substring against every sentence of every reply (see
+# guardrails.check_output), so an unbounded list would mean an unbounded
+# amount of per-sentence work on the hot path of every single call, and an
+# absurdly long "topic" would functionally block ordinary words it happens
+# to contain as a substring.
+MAX_GUARDRAIL_TOPICS = 25
+MAX_GUARDRAIL_TOPIC_LENGTH = 100
+
+
+def _validate_guardrail_topics(v: list[str]) -> list[str]:
+    if len(v) > MAX_GUARDRAIL_TOPICS:
+        raise ValueError(f"Too many guardrail topics (max {MAX_GUARDRAIL_TOPICS})")
+    cleaned = [t.strip() for t in v]
+    for topic in cleaned:
+        if not topic:
+            raise ValueError("A guardrail topic cannot be blank")
+        if len(topic) > MAX_GUARDRAIL_TOPIC_LENGTH:
+            raise ValueError(
+                f"Guardrail topic {topic[:40]!r}... exceeds "
+                f"{MAX_GUARDRAIL_TOPIC_LENGTH} characters"
+            )
+    return cleaned
+
+
 class BotCreate(BaseModel):
     name: str
     system_prompt: str = "You are a helpful voice assistant."
@@ -135,6 +160,11 @@ class BotCreate(BaseModel):
         "This call may be recorded for quality and training purposes."
     )
     recording_retention_days: int = Field(default=0, ge=0)
+    # Task 6.1 — empty by default. See models/bot.py: the universal rules
+    # every bot gets (never reveal instructions, never give medical/legal
+    # advice, ...) apply regardless; this is what a customer opts INTO for
+    # topics specific to their own business.
+    guardrail_topics: list[str] = Field(default_factory=list)
 
     @field_validator("system_prompt")
     @classmethod
@@ -161,6 +191,11 @@ class BotCreate(BaseModel):
     def _check_consent_announcement(cls, v: str) -> str:
         return _validate_consent_announcement(v)
 
+    @field_validator("guardrail_topics")
+    @classmethod
+    def _check_guardrail_topics(cls, v: list[str]) -> list[str]:
+        return _validate_guardrail_topics(v)
+
 
 class BotUpdate(BaseModel):
     name: str | None = None
@@ -176,6 +211,7 @@ class BotUpdate(BaseModel):
     recording_enabled: bool | None = None
     consent_announcement: str | None = None
     recording_retention_days: int | None = Field(default=None, ge=0)
+    guardrail_topics: list[str] | None = None
 
     @field_validator("system_prompt")
     @classmethod
@@ -201,6 +237,11 @@ class BotUpdate(BaseModel):
     @classmethod
     def _check_consent_announcement(cls, v: str | None) -> str | None:
         return _validate_consent_announcement(v) if v is not None else v
+
+    @field_validator("guardrail_topics")
+    @classmethod
+    def _check_guardrail_topics(cls, v: list[str] | None) -> list[str] | None:
+        return _validate_guardrail_topics(v) if v is not None else v
 
 
 @router.get("/templates")
@@ -261,6 +302,7 @@ async def list_bots(current_user: User = Depends(get_current_user)):
             "recording_enabled": b.recording_enabled,
             "consent_announcement": b.consent_announcement,
             "recording_retention_days": b.recording_retention_days,
+            "guardrail_topics": b.guardrail_topics,
         }
         for b in bots
     ]
