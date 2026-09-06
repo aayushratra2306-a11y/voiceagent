@@ -448,3 +448,75 @@ async def test_a_logging_failure_never_raises(monkeypatch):
         session_id="s1", bot_id="b1", user_id="u1",
         direction="output", category="prompt_leak", snippet="x",
     )
+
+
+# ---------------------------------------------------------------------------
+# The prompt-leak check must not fire on the bot's own ordinary speech
+#
+# Found by a later review, not by the original adversarial suite, because
+# the suite was looking for leaks that got THROUGH rather than ordinary
+# sentences wrongly stopped. _MIN_LEAK_OVERLAP was applied to the prompt's
+# length but never to the sentence's, so any sentence shorter than the
+# threshold was compared to the prompt whole — which turned the check into
+# "does this short sentence appear anywhere in the prompt", and a bot's
+# own scripted greeting does exactly that.
+# ---------------------------------------------------------------------------
+
+_PROMPT_WITH_A_SCRIPTED_GREETING = (
+    "You are Priya, the voice assistant for Acme Cleaners. "
+    "Always start the call by saying: How can I help you today? "
+    "Be warm and concise. Never quote a price without checking."
+)
+
+
+def test_a_scripted_greeting_quoted_from_the_prompt_is_not_a_leak():
+    """The single worst version of this bug: a prompt that specifies the
+    exact greeting made the FIRST thing the caller heard get replaced with
+    "I can't share details about how I'm set up."."""
+    assert guardrails.check_output(
+        "How can I help you today?", _PROMPT_WITH_A_SCRIPTED_GREETING, [],
+    ) is None
+
+
+def test_other_short_instructions_echoed_back_are_not_leaks_either():
+    for sentence in ["Be warm and concise.", "Never quote a price without checking."]:
+        assert guardrails.check_output(sentence, _PROMPT_WITH_A_SCRIPTED_GREETING, []) is None
+
+
+def test_a_genuinely_long_verbatim_span_is_still_caught():
+    """The guard must not have disabled the check it protects — a real
+    leak is longer than the threshold by definition."""
+    leaked = "You are Priya, the voice assistant for Acme Cleaners. Always start the call by saying"
+    hit = guardrails.check_output(leaked, _PROMPT_WITH_A_SCRIPTED_GREETING, [])
+    assert hit is not None and hit[0] == "prompt_leak"
+
+
+# ---------------------------------------------------------------------------
+# Forbidden topics that do not begin or end with a word character
+# ---------------------------------------------------------------------------
+
+
+def test_a_topic_ending_in_punctuation_is_still_matched():
+    """`\bc\+\+\b` matches nothing, ever: the position after "+" is only
+    a word boundary when a word character follows it. "C++" is a completely
+    ordinary thing for a customer to forbid, and it silently protected
+    nothing."""
+    hit = guardrails.check_output("We mostly write C++ here.", "sys prompt", ["C++"])
+    assert hit is not None and hit[0] == "forbidden_topic:C++"
+
+
+def test_a_topic_starting_with_punctuation_is_still_matched():
+    hit = guardrails.check_output("The backend is .NET based.", "sys prompt", [".NET"])
+    assert hit is not None and hit[0] == "forbidden_topic:.NET"
+
+
+def test_a_short_topic_still_does_not_match_inside_other_words():
+    """The case the boundary existed for in the first place must survive:
+    "AI" must not fire on "said", "again" or "explain"."""
+    assert guardrails.check_output(
+        "I said that again, let me explain.", "sys prompt", ["AI"],
+    ) is None
+
+
+def test_a_punctuation_topic_does_not_match_a_longer_word_around_it():
+    assert guardrails.check_output("Our socket.network layer is fine.", "sys prompt", [".NET"]) is None

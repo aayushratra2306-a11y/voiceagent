@@ -50,7 +50,16 @@ class KnowledgeSource(BeanieDocument):
     # reading server logs — the manual's own "show sync status and errors
     # clearly in the interface" step.
     last_synced_at: datetime | None = None
-    last_sync_status: str = "never"  # "never" | "ok" | "error"
+    # "never"    — not synced yet
+    # "ok"       — the whole source was read; stored content matches it
+    # "partial"  — new/changed items were applied, but something could not
+    #              be read (a page 500'd, a token lost access, the crawl hit
+    #              its page cap). Nothing was DELETED on a partial sync: an
+    #              item missing from an incomplete fetch is missing
+    #              evidence, not evidence the customer deleted it. See
+    #              FetchResult in app/services/knowledge_sources/__init__.py.
+    # "error"    — the sync itself raised; nothing was applied
+    last_sync_status: str = "never"
     last_sync_error: str = ""
     # {"items_seen": N, "items_changed": N, "items_removed": N} — lets an
     # operator tell "nothing changed, as expected" apart from "the source

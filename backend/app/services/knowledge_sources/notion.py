@@ -30,7 +30,7 @@ from __future__ import annotations
 import httpx
 from loguru import logger
 
-from app.services.knowledge_sources import FetchedItem
+from app.services.knowledge_sources import FetchedItem, FetchResult
 
 API_BASE = "https://api.notion.com/v1"
 # Pinned to a specific, dated version rather than "latest" — Notion's own
@@ -140,7 +140,7 @@ async def _fetch_database_page_ids(client: httpx.AsyncClient, database_id: str) 
             return ids
 
 
-async def fetch_notion_pages(token: str, config: dict) -> list[FetchedItem]:
+async def fetch_notion_pages(token: str, config: dict) -> FetchResult:
     """`config` carries exactly one of `page_id` (sync a single page) or
     `database_id` (sync every page currently in that database — new pages
     added to the database are picked up on the next scheduled sync with no
@@ -151,6 +151,12 @@ async def fetch_notion_pages(token: str, config: dict) -> list[FetchedItem]:
     or a Notion outage should mean this source's sync reports an error and
     every OTHER configured source still runs — the same reasoning
     website.py's own crawl uses for one unreachable page.
+
+    Anything that went wrong comes back as `FetchResult.complete=False`
+    rather than as a silently shorter list. A page this integration
+    temporarily could not read is NOT a page the customer deleted from
+    their workspace, and those two are indistinguishable without this
+    flag — see FetchResult's own comment for what that cost.
     """
     page_ids: list[str]
     headers = {
@@ -166,9 +172,13 @@ async def fetch_notion_pages(token: str, config: dict) -> list[FetchedItem]:
                 page_ids = [config["page_id"]]
             else:
                 logger.warning("[NOTION] knowledge source has neither page_id nor database_id configured")
-                return []
+                return FetchResult(
+                    items=[], complete=False,
+                    error="no page_id or database_id configured",
+                )
 
             items: list[FetchedItem] = []
+            failures: list[str] = []
             for page_id in page_ids:
                 try:
                     page_response = await client.get(f"{API_BASE}/pages/{page_id}")
@@ -185,11 +195,22 @@ async def fetch_notion_pages(token: str, config: dict) -> list[FetchedItem]:
                     ))
                 except httpx.HTTPStatusError as e:
                     logger.warning(f"[NOTION] could not fetch page {page_id}: {e}")
+                    failures.append(f"page {page_id}: {e.response.status_code}")
                     continue
-            return items
+            if failures:
+                return FetchResult(
+                    items=items, complete=False,
+                    error="; ".join(failures[:5]),
+                )
+            return FetchResult(items=items, complete=True)
         except httpx.HTTPStatusError as e:
             logger.warning(f"[NOTION] sync failed: {e}")
-            return []
+            return FetchResult(
+                items=[], complete=False,
+                error=f"Notion API returned {e.response.status_code}",
+            )
         except Exception as e:
             logger.warning(f"[NOTION] unexpected error during sync: {type(e).__name__}: {e}")
-            return []
+            return FetchResult(
+                items=[], complete=False, error=f"{type(e).__name__}: {e}",
+            )

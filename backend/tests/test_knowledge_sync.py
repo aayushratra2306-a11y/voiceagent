@@ -20,7 +20,7 @@ import pytest_asyncio
 
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
-from app.services.knowledge_sources import FetchedItem
+from app.services.knowledge_sources import FetchedItem, FetchResult
 from app.services.knowledge_sync import sync_due_sources, sync_source
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -68,9 +68,13 @@ async def _make_source(**overrides) -> KnowledgeSource:
     return source
 
 
-def _mock_fetch(monkeypatch, items: list[FetchedItem]):
+def _mock_fetch(monkeypatch, items: list[FetchedItem], complete: bool = True, error: str = ""):
+    """`complete` defaults to True — "this fetch saw the whole source" is
+    the normal case these tests describe. The cases that set it False are
+    the ones that matter most: see the incomplete-fetch tests at the bottom
+    of this file for why an absent item must not always mean a deletion."""
     async def _fake(_source):
-        return items
+        return FetchResult(items=items, complete=complete, error=error)
 
     monkeypatch.setattr("app.services.knowledge_sync._fetch_items", _fake)
 
@@ -276,7 +280,7 @@ async def test_one_failing_source_does_not_stop_another_from_syncing(monkeypatch
     async def _dispatch(source):
         if source.id == bad.id:
             raise ConnectionError("bad source is down")
-        return [FetchedItem("page-1", "u1", "Page 1", "Content")]
+        return FetchResult(items=[FetchedItem("page-1", "u1", "Page 1", "Content")])
 
     monkeypatch.setattr("app.services.knowledge_sync._fetch_items", _dispatch)
 
@@ -300,8 +304,11 @@ async def test_a_notion_source_with_no_credential_is_skipped_gracefully():
         bot_id="b1", user_id="u1", kind="notion", config={"page_id": "p1"},
         credential_encrypted="",
     )
-    items = await _fetch_items(source)
-    assert items == []
+    result = await _fetch_items(source)
+    assert result.items == []
+    # NOT complete: "we could not even try" is not the same statement as
+    # "the source is empty", and only one of those may delete anything.
+    assert result.complete is False
 
 
 async def test_a_google_drive_source_with_no_credential_is_skipped_gracefully():
@@ -311,13 +318,115 @@ async def test_a_google_drive_source_with_no_credential_is_skipped_gracefully():
         bot_id="b1", user_id="u1", kind="google_drive", config={"folder_id": "f1"},
         credential_encrypted="",
     )
-    items = await _fetch_items(source)
-    assert items == []
+    result = await _fetch_items(source)
+    assert result.items == []
+    # NOT complete: "we could not even try" is not the same statement as
+    # "the source is empty", and only one of those may delete anything.
+    assert result.complete is False
 
 
 async def test_an_unknown_source_kind_is_skipped_gracefully():
     from app.services.knowledge_sync import _fetch_items
 
     source = KnowledgeSource(bot_id="b1", user_id="u1", kind="carrier-pigeon", config={})
-    items = await _fetch_items(source)
-    assert items == []
+    result = await _fetch_items(source)
+    assert result.items == []
+    # NOT complete: "we could not even try" is not the same statement as
+    # "the source is empty", and only one of those may delete anything.
+    assert result.complete is False
+
+
+# ---------------------------------------------------------------------------
+# An INCOMPLETE fetch must never be read as "the customer deleted things"
+#
+# This is the most important behaviour in this module and it was wrong
+# first time round: every fetcher promises never to raise, so a website
+# being briefly down, an expired Notion token and a revoked Drive key all
+# came back as a perfectly ordinary empty list. The diffing logic, with
+# nothing else to go on, concluded that every page had been deleted at the
+# source and removed the customer's whole knowledge base — Pinecone vectors
+# included — then recorded the sync as "ok". Reproduced against a real
+# database before the fix: three documents in, zero out, status "ok".
+# ---------------------------------------------------------------------------
+
+
+async def _existing_synced_docs(source, count=3):
+    for i in range(count):
+        await Document(
+            bot_id=source.bot_id, user_id=source.user_id, filename=f"page{i}.html",
+            chunk_count=2, source_kind="website", source_id=str(source.id),
+            external_id=f"page-{i}", content_hash="unchanged-hash",
+        ).insert()
+
+
+async def test_a_failed_fetch_never_deletes_the_documents_it_could_not_see(
+    monkeypatch, upsert_calls,
+):
+    """The exact scenario that destroyed data: the source is unreachable,
+    so nothing comes back — and nothing may be deleted for it."""
+    source = await _make_source()
+    await _existing_synced_docs(source)
+    _mock_fetch(monkeypatch, [], complete=False, error="example.com unreachable (ConnectError)")
+
+    stats = await sync_source(source)
+
+    assert await Document.find(Document.source_id == str(source.id)).count() == 3
+    assert stats["items_removed"] == 0
+    assert upsert_calls["delete"] == []  # no vectors dropped either
+
+
+async def test_an_incomplete_fetch_is_reported_as_partial_not_ok(monkeypatch, upsert_calls):
+    """Silently reporting "ok" for a sync that could not read the source is
+    how a knowledge base goes stale for weeks without anyone noticing."""
+    source = await _make_source()
+    await _existing_synced_docs(source, count=1)
+    _mock_fetch(monkeypatch, [], complete=False, error="the site returned 503")
+
+    await sync_source(source)
+
+    refreshed = await KnowledgeSource.get(source.id)
+    assert refreshed.last_sync_status == "partial"
+    assert "503" in refreshed.last_sync_error
+
+
+async def test_an_incomplete_fetch_still_applies_the_items_it_DID_get(
+    monkeypatch, upsert_calls,
+):
+    """Partial is not "do nothing": a page that was successfully fetched is
+    still newer than what is stored, and withholding it would mean one bad
+    page freezes the whole source."""
+    source = await _make_source()
+    _mock_fetch(
+        monkeypatch,
+        [FetchedItem("page-new", "https://example.com/new", "New", "Fresh content")],
+        complete=False, error="one other page timed out",
+    )
+
+    stats = await sync_source(source)
+
+    assert stats["items_changed"] == 1
+    doc = await Document.find_one(Document.external_id == "page-new")
+    assert doc is not None
+
+
+async def test_a_complete_fetch_still_removes_what_is_genuinely_gone(
+    monkeypatch, upsert_calls,
+):
+    """The guard must not have disabled real deletions — a source that
+    successfully reports fewer items than last time still means those
+    items were deleted."""
+    source = await _make_source()
+    await _existing_synced_docs(source, count=3)
+    _mock_fetch(
+        monkeypatch,
+        [FetchedItem("page-0", "https://example.com/0", "Page 0", "Still here")],
+        complete=True,
+    )
+
+    stats = await sync_source(source)
+
+    assert stats["items_removed"] == 2
+    remaining = await Document.find(Document.source_id == str(source.id)).to_list()
+    assert {d.external_id for d in remaining} == {"page-0"}
+    refreshed = await KnowledgeSource.get(source.id)
+    assert refreshed.last_sync_status == "ok"

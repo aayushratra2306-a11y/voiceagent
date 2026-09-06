@@ -112,12 +112,11 @@ def _validate_consent_announcement(v: str) -> str:
     return v
 
 
-# Task 6.1 — bounded on both count and length. A topic is checked as a
-# case-insensitive substring against every sentence of every reply (see
-# guardrails.check_output), so an unbounded list would mean an unbounded
-# amount of per-sentence work on the hot path of every single call, and an
-# absurdly long "topic" would functionally block ordinary words it happens
-# to contain as a substring.
+# Task 6.1 — bounded on both count and length. Every topic is matched
+# case-insensitively against every sentence of every reply (see
+# guardrails.check_output, which anchors each one to whole words), so an
+# unbounded list would mean an unbounded number of regex searches on the
+# hot path of every single call.
 MAX_GUARDRAIL_TOPICS = 25
 MAX_GUARDRAIL_TOPIC_LENGTH = 100
 

@@ -15,10 +15,12 @@ from pipecat.frames.frames import (
     Frame,
     FunctionCallResultFrame,
     InterimTranscriptionFrame,
+    InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMMessagesAppendFrame,
+    LLMTextFrame,
     TextFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
@@ -398,6 +400,25 @@ class GuardrailOutputFilter(FrameProcessor):
                 await self._flush()
             return
 
+        # The caller barged in. Whatever half-sentence is buffered belongs to
+        # a reply that is being abandoned, so it is DISCARDED, not flushed —
+        # the same thing pipecat's own TTS service does to its identical
+        # sentence buffer on this frame (services/tts_service.py's
+        # _handle_interruption resets _text_aggregator and _streamed_text).
+        #
+        # Found by a later review of this processor, and confirmed by
+        # driving it directly: without this, a reply interrupted mid-sentence
+        # left its fragment in _aggregation, and the NEXT reply was appended
+        # straight onto it — "Your order will arrive on Tues" + "Sure, I can
+        # check that." reached TTS as the single sentence "Your order will
+        # arrive on TuesSure, I can check that." Barge-in is ordinary
+        # behaviour on a voice call, not an edge case, so this was reachable
+        # on any call where a caller interrupted before a full stop.
+        if isinstance(frame, InterruptionFrame):
+            self._aggregation = ""
+            await self.push_frame(frame, direction)
+            return
+
         if isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
             # Whatever is left is the end of the reply even if it never hit
             # a sentence-ending punctuation mark — a reply ending "...right
@@ -415,7 +436,7 @@ class GuardrailOutputFilter(FrameProcessor):
 
         hit = guardrails.check_output(sentence, self._system_prompt, self._forbidden_topics)
         if hit is None:
-            await self.push_frame(TextFrame(sentence))
+            await self.push_frame(self._speech_frame(sentence))
             return
 
         category, replacement = hit
@@ -424,7 +445,27 @@ class GuardrailOutputFilter(FrameProcessor):
             session_id=self._session_id, bot_id=self._bot_id, user_id=self._user_id,
             direction="output", category=category, snippet=sentence,
         )
-        await self.push_frame(TextFrame(replacement))
+        await self.push_frame(self._speech_frame(replacement))
+
+    @staticmethod
+    def _speech_frame(text: str) -> LLMTextFrame:
+        """LLMTextFrame, not a plain TextFrame — the frame TYPE carries
+        meaning downstream, and this processor is replacing LLM output with
+        LLM output.
+
+        `TextFrame.includes_inter_frame_spaces` defaults to False while
+        `LLMTextFrame`'s is True, and the assistant context aggregator uses
+        exactly that flag to decide whether to insert a space when joining
+        parts (pipecat's utils/string.py, concatenate_aggregated_text). The
+        sentences this processor emits already carry their own leading
+        spaces, so emitting them as plain TextFrames made the aggregator add
+        one MORE — every sentence boundary in the assistant's own stored
+        history came back double-spaced ("Hello there.  Nice to meet you.").
+        Small, but it is the model's own record of what it said, and it was
+        a regression this processor introduced rather than anything the
+        pipeline did before.
+        """
+        return LLMTextFrame(text)
 
 
 class MarkdownStripper(FrameProcessor):

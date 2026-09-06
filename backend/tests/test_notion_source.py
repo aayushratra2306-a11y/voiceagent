@@ -105,7 +105,7 @@ async def test_a_single_pages_text_is_extracted(monkeypatch):
     )
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"page_id": page_id})
+    items = (await fetch_notion_pages("fake-token", {"page_id": page_id})).items
 
     assert len(items) == 1
     assert items[0].external_id == page_id
@@ -130,7 +130,7 @@ async def test_the_title_is_found_regardless_of_the_property_name(monkeypatch):
     ])})
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"page_id": page_id})
+    items = (await fetch_notion_pages("fake-token", {"page_id": page_id})).items
     assert items[0].title == "Found By Type"
 
 
@@ -152,7 +152,7 @@ async def test_multiple_text_block_types_are_all_extracted(monkeypatch):
     )
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"page_id": page_id})
+    items = (await fetch_notion_pages("fake-token", {"page_id": page_id})).items
     text = items[0].text
     assert "A Heading" in text
     assert "First bullet" in text
@@ -173,7 +173,7 @@ async def test_an_unsupported_block_type_is_skipped_not_an_error(monkeypatch):
     )
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"page_id": page_id})
+    items = (await fetch_notion_pages("fake-token", {"page_id": page_id})).items
     assert "Real text after an image" in items[0].text
 
 
@@ -196,7 +196,7 @@ async def test_nested_blocks_are_recursed_into(monkeypatch):
     )
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"page_id": page_id})
+    items = (await fetch_notion_pages("fake-token", {"page_id": page_id})).items
     assert "Click to expand" in items[0].text
     assert "Hidden nested content" in items[0].text
 
@@ -223,7 +223,7 @@ async def test_block_pagination_is_followed_to_the_end(monkeypatch):
     )
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"page_id": page_id})
+    items = (await fetch_notion_pages("fake-token", {"page_id": page_id})).items
     assert "First page of blocks" in items[0].text
     assert "Second page of blocks" in items[0].text
 
@@ -248,7 +248,7 @@ async def test_a_database_syncs_every_page_currently_in_it(monkeypatch):
     )
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"database_id": "db-1"})
+    items = (await fetch_notion_pages("fake-token", {"database_id": "db-1"})).items
 
     assert {item.external_id for item in items} == {"page-a", "page-b"}
 
@@ -265,7 +265,7 @@ async def test_a_page_with_no_extractable_text_is_skipped():
     original = notion_module.httpx.AsyncClient
     notion_module.httpx.AsyncClient = lambda **k: client
     try:
-        items = await fetch_notion_pages("fake-token", {"page_id": "page-1"})
+        items = (await fetch_notion_pages("fake-token", {"page_id": "page-1"})).items
     finally:
         notion_module.httpx.AsyncClient = original
 
@@ -273,7 +273,7 @@ async def test_a_page_with_no_extractable_text_is_skipped():
 
 
 async def test_neither_page_id_nor_database_id_configured_returns_nothing():
-    items = await fetch_notion_pages("fake-token", {})
+    items = (await fetch_notion_pages("fake-token", {})).items
     assert items == []
 
 
@@ -291,7 +291,7 @@ async def test_one_bad_page_in_a_database_does_not_stop_the_others(monkeypatch):
     # page-missing is not in `pages`, so the fake client's 404 branch fires.
     monkeypatch.setattr("app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: client)
 
-    items = await fetch_notion_pages("fake-token", {"database_id": "db-1"})
+    items = (await fetch_notion_pages("fake-token", {"database_id": "db-1"})).items
 
     assert len(items) == 1
     assert items[0].external_id == "page-good"
@@ -315,5 +315,5 @@ async def test_a_total_api_failure_returns_an_empty_list_not_an_exception(monkey
         "app.services.knowledge_sources.notion.httpx.AsyncClient", lambda **k: _ExplodingClient()
     )
 
-    items = await fetch_notion_pages("fake-token", {"page_id": "page-1"})
+    items = (await fetch_notion_pages("fake-token", {"page_id": "page-1"})).items
     assert items == []

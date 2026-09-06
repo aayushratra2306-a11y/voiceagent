@@ -183,8 +183,10 @@ async def test_manual_sync_trigger_updates_the_status(client, user_a_token, monk
     )
     source_id = create.json()["id"]
 
+    from app.services.knowledge_sources import FetchResult
+
     async def _fake_fetch(_source):
-        return []
+        return FetchResult(items=[])
 
     monkeypatch.setattr("app.services.knowledge_sync._fetch_items", _fake_fetch)
 
@@ -197,7 +199,7 @@ async def test_manual_sync_trigger_updates_the_status(client, user_a_token, monk
 
 async def test_deleting_a_source_removes_its_documents_too(client, user_a_token, monkeypatch):
     from app.models.document import Document
-    from app.services.knowledge_sources import FetchedItem
+    from app.services.knowledge_sources import FetchedItem, FetchResult
 
     bot_id = await _create_bot(client, user_a_token)
     create = await client.post(
@@ -208,7 +210,7 @@ async def test_deleting_a_source_removes_its_documents_too(client, user_a_token,
     source_id = create.json()["id"]
 
     async def _fake_fetch(_source):
-        return [FetchedItem("page-1", "https://example.com/1", "Page 1", "Some content")]
+        return FetchResult(items=[FetchedItem("page-1", "https://example.com/1", "Page 1", "Some content")])
 
     async def _fake_upsert(bot_id, doc_id, chunks):
         return len(chunks)
@@ -243,3 +245,84 @@ async def test_deleting_a_source_that_isnt_yours_is_refused(client, user_a_token
 
     resp = await client.delete(f"/knowledge-sources/{source_id}", headers=auth_headers(user_b_token))
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# `config` is a free-form dict off the wire, so it needs type checks as well
+# as range checks — a wrong TYPE must be a clear 422, not a 500 from a
+# comparison that raises.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", ["50", 1.5, True, None, [], {}])
+async def test_a_non_integer_max_pages_is_a_clean_422(client, user_a_token, bad_value):
+    """`"50" <= 200` raises TypeError. A customer sending a JSON string
+    where a number belongs deserves the same clear error as one sending a
+    number out of range."""
+    bot_id = await _create_bot(client, user_a_token)
+    resp = await client.post(
+        f"/bots/{bot_id}/knowledge-sources",
+        json={"kind": "website",
+              "config": {"start_url": "https://example.com", "max_pages": bad_value}},
+        headers=auth_headers(user_a_token),
+    )
+    # None means "not set" and is legitimately allowed through; every other
+    # non-integer must be refused, and none of them may 500.
+    assert resp.status_code in (201, 422), resp.text
+    if bad_value is None:
+        assert resp.status_code == 201
+    else:
+        assert resp.status_code == 422
+
+
+async def test_max_pages_above_the_hard_ceiling_is_rejected(client, user_a_token):
+    bot_id = await _create_bot(client, user_a_token)
+    resp = await client.post(
+        f"/bots/{bot_id}/knowledge-sources",
+        json={"kind": "website",
+              "config": {"start_url": "https://example.com", "max_pages": 100000}},
+        headers=auth_headers(user_a_token),
+    )
+    assert resp.status_code == 422
+
+
+async def test_a_notion_page_id_containing_path_syntax_is_rejected(client, user_a_token):
+    """Notion ids go straight into a URL path (`/v1/pages/{id}`), so an id
+    with "../" in it addresses a different endpoint entirely. An identifier
+    field has no business accepting slashes."""
+    bot_id = await _create_bot(client, user_a_token)
+    resp = await client.post(
+        f"/bots/{bot_id}/knowledge-sources",
+        json={"kind": "notion", "config": {"page_id": "../../users"}, "credential": "secret-token"},
+        headers=auth_headers(user_a_token),
+    )
+    assert resp.status_code == 422
+
+
+async def test_a_drive_folder_id_containing_a_quote_is_rejected(client, user_a_token):
+    """Drive folder ids are interpolated into a query expression
+    (`'{id}' in parents`), where an apostrophe closes the literal and
+    everything after it is read as query syntax."""
+    bot_id = await _create_bot(client, user_a_token)
+    resp = await client.post(
+        f"/bots/{bot_id}/knowledge-sources",
+        json={"kind": "google_drive",
+              "config": {"folder_id": "x' in parents or name contains 'secret"},
+              "credential": "{}"},
+        headers=auth_headers(user_a_token),
+    )
+    assert resp.status_code == 422
+
+
+async def test_an_ordinary_notion_id_with_dashes_is_still_accepted(client, user_a_token):
+    """Real Notion ids are dashed UUIDs — the validation must not refuse
+    the normal case it exists to sit alongside."""
+    bot_id = await _create_bot(client, user_a_token)
+    resp = await client.post(
+        f"/bots/{bot_id}/knowledge-sources",
+        json={"kind": "notion",
+              "config": {"page_id": "13b7a1f2-9c4d-4e8a-9f21-6b0d5c8e7a44"},
+              "credential": "secret-token"},
+        headers=auth_headers(user_a_token),
+    )
+    assert resp.status_code == 201, resp.text

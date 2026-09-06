@@ -22,6 +22,15 @@ synced before but is no longer in the source's current results — a page
 deleted from Notion, a file removed from the Drive folder, a page taken
 off a website — has its Document and vectors removed, the same as if a
 customer had deleted it by hand.
+
+That fourth outcome is gated on `FetchResult.complete`, and the gate is
+the most important line in this module. An item's absence only means
+"deleted at the source" if this sync actually SAW the whole source; if the
+fetch failed or was cut short, the same absence means nothing at all.
+Without that distinction a website being down for one sync deleted every
+document the customer had, vectors included, and recorded the sync as
+"ok" — see FetchResult's own comment in
+app/services/knowledge_sources/__init__.py.
 """
 
 from __future__ import annotations
@@ -35,7 +44,7 @@ from loguru import logger
 from app.core.crypto import decrypt_secret
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
-from app.services.knowledge_sources import FetchedItem
+from app.services.knowledge_sources import FetchResult
 from app.services.rag import chunk_text, delete_document_vectors, upsert_document
 
 
@@ -43,9 +52,14 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
 
 
-async def _fetch_items(source: KnowledgeSource) -> list[FetchedItem]:
+async def _fetch_items(source: KnowledgeSource) -> FetchResult:
     """Dispatches by kind. Adding a new source kind later means one more
-    branch here, not a change to the diffing logic below it."""
+    branch here, not a change to the diffing logic below it.
+
+    Every "can't even try" path returns `complete=False`, not an empty
+    list: a source with no credential has not told us its content is gone,
+    it has told us nothing at all.
+    """
     if source.kind == "website":
         from app.services.knowledge_sources.website import (
             DEFAULT_MAX_DEPTH,
@@ -56,7 +70,7 @@ async def _fetch_items(source: KnowledgeSource) -> list[FetchedItem]:
         start_url = source.config.get("start_url", "")
         if not start_url:
             logger.warning(f"[SYNC] website source {source.id} has no start_url configured")
-            return []
+            return FetchResult(items=[], complete=False, error="no start_url configured")
         return await crawl_website(
             start_url,
             max_pages=source.config.get("max_pages", DEFAULT_MAX_PAGES),
@@ -69,7 +83,7 @@ async def _fetch_items(source: KnowledgeSource) -> list[FetchedItem]:
         token = decrypt_secret(source.credential_encrypted)
         if not token:
             logger.warning(f"[SYNC] notion source {source.id} has no usable credential")
-            return []
+            return FetchResult(items=[], complete=False, error="no usable Notion credential")
         return await fetch_notion_pages(token, source.config)
 
     if source.kind == "google_drive":
@@ -78,11 +92,13 @@ async def _fetch_items(source: KnowledgeSource) -> list[FetchedItem]:
         key = decrypt_secret(source.credential_encrypted)
         if not key:
             logger.warning(f"[SYNC] google_drive source {source.id} has no usable credential")
-            return []
+            return FetchResult(
+                items=[], complete=False, error="no usable Google service-account key",
+            )
         return await fetch_drive_files(key, source.config)
 
     logger.warning(f"[SYNC] unknown knowledge source kind: {source.kind!r}")
-    return []
+    return FetchResult(items=[], complete=False, error=f"unknown source kind {source.kind!r}")
 
 
 async def sync_source(source: KnowledgeSource) -> dict[str, int]:
@@ -95,7 +111,8 @@ async def sync_source(source: KnowledgeSource) -> dict[str, int]:
     """
     stats = {"items_seen": 0, "items_changed": 0, "items_removed": 0}
     try:
-        items = await _fetch_items(source)
+        result = await _fetch_items(source)
+        items = result.items
         stats["items_seen"] = len(items)
 
         existing_docs = await Document.find(
@@ -150,19 +167,41 @@ async def sync_source(source: KnowledgeSource) -> dict[str, int]:
 
         # The other direction: anything that was synced before but is not
         # in this fetch's results any more no longer exists at the source.
-        removed_external_ids = set(existing_by_external_id) - seen_external_ids
-        for external_id in removed_external_ids:
-            doc = existing_by_external_id[external_id]
-            await delete_document_vectors(source.bot_id, str(doc.id), doc.chunk_count)
-            await doc.delete()
-            stats["items_removed"] += 1
+        #
+        # ONLY when the fetch actually saw the whole source. An incomplete
+        # fetch's absences are missing evidence, not evidence of absence,
+        # and acting on them destroys customer data: before FetchResult
+        # carried this flag, a website that was down for one sync came back
+        # as an ordinary empty list, every stored Document and its Pinecone
+        # vectors were deleted as "removed at the source", and the sync
+        # recorded itself as "ok". Verified against a real database — three
+        # documents in, zero out, status "ok".
+        #
+        # Skipping the removal pass is safe in the other direction too: a
+        # page genuinely deleted while the source was flaky is simply
+        # removed on the next sync that completes cleanly.
+        if result.complete:
+            removed_external_ids = set(existing_by_external_id) - seen_external_ids
+            for external_id in removed_external_ids:
+                doc = existing_by_external_id[external_id]
+                await delete_document_vectors(source.bot_id, str(doc.id), doc.chunk_count)
+                await doc.delete()
+                stats["items_removed"] += 1
 
         source.last_synced_at = datetime.now(UTC)
-        source.last_sync_status = "ok"
-        source.last_sync_error = ""
+        # "partial" rather than "ok": new and changed items WERE applied, so
+        # this is not a failed sync, but the customer needs to see that
+        # something was missed — silently reporting "ok" for a sync that
+        # could not read half the source is how a stale knowledge base goes
+        # unnoticed for weeks.
+        source.last_sync_status = "ok" if result.complete else "partial"
+        source.last_sync_error = "" if result.complete else result.error
         source.last_sync_stats = stats
         await source.save()
-        logger.info(f"[SYNC] {source.kind} source {source.id}: {stats}")
+        logger.info(
+            f"[SYNC] {source.kind} source {source.id}: {stats} "
+            f"({'complete' if result.complete else 'INCOMPLETE — removals skipped'})"
+        )
         return stats
 
     except Exception as e:

@@ -46,7 +46,7 @@ import json
 import httpx
 from loguru import logger
 
-from app.services.knowledge_sources import FetchedItem
+from app.services.knowledge_sources import FetchedItem, FetchResult
 
 DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
 REQUEST_TIMEOUT_SECONDS = 20.0
@@ -131,7 +131,7 @@ async def _extract_text(client: httpx.AsyncClient, file: dict) -> str | None:
     return None
 
 
-async def fetch_drive_files(service_account_json: str, config: dict) -> list[FetchedItem]:
+async def fetch_drive_files(service_account_json: str, config: dict) -> FetchResult:
     """`config` carries `folder_id`. New files added to the folder are
     picked up on the next scheduled sync automatically — the actual
     "auto re-syncing" value task 7.5 asks for on the Drive side.
@@ -139,20 +139,30 @@ async def fetch_drive_files(service_account_json: str, config: dict) -> list[Fet
     Never raises: an expired/revoked key, a folder the service account
     lost access to, or a Drive outage should mean this source's sync
     reports an error and every OTHER configured source still runs.
+
+    Every one of those failures comes back as `FetchResult.complete=False`.
+    A revoked key returns no files, and so does a customer emptying the
+    folder — telling those apart is not optional, because one of them
+    means "delete everything you have stored." See FetchResult's own
+    comment.
     """
     folder_id = config.get("folder_id")
     if not folder_id:
         logger.warning("[DRIVE] knowledge source has no folder_id configured")
-        return []
+        return FetchResult(items=[], complete=False, error="no folder_id configured")
 
     try:
         token = await _get_access_token(service_account_json)
     except Exception as e:
         logger.warning(f"[DRIVE] could not authenticate: {type(e).__name__}: {e}")
-        return []
+        return FetchResult(
+            items=[], complete=False,
+            error=f"could not authenticate with the service account key: {type(e).__name__}",
+        )
 
     headers = {"Authorization": f"Bearer {token}"}
     items: list[FetchedItem] = []
+    failures: list[str] = []
 
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, headers=headers) as client:
@@ -162,6 +172,7 @@ async def fetch_drive_files(service_account_json: str, config: dict) -> list[Fet
                     text = await _extract_text(client, file)
                 except httpx.HTTPStatusError as e:
                     logger.warning(f"[DRIVE] could not read {file.get('name')!r}: {e}")
+                    failures.append(f"{file.get('name')!r}: {e.response.status_code}")
                     continue
                 if text is None or not text.strip():
                     continue
@@ -173,9 +184,14 @@ async def fetch_drive_files(service_account_json: str, config: dict) -> list[Fet
                 ))
     except httpx.HTTPStatusError as e:
         logger.warning(f"[DRIVE] sync failed listing folder {folder_id}: {e}")
-        return []
+        return FetchResult(
+            items=[], complete=False,
+            error=f"could not list folder {folder_id}: {e.response.status_code}",
+        )
     except Exception as e:
         logger.warning(f"[DRIVE] unexpected error during sync: {type(e).__name__}: {e}")
-        return []
+        return FetchResult(items=[], complete=False, error=f"{type(e).__name__}: {e}")
 
-    return items
+    if failures:
+        return FetchResult(items=items, complete=False, error="; ".join(failures[:5]))
+    return FetchResult(items=items, complete=True)

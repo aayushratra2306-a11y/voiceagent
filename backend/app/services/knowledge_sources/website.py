@@ -40,11 +40,27 @@ import httpx
 from loguru import logger
 
 from app.core.url_safety import rejection_reason
-from app.services.knowledge_sources import FetchedItem
+from app.services.knowledge_sources import FetchedItem, FetchResult
 
 DEFAULT_MAX_PAGES = 50
 DEFAULT_MAX_DEPTH = 3
 PAGE_TIMEOUT_SECONDS = 8.0
+
+# A hard ceiling on how many pages are FETCHED, as opposed to how many
+# yielded usable text. The page cap alone was not actually a bound on the
+# crawl: `len(items) < max_pages` only counts pages that produced text, so
+# a site of image galleries, redirects, or JavaScript-rendered pages (all
+# of which extract to nothing here) was crawled without any effective
+# limit at all — precisely the unbounded crawl this module's own docstring
+# claims to prevent. Set well above max_pages so an ordinary site with some
+# empty pages still reaches its real page cap.
+_FETCH_BUDGET_MULTIPLIER = 4
+
+# Refuse to read an unbounded response body into memory. A crawler fetches
+# whatever a customer-configured URL serves, and "it said Content-Type:
+# text/html" is not a promise about size — one 2 GB response would take
+# this process down and every live call with it.
+MAX_PAGE_BYTES = 5 * 1024 * 1024
 
 # Identifies this server honestly to site owners reading their own access
 # logs — a customer who connected their own site to this feature should be
@@ -157,31 +173,42 @@ async def crawl_website(
     start_url: str,
     max_pages: int = DEFAULT_MAX_PAGES,
     max_depth: int = DEFAULT_MAX_DEPTH,
-) -> list[FetchedItem]:
+) -> FetchResult:
     """Breadth-first, same-domain, bounded on both pages and depth.
 
     Never raises: one unreachable page, one malformed one, or the whole
     site being briefly down should mean fewer results, not a failed sync
-    that leaves every OTHER source untouched — the caller
-    (knowledge_sync.py) treats an empty or partial result as informative on
-    its own, not as this function's job to turn into an exception.
+    that leaves every OTHER source untouched.
+
+    What it DOES report is whether the crawl actually saw the whole site
+    (`FetchResult.complete`). A network error, a 5xx, a rate-limit, or
+    simply running into the page cap all mean pages were missed — and the
+    caller must not read a missed page as a deleted one. See FetchResult's
+    own comment for what happened when it could not tell the difference.
+
+    A 4xx other than 429 deliberately does NOT mark the crawl incomplete:
+    a linked page returning 404 is the ordinary way a website says that
+    page is gone, which is exactly the signal a sync SHOULD act on.
     """
     parsed_start = urlparse(start_url)
     if parsed_start.scheme not in ("http", "https") or not parsed_start.netloc:
         logger.warning(f"[CRAWL] not a fetchable URL: {start_url!r}")
-        return []
+        return FetchResult(items=[], complete=False, error=f"not a fetchable URL: {start_url!r}")
 
     allowed_netloc = parsed_start.netloc
     robots = await _load_robots(parsed_start.scheme, allowed_netloc)
 
     state = _CrawlState(visited=set(), items=[])
     queue: list[tuple[str, int]] = [(start_url.split("#", 1)[0], 0)]
+    fetch_budget = max(max_pages * _FETCH_BUDGET_MULTIPLIER, max_pages)
+    pages_fetched = 0
+    problems: list[str] = []
 
     async with httpx.AsyncClient(
         timeout=PAGE_TIMEOUT_SECONDS, headers={"User-Agent": USER_AGENT},
         follow_redirects=False,  # each hop re-checked below, same reasoning as tool_registry.py
     ) as client:
-        while queue and len(state.items) < max_pages:
+        while queue and len(state.items) < max_pages and pages_fetched < fetch_budget:
             url, depth = queue.pop(0)
             if url in state.visited:
                 continue
@@ -199,10 +226,12 @@ async def crawl_website(
                 logger.warning(f"[CRAWL] refused {url} — {unsafe}")
                 continue
 
+            pages_fetched += 1
             try:
                 response = await client.get(url)
             except Exception as e:
                 logger.info(f"[CRAWL] could not fetch {url}: {type(e).__name__}: {e}")
+                problems.append(f"{url} unreachable ({type(e).__name__})")
                 continue
 
             if response.status_code in (301, 302, 303, 307, 308):
@@ -212,8 +241,20 @@ async def crawl_website(
                     queue.append((target, depth))  # re-checked from the top on its own turn
                 continue
             if response.status_code >= 400:
+                # 5xx and 429 are the site failing to serve a page it may
+                # well still have; any other 4xx is the site saying the page
+                # is genuinely not there.
+                if response.status_code >= 500 or response.status_code == 429:
+                    problems.append(f"{url} returned {response.status_code}")
                 continue
             if "text/html" not in response.headers.get("content-type", ""):
+                continue
+            if len(response.content) > MAX_PAGE_BYTES:
+                logger.warning(
+                    f"[CRAWL] skipping {url} — {len(response.content)} bytes exceeds "
+                    f"the {MAX_PAGE_BYTES}-byte page limit"
+                )
+                problems.append(f"{url} exceeded the page size limit")
                 continue
 
             title, text, links = extract_text_and_links(response.text, url)
@@ -227,4 +268,19 @@ async def crawl_website(
                     if link not in state.visited and urlparse(link).netloc == allowed_netloc:
                         queue.append((link, depth + 1))
 
-    return state.items
+    # Stopping early because a cap was reached means there are pages on this
+    # site this crawl never looked at — so anything already stored that did
+    # not come back this time might simply be one of them, not a page the
+    # customer deleted.
+    hit_a_cap = bool(queue) and (len(state.items) >= max_pages or pages_fetched >= fetch_budget)
+    if hit_a_cap:
+        problems.append(
+            f"stopped at the crawl limit ({len(state.items)} pages kept, "
+            f"{pages_fetched} fetched) with more pages still queued"
+        )
+
+    if problems:
+        return FetchResult(
+            items=state.items, complete=False, error="; ".join(problems[:5]),
+        )
+    return FetchResult(items=state.items, complete=True)

@@ -11,6 +11,7 @@ pattern app/api/bot_tools.py already uses for a tool's own auth secret.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -57,6 +58,44 @@ class KnowledgeSourceUpdate(BaseModel):
     enabled: bool | None = None
 
 
+# Notion page/database ids and Drive folder ids are identifiers, and both
+# end up somewhere a stray character changes the MEANING of a request:
+# Notion's go into a URL path (`/v1/pages/{id}` — a "../" would walk to a
+# different endpoint entirely) and Drive's goes inside a Drive query
+# expression (`'{id}' in parents` — an apostrophe closes the literal and
+# the rest is read as query syntax). Neither is a serious privilege
+# escalation on its own (a customer is using their own credential against
+# their own workspace either way), but an identifier field has no business
+# accepting quotes, slashes or whitespace, and rejecting them at
+# configuration time costs nothing.
+_ID_ALLOWED = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _check_external_id(config: dict, key: str) -> None:
+    value = config.get(key)
+    if value in (None, ""):
+        return
+    if not isinstance(value, str) or not _ID_ALLOWED.match(value.replace("-", "")):
+        raise HTTPException(
+            status_code=422,
+            detail=f"config.{key} must be a plain identifier (letters, digits, - and _ only)",
+        )
+
+
+def _check_bounded_int(config: dict, key: str, low: int, high: int) -> None:
+    value = config.get(key)
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HTTPException(
+            status_code=422, detail=f"config.{key} must be a whole number",
+        )
+    if not (low <= value <= high):
+        raise HTTPException(
+            status_code=422, detail=f"config.{key} must be between {low} and {high}",
+        )
+
+
 def _validate_config(kind: str, config: dict) -> None:
     """Checked at configuration time so a customer finds out about a typo
     immediately rather than from a sync that silently does nothing — the
@@ -70,16 +109,15 @@ def _validate_config(kind: str, config: dict) -> None:
                 status_code=422,
                 detail="config.start_url must be a full http(s) URL, e.g. https://example.com",
             )
-        max_pages = config.get("max_pages")
-        if max_pages is not None and not (1 <= max_pages <= MAX_WEBSITE_PAGES):
-            raise HTTPException(
-                status_code=422, detail=f"config.max_pages must be between 1 and {MAX_WEBSITE_PAGES}",
-            )
-        max_depth = config.get("max_depth")
-        if max_depth is not None and not (0 <= max_depth <= MAX_WEBSITE_DEPTH):
-            raise HTTPException(
-                status_code=422, detail=f"config.max_depth must be between 0 and {MAX_WEBSITE_DEPTH}",
-            )
+        # `config` is a free-form dict off the wire, so the TYPE has to be
+        # checked before the range is — `"50" <= 200` raises TypeError, and
+        # a customer sending a JSON string where a number belongs deserves
+        # the same clear 422 as one sending a number out of range, not an
+        # unhandled 500. bool is excluded explicitly because it is an int
+        # subclass in Python (`True <= 200` is perfectly valid and means
+        # nothing here).
+        _check_bounded_int(config, "max_pages", 1, MAX_WEBSITE_PAGES)
+        _check_bounded_int(config, "max_depth", 0, MAX_WEBSITE_DEPTH)
     elif kind == "notion":
         if not config.get("page_id") and not config.get("database_id"):
             raise HTTPException(
@@ -89,9 +127,12 @@ def _validate_config(kind: str, config: dict) -> None:
             raise HTTPException(
                 status_code=422, detail="config must set only ONE of page_id or database_id, not both",
             )
+        _check_external_id(config, "page_id")
+        _check_external_id(config, "database_id")
     elif kind == "google_drive":
         if not config.get("folder_id"):
             raise HTTPException(status_code=422, detail="config must set folder_id")
+        _check_external_id(config, "folder_id")
 
 
 def _requires_credential(kind: str) -> bool:

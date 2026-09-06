@@ -15,7 +15,12 @@ exists here at all.
 import uuid
 
 import pytest
-from pipecat.frames.frames import EndFrame, LLMFullResponseEndFrame, TextFrame
+from pipecat.frames.frames import (
+    EndFrame,
+    LLMFullResponseEndFrame,
+    LLMTextFrame,
+    TextFrame,
+)
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 
@@ -241,3 +246,127 @@ async def test_no_incident_is_logged_for_a_clean_reply():
 
     incident = await GuardrailIncident.find_one(GuardrailIncident.session_id == session_id)
     assert incident is None
+
+
+# ---------------------------------------------------------------------------
+# Barge-in: the sentence buffer must not survive an interruption
+#
+# Every TTS service in this project already discards its own identical
+# sentence buffer on this frame (pipecat's tts_service.py
+# _handle_interruption). This processor holds the same kind of buffer one
+# step earlier in the pipeline and did not, so a reply the caller
+# interrupted mid-sentence left its fragment behind and the NEXT reply was
+# appended straight onto it — and the caller heard the join.
+# ---------------------------------------------------------------------------
+
+
+async def _output_filter_with_capture(**overrides):
+    kwargs = dict(
+        session_id=str(uuid.uuid4()), bot_id="bot-1", user_id="user-1",
+        system_prompt="You are a helpful assistant for Acme Ltd.",
+        forbidden_topics=[],
+    )
+    kwargs.update(overrides)
+    processor = GuardrailOutputFilter(**kwargs)
+    pushed = []
+
+    async def _capture(frame, direction=FrameDirection.DOWNSTREAM):
+        pushed.append(frame)
+
+    processor.push_frame = _capture
+    return processor, pushed
+
+
+async def test_an_interruption_discards_the_half_finished_sentence():
+    from pipecat.frames.frames import InterruptionFrame
+
+    processor, pushed = await _output_filter_with_capture()
+    for chunk in ["Your order ", "will arrive on ", "Tues"]:
+        await processor.process_frame(LLMTextFrame(chunk), FrameDirection.DOWNSTREAM)
+
+    await processor.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
+
+    pushed.clear()
+    for chunk in ["Sure, ", "I can check that."]:
+        await processor.process_frame(LLMTextFrame(chunk), FrameDirection.DOWNSTREAM)
+
+    spoken = [f.text for f in pushed if isinstance(f, TextFrame)]
+    assert spoken == ["Sure, I can check that."], (
+        "the abandoned fragment leaked into the next reply"
+    )
+
+
+async def test_the_interruption_frame_itself_is_still_forwarded():
+    """Discarding the buffer must not swallow the frame — everything
+    downstream (TTS, the transport) needs to see the interruption."""
+    from pipecat.frames.frames import InterruptionFrame
+
+    processor, pushed = await _output_filter_with_capture()
+    frame = InterruptionFrame()
+    await processor.process_frame(frame, FrameDirection.DOWNSTREAM)
+    assert frame in pushed
+
+
+async def test_an_interrupted_fragment_is_discarded_not_spoken_later():
+    """Specifically NOT flushed on the way out: the caller interrupted
+    precisely because they did not want to hear the rest of it."""
+    from pipecat.frames.frames import InterruptionFrame
+
+    processor, pushed = await _output_filter_with_capture()
+    await processor.process_frame(LLMTextFrame("Let me read out the whole policy"),
+                                  FrameDirection.DOWNSTREAM)
+    await processor.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
+    await processor.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+
+    assert [f.text for f in pushed if isinstance(f, TextFrame)] == []
+
+
+# ---------------------------------------------------------------------------
+# The frame TYPE this processor emits is load-bearing
+# ---------------------------------------------------------------------------
+
+
+async def test_sentences_are_emitted_as_llm_text_frames():
+    """`TextFrame.includes_inter_frame_spaces` is False and
+    `LLMTextFrame`'s is True, and the assistant context aggregator uses
+    exactly that flag to decide whether to insert a space when joining
+    parts. Emitting plain TextFrames double-spaced every sentence boundary
+    in the assistant's own stored history."""
+    processor, pushed = await _output_filter_with_capture()
+    for chunk in ["Hello there.", " Nice to meet you."]:
+        await processor.process_frame(LLMTextFrame(chunk), FrameDirection.DOWNSTREAM)
+
+    emitted = [f for f in pushed if isinstance(f, TextFrame)]
+    assert emitted, "nothing was emitted at all"
+    assert all(isinstance(f, LLMTextFrame) for f in emitted)
+    assert all(f.includes_inter_frame_spaces for f in emitted)
+
+
+async def test_the_assistant_context_is_joined_with_single_spaces():
+    """The observable consequence, asserted through pipecat's own
+    concatenation rather than by trusting the flag."""
+    from pipecat.utils.string import (
+        TextPartForConcatenation,
+        concatenate_aggregated_text,
+    )
+
+    processor, pushed = await _output_filter_with_capture()
+    for chunk in ["Hello there.", " Nice to meet you."]:
+        await processor.process_frame(LLMTextFrame(chunk), FrameDirection.DOWNSTREAM)
+
+    parts = [
+        TextPartForConcatenation(f.text, f.includes_inter_frame_spaces)
+        for f in pushed if isinstance(f, TextFrame)
+    ]
+    assert concatenate_aggregated_text(parts) == "Hello there. Nice to meet you."
+
+
+async def test_a_blocked_sentence_is_replaced_as_an_llm_text_frame_too():
+    processor, pushed = await _output_filter_with_capture(forbidden_topics=["lawsuit"])
+    await processor.process_frame(
+        LLMTextFrame("I can tell you about the lawsuit."), FrameDirection.DOWNSTREAM,
+    )
+    emitted = [f for f in pushed if isinstance(f, TextFrame)]
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], LLMTextFrame)
+    assert "lawsuit" not in emitted[0].text

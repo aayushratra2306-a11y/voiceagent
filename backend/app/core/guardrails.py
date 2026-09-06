@@ -248,6 +248,24 @@ def _leaks_system_prompt(sentence: str, system_prompt: str) -> bool:
     prompt_lower = system_prompt.lower()
     scan_range = lowered[:_MAX_SENTENCE_CHARS_TO_SCAN]
 
+    # A sentence SHORTER than the overlap threshold cannot contain a
+    # _MIN_LEAK_OVERLAP-character span at all, so there is nothing here to
+    # compare — and checking it anyway is not merely wasted work, it is
+    # actively wrong. Found by a later review of this module: without this
+    # guard the loop below still runs once, with a window that is the whole
+    # short sentence, which quietly turns the check into "does this short
+    # sentence appear anywhere in the prompt" — and a bot's OWN SCRIPTED
+    # GREETING does, constantly. A perfectly ordinary prompt saying 'Always
+    # start the call by saying: How can I help you today?' made the bot's
+    # actual greeting register as a prompt leak, so the first thing a
+    # caller heard was "I can't share details about how I'm set up."
+    # _MIN_LEAK_OVERLAP exists precisely so a SHORT coincidental overlap is
+    # not treated as a leak; applying it to the prompt's length but never
+    # to the sentence's left exactly the false positive it was meant to
+    # prevent.
+    if len(scan_range) < _MIN_LEAK_OVERLAP:
+        return False
+
     # Slid over the SENTENCE, not the prompt, and at every position — not a
     # sample every N characters. This is the direction that is actually
     # gapless: sliding a SAMPLED window over the prompt (step > 1, tried
@@ -268,22 +286,48 @@ def _leaks_system_prompt(sentence: str, system_prompt: str) -> bool:
     return False
 
 
+def _topic_pattern(topic: str) -> str:
+    """A whole-word pattern for one topic, with the boundary applied only at
+    the ends where a boundary can actually mean anything.
+
+    A bare ``\\b`` at both ends is wrong for any topic that does not START
+    and END with a word character — and real customer topics do that
+    constantly. ``\\bc\\+\\+\\b`` never matches "C++" (the position after
+    "+" is a word boundary only when a word character follows it, and
+    "C++ " has a space), and ``\\b\\.net\\b`` never matches ".NET". Both
+    matched NOTHING AT ALL, silently: a forbidden topic that looks
+    configured and quietly protects nothing is the worst outcome available
+    here, strictly worse than plainly rejecting an unsupported topic.
+
+    Applying the lookarounds conditionally keeps the case that motivated
+    word boundaries in the first place — the topic "AI" must not match
+    inside "said", "again", "explain" — while letting a
+    punctuation-edged topic match as itself.
+    """
+    escaped = re.escape(topic.lower())
+    starts_word = topic[0].isalnum() or topic[0] == "_"
+    ends_word = topic[-1].isalnum() or topic[-1] == "_"
+    prefix = r"(?<!\w)" if starts_word else ""
+    suffix = r"(?!\w)" if ends_word else ""
+    return f"{prefix}{escaped}{suffix}"
+
+
 def _mentions_forbidden_topic(sentence: str, topics: list[str]) -> str | None:
-    """Word-boundary matching, deliberately NOT a plain substring check.
+    """Whole-word matching, deliberately NOT a plain substring check.
 
     Found by this task's own adversarial suite, in the direction that
     matters most for false positives rather than false negatives: a
     customer setting the entirely reasonable topic "AI" matched inside
     ordinary words like "s-AI-d", "ag-AI-n", and "expl-AI-n" — a naive `in`
     check would have made a short, plausible topic silently break a large
-    fraction of ordinary replies. `\\b` anchors the match to whole-word
-    boundaries so the topic has to actually appear as itself.
+    fraction of ordinary replies. See `_topic_pattern` for how the boundary
+    is anchored, and why it is not simply `\\b` on both ends.
     """
     lowered = sentence.lower()
     for topic in topics:
         if not topic:
             continue
-        if re.search(rf"\b{re.escape(topic.lower())}\b", lowered):
+        if re.search(_topic_pattern(topic), lowered):
             return topic
     return None
 

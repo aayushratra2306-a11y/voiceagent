@@ -95,7 +95,7 @@ async def test_a_google_doc_is_exported_as_plain_text(monkeypatch):
         "app.services.knowledge_sources.google_drive.httpx.AsyncClient", lambda **k: client
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
 
     assert len(items) == 1
     assert items[0].external_id == "f1"
@@ -113,7 +113,7 @@ async def test_a_plain_text_file_is_downloaded_directly(monkeypatch):
         "app.services.knowledge_sources.google_drive.httpx.AsyncClient", lambda **k: client
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
     assert "Plain text file contents." in items[0].text
 
 
@@ -147,7 +147,7 @@ async def test_a_pdf_is_extracted_via_the_same_parser_task_2_10_uses(monkeypatch
         "app.services.rag.parse_pdf", lambda content: [(1, "Page one text"), (2, "Page two text")]
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
 
     assert "Page one text" in items[0].text
     assert "Page two text" in items[0].text
@@ -168,7 +168,7 @@ async def test_a_subfolder_is_never_recursed_into(monkeypatch):
         "app.services.knowledge_sources.google_drive.httpx.AsyncClient", lambda **k: client
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
 
     assert len(items) == 1
     assert items[0].external_id == "f4"
@@ -187,7 +187,7 @@ async def test_an_unsupported_mime_type_is_skipped_not_an_error(monkeypatch):
         "app.services.knowledge_sources.google_drive.httpx.AsyncClient", lambda **k: client
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
 
     assert len(items) == 1
     assert items[0].external_id == "f5"
@@ -211,7 +211,7 @@ async def test_file_listing_pagination_is_followed_to_the_end(monkeypatch):
         "app.services.knowledge_sources.google_drive.httpx.AsyncClient", lambda **k: client
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
 
     assert {item.external_id for item in items} == {"f1", "f2"}
 
@@ -235,7 +235,7 @@ async def test_a_file_that_fails_to_download_does_not_stop_the_others(monkeypatc
         "app.services.knowledge_sources.google_drive.httpx.AsyncClient", lambda **k: client
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
 
     assert len(items) == 1
     assert items[0].external_id == "good"
@@ -252,7 +252,7 @@ async def test_a_file_with_no_extractable_text_is_skipped():
     original = drive_module.httpx.AsyncClient
     drive_module.httpx.AsyncClient = lambda **k: client
     try:
-        items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+        items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
     finally:
         drive_module.httpx.AsyncClient = original
 
@@ -260,7 +260,7 @@ async def test_a_file_with_no_extractable_text_is_skipped():
 
 
 async def test_no_folder_id_configured_returns_nothing():
-    items = await fetch_drive_files("{}", {})
+    items = (await fetch_drive_files("{}", {})).items
     assert items == []
 
 
@@ -272,7 +272,7 @@ async def test_an_authentication_failure_returns_an_empty_list_not_an_exception(
         "app.services.knowledge_sources.google_drive._get_access_token", _boom
     )
 
-    items = await fetch_drive_files("not valid json", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("not valid json", {"folder_id": "folder-1"})).items
     assert items == []
 
 
@@ -291,5 +291,5 @@ async def test_a_total_api_failure_returns_an_empty_list_not_an_exception(monkey
         "app.services.knowledge_sources.google_drive.httpx.AsyncClient", lambda **k: _ExplodingClient()
     )
 
-    items = await fetch_drive_files("{}", {"folder_id": "folder-1"})
+    items = (await fetch_drive_files("{}", {"folder_id": "folder-1"})).items
     assert items == []

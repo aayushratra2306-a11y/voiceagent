@@ -175,7 +175,7 @@ def local_site(monkeypatch):
 
 
 async def test_the_crawl_finds_every_linked_page_within_depth(local_site):
-    items = await crawl_website(local_site + "/", max_pages=50, max_depth=3)
+    items = (await crawl_website(local_site + "/", max_pages=50, max_depth=3)).items
     urls = {item.url for item in items}
 
     assert local_site + "/" in urls
@@ -185,7 +185,7 @@ async def test_the_crawl_finds_every_linked_page_within_depth(local_site):
 
 
 async def test_extracted_content_is_the_real_page_text(local_site):
-    items = await crawl_website(local_site + "/", max_pages=50, max_depth=3)
+    items = (await crawl_website(local_site + "/", max_pages=50, max_depth=3)).items
     about = next(item for item in items if item.url == local_site + "/about")
     assert "about page, with real content" in about.text
     assert about.title == "About"
@@ -196,26 +196,26 @@ async def test_an_off_domain_link_is_never_followed(local_site):
     which does not exist — if the crawler tried to follow it, this would
     either hang on DNS resolution or raise, not silently succeed. Passing
     at all proves it was correctly skipped."""
-    items = await crawl_website(local_site + "/", max_pages=50, max_depth=3)
+    items = (await crawl_website(local_site + "/", max_pages=50, max_depth=3)).items
     assert all("off-domain.test" not in item.url for item in items)
 
 
 async def test_a_page_disallowed_by_robots_txt_is_not_fetched(local_site):
     # Home page does not link to /disallowed, so fetch it directly to prove
     # the crawler itself would refuse it even if reachable.
-    items = await crawl_website(local_site + "/disallowed", max_pages=10, max_depth=0)
+    items = (await crawl_website(local_site + "/disallowed", max_pages=10, max_depth=0)).items
     assert items == []
 
 
 async def test_the_page_count_cap_is_respected(local_site):
-    items = await crawl_website(local_site + "/", max_pages=2, max_depth=3)
+    items = (await crawl_website(local_site + "/", max_pages=2, max_depth=3)).items
     assert len(items) <= 2
 
 
 async def test_the_depth_cap_stops_the_crawl_from_going_further(local_site):
     """max_depth=1: home's direct links (about, contact) are fetched, but
     contact's OWN link (secret-depth-2, two hops away) is not."""
-    items = await crawl_website(local_site + "/", max_pages=50, max_depth=1)
+    items = (await crawl_website(local_site + "/", max_pages=50, max_depth=1)).items
     urls = {item.url for item in items}
     assert local_site + "/contact" in urls
     assert local_site + "/secret-depth-2" not in urls
@@ -228,12 +228,12 @@ async def test_an_unreachable_start_url_returns_an_empty_list_not_an_exception(m
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "allow_private_outbound_urls", True)
-    items = await crawl_website("http://127.0.0.1:1/", max_pages=5, max_depth=1)
+    items = (await crawl_website("http://127.0.0.1:1/", max_pages=5, max_depth=1)).items
     assert items == []
 
 
 async def test_a_non_http_url_is_rejected_without_attempting_a_request():
-    items = await crawl_website("ftp://example.com/", max_pages=5, max_depth=1)
+    items = (await crawl_website("ftp://example.com/", max_pages=5, max_depth=1)).items
     assert items == []
 
 
@@ -241,5 +241,165 @@ async def test_crawling_a_private_address_is_refused_without_the_dev_override():
     """The real production behaviour: no monkeypatched override this time,
     so the same SSRF protection every other outbound feature uses must
     refuse a loopback target outright — never even attempting a request."""
-    items = await crawl_website("http://127.0.0.1:1/", max_pages=5, max_depth=1)
+    items = (await crawl_website("http://127.0.0.1:1/", max_pages=5, max_depth=1)).items
     assert items == []
+
+
+# ---------------------------------------------------------------------------
+# Reporting whether the crawl actually saw the whole site
+#
+# The crawler promises never to raise, which means "the site is down" and
+# "the site is empty" arrived at the caller looking identical — and
+# knowledge_sync.py deletes what a source no longer returns. See
+# FetchResult in app/services/knowledge_sources/__init__.py.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_clean_crawl_reports_itself_complete(local_site):
+    result = await crawl_website(local_site + "/", max_pages=50, max_depth=3)
+    assert result.complete is True
+    assert result.error == ""
+    assert result.items
+
+
+async def test_an_unreachable_site_reports_incomplete_not_merely_empty(monkeypatch):
+    """The scenario that destroyed data: nothing came back, and the caller
+    had no way to tell that from a site whose pages were all deleted."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "allow_private_outbound_urls", True)
+    result = await crawl_website("http://127.0.0.1:1/", max_pages=5, max_depth=1)
+    assert result.items == []
+    assert result.complete is False
+    assert result.error
+
+
+async def test_a_non_http_start_url_reports_incomplete(monkeypatch):
+    result = await crawl_website("ftp://example.com/", max_pages=5, max_depth=1)
+    assert result.items == []
+    assert result.complete is False
+
+
+async def test_stopping_at_the_page_cap_reports_incomplete(local_site):
+    """Pages beyond the cap were never looked at, so their absence is not
+    evidence they were deleted — without this the pages past the cap would
+    be deleted and re-crawled on alternating syncs."""
+    result = await crawl_website(local_site + "/", max_pages=2, max_depth=3)
+    assert len(result.items) == 2
+    assert result.complete is False
+    assert "limit" in result.error
+
+
+async def test_a_site_that_fits_well_inside_the_cap_is_complete(local_site):
+    result = await crawl_website(local_site + "/", max_pages=50, max_depth=3)
+    assert result.complete is True
+
+
+# ---------------------------------------------------------------------------
+# The crawl is bounded on pages FETCHED, not only on pages that had text
+# ---------------------------------------------------------------------------
+
+_EMPTY_PAGE_COUNT = 40
+
+
+class _EmptyPagesHandler(http.server.BaseHTTPRequestHandler):
+    """Every page links to the next and none of them contain extractable
+    text — image galleries and JavaScript-rendered pages look exactly like
+    this. `len(items) < max_pages` counts only pages that PRODUCED text, so
+    a site shaped like this was crawled with no effective limit at all."""
+
+    fetches = 0
+
+    def do_GET(self):  # noqa: N802 - http.server's own required name
+        type(self).fetches += 1
+        try:
+            index = int(self.path.strip("/") or 0)
+        except ValueError:
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = (
+            f'<html><head><title>Empty {index}</title></head><body>'
+            f'<a href="/{index + 1}"><img src="thumb.png"></a></body></html>'
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def empty_page_site(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "allow_private_outbound_urls", True)
+    _EmptyPagesHandler.fetches = 0
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _EmptyPagesHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+async def test_a_site_of_textless_pages_is_still_bounded(empty_page_site):
+    """Without a fetch budget this crawl walks the link chain forever —
+    the unbounded crawl this module's docstring claims to prevent."""
+    result = await crawl_website(empty_page_site + "/0", max_pages=5, max_depth=100)
+
+    assert result.items == []  # nothing had text, correctly
+    assert _EmptyPagesHandler.fetches <= 5 * 4 + 2, (
+        f"crawled {_EmptyPagesHandler.fetches} pages with a 5-page cap"
+    )
+    assert result.complete is False
+
+
+# ---------------------------------------------------------------------------
+# An oversized response body is refused rather than read into memory
+# ---------------------------------------------------------------------------
+
+
+class _HugePageHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        from app.services.knowledge_sources.website import MAX_PAGE_BYTES
+
+        body = (
+            "<html><body><p>"
+            + ("padding " * ((MAX_PAGE_BYTES // 8) + 1000))
+            + "</p></body></html>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+async def test_a_page_larger_than_the_limit_is_skipped(monkeypatch):
+    """A crawler fetches whatever a customer-configured URL serves, and a
+    Content-Type header is not a promise about size."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "allow_private_outbound_urls", True)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HugePageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        result = await crawl_website(base + "/", max_pages=5, max_depth=0)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert result.items == []
+    assert result.complete is False
+    assert "size limit" in result.error
