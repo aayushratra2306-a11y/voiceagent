@@ -43,13 +43,33 @@ def test_the_default_pool_is_small_because_one_process_serves_at_most_one_call()
     assert mongo._pool_size() == 8
 
 
-def test_expected_connections_accounts_for_every_call_slot_plus_the_api():
+def test_expected_connections_counts_the_warm_pool_too():
+    """The warm workers are easy to forget and they matter: they have
+    already run init_db() — that is the point of pre-warming them — so they
+    hold real connections before any caller arrives.
+
+    An earlier version took max() of the two limits instead of adding
+    them, understating the true figure by the entire warm pool. That is the
+    one direction that hurts, because this number exists so somebody can
+    check headroom against a connection limit, and a check that reports
+    less than the truth passes right up until connections run out.
+    """
     settings.mongo_max_pool_size = 10
     settings.max_concurrent_calls = 6
     settings.call_worker_pool_max = 4
 
-    # 6 call slots (the larger of the two limits) x 10, plus the API's own 10.
-    assert mongo.expected_max_connections() == 6 * 10 + 10
+    # 6 calls + 4 warm workers + 1 API process, each with a pool of 10.
+    assert mongo.expected_max_connections() == (6 + 4 + 1) * 10
+
+
+def test_the_estimate_is_never_lower_than_the_calls_alone_could_need():
+    """A guard against the shape of the old bug coming back in any form."""
+    settings.mongo_max_pool_size = 8
+    settings.max_concurrent_calls = 6
+    settings.call_worker_pool_max = 4
+
+    calls_alone = settings.max_concurrent_calls * mongo._pool_size()
+    assert mongo.expected_max_connections() > calls_alone
 
 
 def test_reads_stay_on_the_primary_until_an_operator_turns_replicas_on():

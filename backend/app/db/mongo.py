@@ -50,15 +50,31 @@ def _pool_size() -> int:
 
 def expected_max_connections() -> int:
     """What this deployment could ask MongoDB for, all at once, in the worst
-    case: every call slot full, plus the API process's own pool. This is the
-    number to compare against Atlas's connection limit, not any one
-    process's pool size alone — see the module docstring. Exposed for the
-    health/metrics endpoints (tasks 4.7/4.9) rather than left as something
-    only discoverable by reading this file.
+    case. This is the number to compare against Atlas's connection limit,
+    not any one process's pool size alone — see the module docstring.
+    Exposed for the health/metrics endpoints (tasks 4.7/4.9) rather than
+    left as something only discoverable by reading this file.
+
+    Three kinds of process hold a pool, and the warm ones are easy to
+    forget:
+
+      - every call in progress, up to max_concurrent_calls (task 4.5);
+      - every WARM worker idling in the pool, up to call_worker_pool_max
+        (tasks 2.4/4.3). These have already run init_db() — that is the
+        whole point of pre-warming them — so they are holding real
+        connections before a caller has arrived;
+      - this API process itself.
+
+    An earlier version took max() of the first two rather than adding them,
+    which understated the real figure by the entire warm pool. Understating
+    it is the one direction that actually hurts: the number exists so
+    somebody can check headroom against a connection limit, and a check
+    that reports less than the truth passes right up until the moment
+    connections run out.
     """
     pool = _pool_size()
-    call_slots = max(settings.max_concurrent_calls, settings.call_worker_pool_max)
-    return pool * call_slots + pool  # + the API process's own pool
+    processes = settings.max_concurrent_calls + settings.call_worker_pool_max + 1
+    return pool * processes
 
 
 client = motor.motor_asyncio.AsyncIOMotorClient(

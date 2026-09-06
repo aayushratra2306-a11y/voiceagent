@@ -108,6 +108,64 @@ def test_setting_min_equal_to_max_pins_the_pool_exactly_where_it_was():
     assert shrunk == 2
 
 
+def test_two_top_ups_at_once_cannot_overshoot_the_target(monkeypatch):
+    """Found on a second read of Phase 4.
+
+    _top_up_pool runs from two places: the maintenance loop, and connect()
+    on EVERY call — both through run_in_executor, so both on real threads.
+    Without a lock they interleave on the check: each reads
+    len(_idle_pool) == 0 against a target of 2, and each spawns two,
+    leaving four. Every extra worker holds ~300MB on a 4GB VM, so this
+    walks straight past the memory guard the grow path checks — which is
+    worse than having no guard, because the configured number stops
+    meaning anything.
+
+    Real threads and a real (slow) spawn, because the race only exists in
+    the window where one thread is spawning and the other checks the
+    length.
+    """
+    import threading
+    import time as time_module
+
+    from app.api import connect as connect_module
+
+    monkeypatch.setattr(connect_module, "_idle_pool", [])
+    monkeypatch.setattr(connect_module, "_pool_target", 2)
+
+    def _slow_spawn():
+        time_module.sleep(0.05)  # stands in for spawning an interpreter
+        return object()
+
+    monkeypatch.setattr(connect_module, "_spawn_pooled_worker", _slow_spawn)
+
+    threads = [threading.Thread(target=connect_module._top_up_pool) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert len(connect_module._idle_pool) == 2, (
+        f"four concurrent top-ups produced {len(connect_module._idle_pool)} workers for a "
+        f"target of 2 — roughly {300 * (len(connect_module._idle_pool) - 2)}MB of overshoot "
+        f"the memory guard never got to see"
+    )
+
+
+def test_a_shrink_that_lost_its_race_does_not_go_below_target(monkeypatch):
+    """The other side of the same lock. If a call claims the last spare
+    worker between the loop deciding to shrink and the shrink running,
+    retiring one anyway would drop the pool under target and make the next
+    caller pay a cold start for nothing."""
+    from app.api import connect as connect_module
+
+    monkeypatch.setattr(connect_module, "_idle_pool", [object(), object()])
+    monkeypatch.setattr(connect_module, "_pool_target", 2)
+
+    connect_module._shrink_pool_by_one()
+
+    assert len(connect_module._idle_pool) == 2, "shrank a pool that was already at target"
+
+
 def test_the_cold_spawn_path_actually_raises_the_demand_signal():
     """Wiring check: exhaustion must be evidence-based, not guessed at by
     the maintenance loop. The one place that genuinely knows supply fell

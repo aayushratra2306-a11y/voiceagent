@@ -1,5 +1,6 @@
 import asyncio
 import multiprocessing as mp
+import threading
 import time
 from dataclasses import dataclass
 from multiprocessing.synchronize import Event as EventClass
@@ -248,11 +249,24 @@ def _spawn_pooled_worker() -> _PooledWorker:
     )
 
 
+# Serialises every change to _idle_pool's SIZE. Two things call
+# _top_up_pool: the maintenance loop, and connect() on every single call —
+# both via run_in_executor, so both on real threads, and _shrink_pool_by_one
+# runs there too. Without this lock they interleave on the check: two
+# threads each read len(_idle_pool) == 1 against a target of 2, and each
+# spawns one, leaving three. Every overshoot worker is ~300MB held on a 4GB
+# VM, which is precisely the outcome pool_min_free_memory_mb exists to
+# prevent — and a race that walks straight past the guard is worse than no
+# guard, because the number in the config stops meaning anything.
+_pool_lock = threading.Lock()
+
+
 def _top_up_pool() -> None:
-    """Bring the pool to its current target. Blocking (Process.start forks a
-    process), so callers on the event loop run it in an executor."""
-    while len(_idle_pool) < _pool_target:
-        _idle_pool.append(_spawn_pooled_worker())
+    """Bring the pool to its current target. Blocking (Process.start spawns a
+    fresh interpreter), so callers on the event loop run it in an executor."""
+    with _pool_lock:
+        while len(_idle_pool) < _pool_target:
+            _idle_pool.append(_spawn_pooled_worker())
 
 
 def _shrink_pool_by_one() -> None:
@@ -261,9 +275,15 @@ def _shrink_pool_by_one() -> None:
     sentinel — it is sitting in run_in_executor(None, job_queue.get) (see
     pooled_worker_main), which nothing but an actual item on that queue or
     the process dying will interrupt."""
-    if not _idle_pool:
-        return
-    worker = _idle_pool.pop()
+    with _pool_lock:
+        if len(_idle_pool) <= _pool_target:
+            # Re-checked under the lock: a call claimed a worker (or a
+            # top-up ran) between the loop deciding to shrink and this
+            # getting the lock, and the pool is already the size it should
+            # be. Retiring one anyway would push it below target and make
+            # the next caller pay a cold start for nothing.
+            return
+        worker = _idle_pool.pop()
     worker.process.terminate()
     worker.process.join(timeout=1)
     logger.info(f"[POOL] Retired idle worker pid={worker.process.pid} — demand has settled")
