@@ -48,6 +48,7 @@ async def _test_db():
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.guardrail_incident import GuardrailIncident
+    from app.models.knowledge_source import KnowledgeSource
     from app.models.order import Order
     from app.models.payment import PaymentSession
     from app.models.revoked_token import RevokedRefreshToken
@@ -57,7 +58,7 @@ async def _test_db():
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
                    WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
-                   ConsentRecord, GuardrailIncident])
+                   ConsentRecord, GuardrailIncident, KnowledgeSource])
     yield
     await database.client.drop_database(database.name)
 

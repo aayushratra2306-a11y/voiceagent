@@ -57,6 +57,7 @@ EXPECTED_COLLECTIONS = [
     "webhook_outbox",
     "pending_approvals",
     "revoked_refresh_tokens",
+    "knowledge_sources",
 ]
 
 # Task 2.10's uploaded knowledge-base files live in GridFS, which is two

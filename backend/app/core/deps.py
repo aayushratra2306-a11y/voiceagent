@@ -18,6 +18,7 @@ from fastapi import Depends, HTTPException
 from app.core.auth import get_current_user
 from app.models.bot import Bot
 from app.models.document import Document
+from app.models.knowledge_source import KnowledgeSource
 from app.models.user import User
 
 
@@ -41,3 +42,12 @@ async def get_owned_document(doc_id: str, current_user: User = Depends(get_curre
     if not doc or doc.user_id != str(current_user.id):
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
+
+
+async def get_owned_knowledge_source(
+    source_id: str, current_user: User = Depends(get_current_user)
+) -> KnowledgeSource:
+    source = await KnowledgeSource.get(source_id)
+    if not source or source.user_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Knowledge source not found")
+    return source

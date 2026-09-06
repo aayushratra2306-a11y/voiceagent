@@ -39,6 +39,13 @@ filelock==3.32.4
 flatbuffers==25.12.19
 frozenlist==1.8.0
 fsspec==2026.7.0
+# Task 7.5 — Google Drive knowledge source. Used ONLY for the service-
+# account JWT token exchange (app/services/knowledge_sources/
+# google_drive.py) — official, correctness-critical crypto is exactly the
+# place to prefer Google's own library over hand-rolling RS256 JWT claims.
+# Every actual Drive API call after that uses httpx like the rest of this
+# project.
+google-auth==2.57.1
 google-crc32c==1.8.0
 h11==0.16.0
 h2==4.4.1

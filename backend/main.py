@@ -12,7 +12,17 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api import approvals, auth, bot_tools, bots, connect, documents, payments, webhooks
+from app.api import (
+    approvals,
+    auth,
+    bot_tools,
+    bots,
+    connect,
+    documents,
+    knowledge_sources,
+    payments,
+    webhooks,
+)
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
 from app.core import health, metrics
 from app.core.auth import get_current_user
@@ -29,11 +39,13 @@ from app.models.consent import ConsentRecord
 from app.models.conversation import ConversationTurn
 from app.models.document import Document
 from app.models.guardrail_incident import GuardrailIncident
+from app.models.knowledge_source import KnowledgeSource
 from app.models.order import Order
 from app.models.payment import PaymentSession
 from app.models.revoked_token import RevokedRefreshToken
 from app.models.user import User
 from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
+from app.services.knowledge_sync import knowledge_sync_loop
 from app.services.retention import retention_loop
 from app.services.webhooks import webhook_delivery_loop
 
@@ -52,7 +64,7 @@ async def lifespan(app: FastAPI):
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
                    WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
-                   ConsentRecord, GuardrailIncident])
+                   ConsentRecord, GuardrailIncident, KnowledgeSource])
     await seed_fake_orders()
     # Task 4.5 — hand back any capacity slots this node was still holding
     # when it last stopped. Nothing is running yet, so anything tagged with
@@ -90,12 +102,19 @@ async def lifespan(app: FastAPI):
     # does: this is the long-lived process, not a call's own short-lived
     # one (task 2.4).
     retention_task = asyncio.create_task(retention_loop())
+    # Task 7.5 — keeps a bot's website/Notion/Drive knowledge sources
+    # current automatically. Lives here for the same reason as every other
+    # scheduled loop above: this is the long-lived process, and a sync can
+    # take longer than one call's own short-lived process (task 2.4) is
+    # meant to live for.
+    knowledge_sync_task = asyncio.create_task(knowledge_sync_loop())
     yield
     reaper_task.cancel()
     pool_task.cancel()
     webhook_task.cancel()
     watchdog_task.cancel()
     retention_task.cancel()
+    knowledge_sync_task.cancel()
 
 
 app = FastAPI(title="Voice Agent API", lifespan=lifespan)
@@ -124,6 +143,7 @@ app.include_router(bot_tools.router)
 app.include_router(payments.router)
 app.include_router(webhooks.router)
 app.include_router(approvals.router)
+app.include_router(knowledge_sources.router)
 
 
 @app.get("/health")
