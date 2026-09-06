@@ -20,11 +20,11 @@ name: CI
 
 on:
   push:
-    # phase-4 included so the branch is tested on its own pushes rather
-    # than only when it is proposed for merge. It carries a whole phase of
+    # phase-4/phase-6 included so each branch is tested on its own pushes
+    # rather than only when proposed for merge. Both carry a whole phase of
     # work that will sit unmerged until Phase 3 finishes live testing, and
     # an unwatched long-lived branch is exactly where a regression waits.
-    branches: [main, dev, phase-4]
+    branches: [main, dev, phase-4, phase-6]
   pull_request:
     branches: [main, dev]
   # Lets the rag-eval job below be run deliberately, since it no longer runs
