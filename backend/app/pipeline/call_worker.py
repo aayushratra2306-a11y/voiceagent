@@ -194,6 +194,7 @@ async def _prepare_worker():
     from app.models.appointment import Appointment
     from app.models.approval import PendingApproval
     from app.models.bot_tool import BotTool
+    from app.models.consent import ConsentRecord
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
@@ -212,6 +213,7 @@ async def _prepare_worker():
     await init_db([
         Order, Appointment, ConversationTurn, Document, BotTool, PaymentSession,
         WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
+        ConsentRecord,
     ])
     return run_voice_pipeline
 

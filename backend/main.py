@@ -25,6 +25,7 @@ from app.models.appointment import Appointment
 from app.models.approval import PendingApproval
 from app.models.bot import Bot
 from app.models.bot_tool import BotTool
+from app.models.consent import ConsentRecord
 from app.models.conversation import ConversationTurn
 from app.models.document import Document
 from app.models.order import Order
@@ -32,6 +33,7 @@ from app.models.payment import PaymentSession
 from app.models.revoked_token import RevokedRefreshToken
 from app.models.user import User
 from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
+from app.services.retention import retention_loop
 from app.services.webhooks import webhook_delivery_loop
 
 # Task 2.7 — error tracking. A blank DSN (the default — see config.py) makes
@@ -48,7 +50,8 @@ sentry_sdk.init(
 async def lifespan(app: FastAPI):
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
-                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
+                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
+                   ConsentRecord])
     await seed_fake_orders()
     # Task 4.5 — hand back any capacity slots this node was still holding
     # when it last stopped. Nothing is running yet, so anything tagged with
@@ -81,11 +84,17 @@ async def lifespan(app: FastAPI):
     watchdog = health.Watchdog()
     app.state.watchdog = watchdog
     watchdog_task = asyncio.create_task(watchdog.run_forever())
+    # Task 6.3 — expires a bot's transcripts past its own configured
+    # retention period. Lives here for the same reason webhook delivery
+    # does: this is the long-lived process, not a call's own short-lived
+    # one (task 2.4).
+    retention_task = asyncio.create_task(retention_loop())
     yield
     reaper_task.cancel()
     pool_task.cancel()
     webhook_task.cancel()
     watchdog_task.cancel()
+    retention_task.cancel()
 
 
 app = FastAPI(title="Voice Agent API", lifespan=lifespan)

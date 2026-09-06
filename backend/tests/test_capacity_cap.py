@@ -236,6 +236,8 @@ async def test_a_setup_timeout_releases_the_slot_it_acquired(monkeypatch):
             language = "en"
             user_id = "owner-1"
             redact_transcripts = []
+            recording_enabled = True
+            consent_announcement = ""
 
         return _Bot()
 

@@ -38,6 +38,7 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.core import redaction
 from app.core.tracing import setup_call_tracing
+from app.models.consent import ConsentRecord
 from app.models.conversation import ConversationTurn
 from app.pipeline import call_context
 from app.pipeline.background_jobs import BACKGROUND_TOOL_RULE, BackgroundJobs
@@ -303,6 +304,7 @@ class TranscriptRecorder(FrameProcessor):
     def __init__(
         self, session_id: str, bot_id: str | None, bot_name: str,
         redaction_kinds: list[str] | None = None,
+        recording_enabled: bool = True,
     ):
         super().__init__()
         self._session_id = session_id
@@ -314,6 +316,11 @@ class TranscriptRecorder(FrameProcessor):
         # accident.
         self._redaction_kinds = frozenset(redaction_kinds) if redaction_kinds is not None \
             else redaction.ALL_KINDS
+        # Task 6.3 — "recording" in this project means this stored
+        # transcript; see the long note in models/bot.py. When a customer
+        # has turned it off, the turn is still assembled (tool calls and
+        # the saga still need it live in memory) but never written to disk.
+        self._recording_enabled = recording_enabled
         self._reset_turn()
 
     def _reset_turn(self):
@@ -357,6 +364,17 @@ class TranscriptRecorder(FrameProcessor):
         # Nothing real happened — e.g. a stray bot-speaking event with no
         # content either side. Don't write empty noise to the database.
         if not self._user_transcript and not self._assistant_parts:
+            self._reset_turn()
+            return
+
+        # Task 6.3 — the customer has turned recording off for this bot.
+        # Everything above still ran (tool calls, the saga, RAG citations
+        # all need the turn live in memory during the call) — this is the
+        # one place that decides whether it is ever written to disk. No
+        # redaction work happens either: there is nothing to protect in a
+        # record that is never created.
+        if not self._recording_enabled:
+            logger.info("[TRANSCRIPT] Recording is off for this bot — turn not saved")
             self._reset_turn()
             return
 
@@ -420,6 +438,43 @@ class TranscriptRecorder(FrameProcessor):
         self._reset_turn()
 
 
+async def announce_recording_consent(
+    task: PipelineTask,
+    session_id: str,
+    bot_id: str | None,
+    user_id: str | None,
+    recording_enabled: bool,
+    consent_announcement: str,
+) -> None:
+    """Task 6.3 — speak the disclosure (if recording is on and there is
+    something to say) and log that this call had the chance to hear it,
+    unconditionally — including when recording is off, which is itself a
+    fact worth an auditable record of.
+
+    Written as a standalone function rather than folded into
+    on_client_connected so it can be tested without constructing a real
+    PipelineTask/transport — the only interaction with the pipeline is
+    queuing one frame.
+
+    Never raises: this runs in the handler that also queues the greeting,
+    and a logging failure must not be able to silence the bot on the very
+    first thing it says.
+    """
+    if recording_enabled and consent_announcement:
+        await task.queue_frame(TTSSpeakFrame(consent_announcement))
+
+    try:
+        await ConsentRecord(
+            session_id=session_id,
+            bot_id=bot_id,
+            user_id=user_id,
+            recording_enabled=recording_enabled,
+            announcement_text=consent_announcement if recording_enabled else "",
+        ).insert()
+    except Exception as e:
+        logger.warning(f"[CONSENT] Failed to log consent record: {e}")
+
+
 async def run_voice_pipeline(
     webrtc_connection: SmallWebRTCConnection,
     bot_name: str,
@@ -449,6 +504,13 @@ async def run_voice_pipeline(
     # started before this field existed on an older bot_config, or with the
     # field explicitly cleared, is full redaction, not none.
     redact_transcripts: list[str] | None = None,
+    # Task 6.3 — "recording" here means this bot's stored transcript; see
+    # the long note in models/bot.py for why there is no audio to disclose
+    # instead. True (the default) matches what every bot has always done
+    # since task 1.5 — transcripts are already saved — so the behaviour
+    # change this adds is disclosure, not a new decision to record.
+    recording_enabled: bool = True,
+    consent_announcement: str = "",
 ):
     session_id = str(uuid.uuid4())
     call_started_at = datetime.now(UTC)  # task 3.8 — call.ended's duration
@@ -736,6 +798,7 @@ async def run_voice_pipeline(
         TranscriptRecorder(
             session_id=session_id, bot_id=bot_id, bot_name=bot_name,
             redaction_kinds=redact_transcripts,
+            recording_enabled=recording_enabled,
         ),
         tts,
         transport.output(),
@@ -783,6 +846,15 @@ async def run_voice_pipeline(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("[PIPELINE] Client connected — sending greeting")
+        # Task 6.3 — spoken and logged BEFORE the greeting, and independent
+        # of whether the caller ever says a word: consent has to be provable
+        # even for someone who hears the notice and hangs up immediately,
+        # before a single turn exists for a transcript to capture. See
+        # ConsentRecord's own docstring for why this is a separate write
+        # rather than a field on the first turn.
+        await announce_recording_consent(
+            task, session_id, bot_id, user_id, recording_enabled, consent_announcement,
+        )
         await task.queue_frame(TTSSpeakFrame(greeting_for(language, speaking_gender)))
 
     # Task 3.3 — a finished background job speaks into this task.

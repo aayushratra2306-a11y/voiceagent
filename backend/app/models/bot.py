@@ -26,6 +26,39 @@ class Bot(Document):
         default_factory=lambda: sorted(_DEFAULT_REDACTION_KINDS)
     )
 
+    # --- task 6.3, recording consent and retention -------------------------
+    # "Recording" in this project means the TEXT TRANSCRIPT (ConversationTurn)
+    # — there is no raw audio storage anywhere in this codebase to disclose or
+    # retain instead. Stated plainly rather than left to be discovered later:
+    # the manual's own task is written for a system that stores audio, and
+    # this one does not, so what actually gets announced, consented to, and
+    # expired here is the conversation record, not a media file.
+    #
+    # On by default, matching redact_transcripts' own reasoning: an operator
+    # who has not thought about consent should get an announced, disclosed
+    # default rather than silent recording with no notice — "recording
+    # without disclosure is illegal in many places," in the manual's own
+    # words, and that is legal exposure this platform carries too, not only
+    # the customer running the bot.
+    recording_enabled: bool = True
+
+    # Editable per the manual's own tip: legal wording varies by country and
+    # industry, and a company's legal team will want to specify the exact
+    # words. This default is deliberately generic and in English only —
+    # anyone who cares about the wording (which the manual says to expect)
+    # will replace it, and a wrong-but-plausible legal sentence in the wrong
+    # language is worse than an obviously-generic placeholder.
+    consent_announcement: str = (
+        "This call may be recorded for quality and training purposes."
+    )
+
+    # Days after which a transcript is deleted; 0 means "keep indefinitely"
+    # — not every customer wants automatic deletion, and a platform default
+    # that silently destroys data nobody asked to expire would be its own
+    # kind of incident. See app/services/retention.py for the job that acts
+    # on this.
+    recording_retention_days: int = 0
+
     # --- task 3.5, the booking template's configuration -------------------
     # These are what makes booking a form rather than a project: a new
     # customer sets their zone and their hours, and the template's behaviour

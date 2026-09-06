@@ -166,6 +166,35 @@ async def test_an_explicitly_empty_list_means_no_redaction_at_all(unique_session
     assert "4111" in turn.user_transcript
 
 
+async def test_recording_disabled_means_no_turn_is_ever_stored(unique_session_id):
+    """Task 6.3 — a customer who has turned recording off for their bot.
+    Nothing about the call should reach the database, not even redacted."""
+    recorder = TranscriptRecorder(
+        session_id=unique_session_id, bot_id="bot-1", bot_name="Auris",
+        recording_enabled=False,
+    )
+
+    await _run_a_turn(
+        recorder,
+        user_says="my card is 4111 1111 1111 1111",
+        bot_replies="ok, noted",
+    )
+
+    turn = await ConversationTurn.find_one(ConversationTurn.session_id == unique_session_id)
+    assert turn is None, "a turn was stored even though recording is disabled for this bot"
+
+
+async def test_recording_enabled_is_true_by_default(unique_session_id):
+    """Matches what every bot has always done since task 1.5 — the default
+    must not silently stop saving transcripts for existing bots."""
+    recorder = TranscriptRecorder(session_id=unique_session_id, bot_id="bot-1", bot_name="Auris")
+
+    await _run_a_turn(recorder, user_says="hello", bot_replies="hi there")
+
+    turn = await _latest_turn(unique_session_id)
+    assert turn.user_transcript == "hello"
+
+
 async def test_the_assistant_side_is_redacted_too(unique_session_id):
     """A bot echoing back a number it just heard is exactly as much of a
     liability as the caller saying it in the first place."""

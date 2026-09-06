@@ -44,6 +44,7 @@ async def _test_db():
     from app.models.approval import PendingApproval
     from app.models.bot import Bot
     from app.models.bot_tool import BotTool
+    from app.models.consent import ConsentRecord
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
     from app.models.order import Order
@@ -54,7 +55,8 @@ async def _test_db():
 
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
-                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
+                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
+                   ConsentRecord])
     yield
     await database.client.drop_database(database.name)
 

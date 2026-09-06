@@ -461,6 +461,11 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         # bot_config crosses a multiprocessing.Process boundary (see the
         # comment above), and everything in it must be plain picklable data.
         "redact_transcripts": list(bot.redact_transcripts),
+        # Task 6.3 — recording_retention_days is NOT here: it is read by
+        # the scheduled purge job (app/services/retention.py) straight off
+        # the Bot document, not something the call itself needs to know.
+        "recording_enabled": bot.recording_enabled,
+        "consent_announcement": bot.consent_announcement,
     }
 
     loop = asyncio.get_event_loop()

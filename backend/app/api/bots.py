@@ -95,6 +95,23 @@ def _validate_redaction_kinds(v: list[str]) -> list[str]:
     return v
 
 
+# Task 6.3 — this is SPOKEN aloud at the start of every call, so a limit
+# far below system_prompt's 4000 chars: a legal disclosure is a sentence or
+# two, and anything long enough to need thousands of characters is a
+# document to link to, not a line to read into someone's ear before they
+# have even said hello.
+MAX_CONSENT_ANNOUNCEMENT_LENGTH = 600
+
+
+def _validate_consent_announcement(v: str) -> str:
+    if len(v) > MAX_CONSENT_ANNOUNCEMENT_LENGTH:
+        raise ValueError(
+            f"Consent announcement too long (max {MAX_CONSENT_ANNOUNCEMENT_LENGTH} "
+            f"characters) — it is spoken at the start of every call."
+        )
+    return v
+
+
 class BotCreate(BaseModel):
     name: str
     system_prompt: str = "You are a helpful voice assistant."
@@ -109,6 +126,15 @@ class BotCreate(BaseModel):
     # an operator who has not thought about this should get the safe
     # answer, not silent plaintext card numbers until they opt in.
     redact_transcripts: list[str] = Field(default_factory=lambda: sorted(_REDACTION_KINDS))
+    # Task 6.3. See models/bot.py for why these default the way they do:
+    # recording_enabled=True matches what every bot has always done since
+    # task 1.5 (transcripts are already saved) — the change here is
+    # disclosure, not a new decision to start recording.
+    recording_enabled: bool = True
+    consent_announcement: str = (
+        "This call may be recorded for quality and training purposes."
+    )
+    recording_retention_days: int = Field(default=0, ge=0)
 
     @field_validator("system_prompt")
     @classmethod
@@ -130,6 +156,11 @@ class BotCreate(BaseModel):
     def _check_redaction_kinds(cls, v: list[str]) -> list[str]:
         return _validate_redaction_kinds(v)
 
+    @field_validator("consent_announcement")
+    @classmethod
+    def _check_consent_announcement(cls, v: str) -> str:
+        return _validate_consent_announcement(v)
+
 
 class BotUpdate(BaseModel):
     name: str | None = None
@@ -142,6 +173,9 @@ class BotUpdate(BaseModel):
     booking_close: str | None = None
     slot_minutes: int | None = Field(default=None, ge=5, le=480)
     redact_transcripts: list[str] | None = None
+    recording_enabled: bool | None = None
+    consent_announcement: str | None = None
+    recording_retention_days: int | None = Field(default=None, ge=0)
 
     @field_validator("system_prompt")
     @classmethod
@@ -162,6 +196,11 @@ class BotUpdate(BaseModel):
     @classmethod
     def _check_redaction_kinds(cls, v: list[str] | None) -> list[str] | None:
         return _validate_redaction_kinds(v) if v is not None else v
+
+    @field_validator("consent_announcement")
+    @classmethod
+    def _check_consent_announcement(cls, v: str | None) -> str | None:
+        return _validate_consent_announcement(v) if v is not None else v
 
 
 @router.get("/templates")
@@ -219,6 +258,9 @@ async def list_bots(current_user: User = Depends(get_current_user)):
             "booking_close": b.booking_close,
             "slot_minutes": b.slot_minutes,
             "redact_transcripts": b.redact_transcripts,
+            "recording_enabled": b.recording_enabled,
+            "consent_announcement": b.consent_announcement,
+            "recording_retention_days": b.recording_retention_days,
         }
         for b in bots
     ]
