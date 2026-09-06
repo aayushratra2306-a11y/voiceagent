@@ -24,6 +24,14 @@ class ConversationTurn(Document):
     assistant_reply: str = ""
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
+    # Task 6.2 — which sensitive-data categories (see
+    # app/core/redaction.py's ALL_KINDS) were found and masked in THIS
+    # turn's transcript/tool_calls. Empty means none were found, not that
+    # redaction didn't run — recorded so an operator reviewing a
+    # transcript can see that a card number was there and taken out,
+    # without the record itself ever holding the number.
+    redacted_kinds: list[str] = Field(default_factory=list)
+
     user_stopped_speaking_at: datetime | None = None
     llm_first_response_at: datetime | None = None
     bot_started_speaking_at: datetime | None = None

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.auth import get_current_user
 from app.core.deps import get_owned_bot
+from app.core.redaction import ALL_KINDS as _REDACTION_KINDS
 from app.models.bot import Bot
 from app.models.user import User
 from app.pipeline.bot_templates import TEMPLATES
@@ -79,6 +80,21 @@ def _validate_clock(v: str) -> str:
     return v
 
 
+# Task 6.2 — rejected rather than silently ignored. A typo'd kind
+# ("crd" for "card") that was quietly dropped would leave a customer
+# believing card numbers are being redacted when nothing matches that name
+# at all — a compliance control that looks configured and isn't is worse
+# than one that plainly refuses the bad input.
+def _validate_redaction_kinds(v: list[str]) -> list[str]:
+    unknown = sorted(set(v) - _REDACTION_KINDS)
+    if unknown:
+        raise ValueError(
+            f"Unknown redaction categories: {unknown}. Valid values are "
+            f"{sorted(_REDACTION_KINDS)}."
+        )
+    return v
+
+
 class BotCreate(BaseModel):
     name: str
     system_prompt: str = "You are a helpful voice assistant."
@@ -89,6 +105,10 @@ class BotCreate(BaseModel):
     booking_open: str = "09:00"
     booking_close: str = "18:00"
     slot_minutes: int = Field(default=30, ge=5, le=480)
+    # Task 6.2 — defaults to every category. See models/bot.py's own note:
+    # an operator who has not thought about this should get the safe
+    # answer, not silent plaintext card numbers until they opt in.
+    redact_transcripts: list[str] = Field(default_factory=lambda: sorted(_REDACTION_KINDS))
 
     @field_validator("system_prompt")
     @classmethod
@@ -105,6 +125,11 @@ class BotCreate(BaseModel):
     def _check_clock(cls, v: str) -> str:
         return _validate_clock(v)
 
+    @field_validator("redact_transcripts")
+    @classmethod
+    def _check_redaction_kinds(cls, v: list[str]) -> list[str]:
+        return _validate_redaction_kinds(v)
+
 
 class BotUpdate(BaseModel):
     name: str | None = None
@@ -116,6 +141,7 @@ class BotUpdate(BaseModel):
     booking_open: str | None = None
     booking_close: str | None = None
     slot_minutes: int | None = Field(default=None, ge=5, le=480)
+    redact_transcripts: list[str] | None = None
 
     @field_validator("system_prompt")
     @classmethod
@@ -131,6 +157,11 @@ class BotUpdate(BaseModel):
     @classmethod
     def _check_clock(cls, v: str | None) -> str | None:
         return _validate_clock(v) if v is not None else v
+
+    @field_validator("redact_transcripts")
+    @classmethod
+    def _check_redaction_kinds(cls, v: list[str] | None) -> list[str] | None:
+        return _validate_redaction_kinds(v) if v is not None else v
 
 
 @router.get("/templates")
@@ -187,6 +218,7 @@ async def list_bots(current_user: User = Depends(get_current_user)):
             "booking_open": b.booking_open,
             "booking_close": b.booking_close,
             "slot_minutes": b.slot_minutes,
+            "redact_transcripts": b.redact_transcripts,
         }
         for b in bots
     ]

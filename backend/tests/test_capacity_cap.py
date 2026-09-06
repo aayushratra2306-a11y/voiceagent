@@ -235,6 +235,7 @@ async def test_a_setup_timeout_releases_the_slot_it_acquired(monkeypatch):
             llm_model = "m"
             language = "en"
             user_id = "owner-1"
+            redact_transcripts = []
 
         return _Bot()
 

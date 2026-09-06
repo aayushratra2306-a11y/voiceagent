@@ -36,6 +36,7 @@ from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
+from app.core import redaction
 from app.core.tracing import setup_call_tracing
 from app.models.conversation import ConversationTurn
 from app.pipeline import call_context
@@ -299,11 +300,20 @@ class TranscriptRecorder(FrameProcessor):
     the actual cleaned text that got spoken, not the raw Markdown.
     """
 
-    def __init__(self, session_id: str, bot_id: str | None, bot_name: str):
+    def __init__(
+        self, session_id: str, bot_id: str | None, bot_name: str,
+        redaction_kinds: list[str] | None = None,
+    ):
         super().__init__()
         self._session_id = session_id
         self._bot_id = bot_id
         self._bot_name = bot_name
+        # Task 6.2. None means "not configured, or explicitly cleared" —
+        # ALL_KINDS is the safe interpretation of that (see this
+        # constructor's caller for why), never an empty set arrived at by
+        # accident.
+        self._redaction_kinds = frozenset(redaction_kinds) if redaction_kinds is not None \
+            else redaction.ALL_KINDS
         self._reset_turn()
 
     def _reset_turn(self):
@@ -350,13 +360,35 @@ class TranscriptRecorder(FrameProcessor):
             self._reset_turn()
             return
 
+        # Task 6.2 — redacted HERE, before a ConversationTurn is even built,
+        # not after insert(). "Redact before it touches disk, not
+        # afterwards" is the manual's own framing, and this is the one
+        # place in the whole pipeline where the complete turn exists in
+        # memory before it exists in the database.
+        #
+        # Tool call arguments/results are walked too: a customer's own
+        # "take a payment" tool can carry a card number in its arguments,
+        # and that record is stored on the turn exactly like the
+        # transcript is (task 3.1's `FunctionCallResultFrame` handling
+        # above stores it whole).
+        user_redacted = redaction.redact(self._user_transcript, self._redaction_kinds)
+        assistant_redacted = redaction.redact(
+            "".join(self._assistant_parts), self._redaction_kinds
+        )
+        tool_calls, tool_redaction_kinds = redaction.redact_structure(
+            self._tool_calls, self._redaction_kinds
+        )
+        redacted_kinds = set(user_redacted.kinds) | set(assistant_redacted.kinds) \
+            | set(tool_redaction_kinds)
+
         turn = ConversationTurn(
             session_id=self._session_id,
             bot_id=self._bot_id,
             bot_name=self._bot_name,
-            user_transcript=self._user_transcript,
-            assistant_reply="".join(self._assistant_parts),
-            tool_calls=self._tool_calls,
+            user_transcript=user_redacted.text,
+            assistant_reply=assistant_redacted.text,
+            tool_calls=tool_calls,
+            redacted_kinds=sorted(redacted_kinds),
             user_stopped_speaking_at=self._user_stopped_at,
             llm_first_response_at=self._llm_first_response_at,
             bot_started_speaking_at=self._bot_started_speaking_at,
@@ -410,6 +442,13 @@ async def run_voice_pipeline(
     # fires to whichever customer of this platform configured it, so their
     # own system hears about their own bot's events.
     user_id: str | None = None,
+    # Task 6.2 — which sensitive-data categories to mask out of this bot's
+    # transcripts before they are stored (app/core/redaction.py). None
+    # rather than a mutable default list, and treated as "everything" when
+    # None reaches TranscriptRecorder below — the safe default for a call
+    # started before this field existed on an older bot_config, or with the
+    # field explicitly cleared, is full redaction, not none.
+    redact_transcripts: list[str] | None = None,
 ):
     session_id = str(uuid.uuid4())
     call_started_at = datetime.now(UTC)  # task 3.8 — call.ended's duration
@@ -694,7 +733,10 @@ async def run_voice_pipeline(
     pipeline_steps += [
         llm,
         MarkdownStripper(),
-        TranscriptRecorder(session_id=session_id, bot_id=bot_id, bot_name=bot_name),
+        TranscriptRecorder(
+            session_id=session_id, bot_id=bot_id, bot_name=bot_name,
+            redaction_kinds=redact_transcripts,
+        ),
         tts,
         transport.output(),
         context_aggregator.assistant(),

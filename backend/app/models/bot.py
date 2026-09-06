@@ -1,4 +1,7 @@
 from beanie import Document
+from pydantic import Field
+
+from app.core.redaction import ALL_KINDS as _DEFAULT_REDACTION_KINDS
 
 
 class Bot(Document):
@@ -8,6 +11,20 @@ class Bot(Document):
     voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091"  # Cartesia default voice
     llm_model: str = "gpt-4o-mini"
     language: str = "en"
+
+    # Task 6.2 — which categories of sensitive data get masked out of this
+    # bot's transcripts before they are ever written to the database. See
+    # app/core/redaction.py for the categories and why each rule exists.
+    #
+    # Defaults to everything: an operator who has not thought about this
+    # gets the safe answer (no card numbers stored) rather than silent
+    # plaintext storage until someone opts in. Narrowing it — a pizza shop
+    # turning off address redaction it will never need — is an informed
+    # choice a customer makes, not a default anyone should have to know to
+    # ask for.
+    redact_transcripts: list[str] = Field(
+        default_factory=lambda: sorted(_DEFAULT_REDACTION_KINDS)
+    )
 
     # --- task 3.5, the booking template's configuration -------------------
     # These are what makes booking a form rather than a project: a new

@@ -456,6 +456,11 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         # whichever customer of THIS platform configured it (Bot.user_id),
         # so their own system hears about their own bot's events.
         "user_id": str(bot.user_id),
+        # Task 6.2 — which sensitive-data categories to mask out of this
+        # bot's transcripts. list(...) rather than the ODM field directly:
+        # bot_config crosses a multiprocessing.Process boundary (see the
+        # comment above), and everything in it must be plain picklable data.
+        "redact_transcripts": list(bot.redact_transcripts),
     }
 
     loop = asyncio.get_event_loop()
