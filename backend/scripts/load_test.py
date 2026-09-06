@@ -33,6 +33,13 @@ What it measures, per simulated call:
   - connect_latency_s   — time from sending the WebRTC offer to getting the
                            SDP answer back (POST /connect). This is the
                            number task 2.4/4.3's warm-pool work targets.
+                           Measured from the request going out, so it does
+                           NOT include this client's own ICE gathering.
+  - ice_gathering_s     — that gathering, reported on its own. It belongs to
+                           the machine running this script; if it rises with
+                           concurrency, the harness has become the
+                           bottleneck and the run says nothing about the
+                           server.
   - ice_connected_s     — time until the ICE connection actually reaches
                            'connected' — includes STUN/TURN negotiation.
   - first_audio_s       — time until the first inbound audio frame from the
@@ -75,6 +82,12 @@ class CallResult:
     connect_latency_s: float | None = None
     ice_connected_s: float | None = None
     first_audio_s: float | None = None
+    # This CLIENT's own ICE gathering, reported separately rather than
+    # hidden inside connect_latency_s. It is a property of the machine
+    # running the test, not of the server — if it climbs with concurrency,
+    # the harness is the bottleneck and the run's numbers are about the
+    # wrong computer.
+    ice_gathering_s: float | None = None
     error: str = ""
 
 
@@ -129,14 +142,46 @@ async def run_one_call(
 
         @pc.on("track")
         def on_track(track):
+            # Records an ABSOLUTE timestamp; the delta is computed at the
+            # end against t_request, which does not exist yet here. Same
+            # reasoning as connect_latency_s: this client's own ICE
+            # gathering is not something the server did.
             def _mark():
-                first_audio_time.setdefault("t", time.perf_counter() - t0)
+                first_audio_time.setdefault("at", time.perf_counter())
             asyncio.ensure_future(_drain_track(track, _mark))
 
         pc.createDataChannel("pipecat")  # see SessionPage.tsx's own note: must exist before the offer
 
+        # The ICE handler is registered BEFORE setRemoteDescription, and the
+        # state is re-checked immediately after registering.
+        #
+        # Both halves matter. aiortc can reach 'connected' the moment the
+        # remote description lands — on a fast or local network that is
+        # genuinely before a handler registered afterwards would exist — and
+        # the event only fires on a CHANGE, so a late listener waits for a
+        # transition that already happened and then reports a perfectly good
+        # call as "ICE never connected" twenty seconds later. A load test
+        # that invents failures is worse than no load test.
+        connected = asyncio.Event()
+
+        @pc.on("iceconnectionstatechange")
+        def _on_ice_state():
+            if pc.iceConnectionState in ("connected", "completed"):
+                connected.set()
+
         offer = await pc.createOffer()
         await pc.setLocalDescription(offer)  # aiortc blocks here until ICE gathering completes
+
+        # Timed from HERE, not from t0.
+        #
+        # setLocalDescription above blocks until this CLIENT has finished
+        # gathering its own ICE candidates, which has nothing to do with the
+        # server and gets slower as this harness itself runs more calls at
+        # once. Folding that into "connect latency" would show the server
+        # degrading under load when what was actually degrading was the
+        # machine running the test — and that is precisely the wrong
+        # conclusion for the one number this whole task exists to produce.
+        t_request = time.perf_counter()
 
         headers = {"Authorization": f"Bearer {token}"}
         async with session.post(
@@ -148,27 +193,24 @@ async def run_one_call(
             if resp.status != 200:
                 result.error = f"HTTP {resp.status}: {body}"
                 return result
-            result.connect_latency_s = time.perf_counter() - t0
+            result.connect_latency_s = time.perf_counter() - t_request
+        result.ice_gathering_s = t_request - t0
 
         await pc.setRemoteDescription(RTCSessionDescription(sdp=body["sdp"], type=body["type"]))
-
-        connected = asyncio.Event()
-
-        @pc.on("iceconnectionstatechange")
-        def _on_ice_state():
-            if pc.iceConnectionState in ("connected", "completed"):
-                connected.set()
+        if pc.iceConnectionState in ("connected", "completed"):
+            connected.set()  # it got there before we could await
 
         try:
             await asyncio.wait_for(connected.wait(), timeout=20)
-            result.ice_connected_s = time.perf_counter() - t0
+            result.ice_connected_s = time.perf_counter() - t_request
             result.setup_ok = True
         except TimeoutError:
             result.error = f"ICE never connected (state={pc.iceConnectionState})"
             return result
 
         await asyncio.sleep(hold_seconds)
-        result.first_audio_s = first_audio_time.get("t")
+        heard_at = first_audio_time.get("at")
+        result.first_audio_s = (heard_at - t_request) if heard_at is not None else None
         return result
     except Exception as e:
         result.error = f"{type(e).__name__}: {e}"

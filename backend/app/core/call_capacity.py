@@ -239,7 +239,20 @@ async def release_slots_from_a_previous_life() -> None:
     stops a restart quietly costing capacity until the TTL catches up an
     hour later.
     """
-    released = await _get_backend().release_stale_for_this_node()
+    try:
+        released = await _get_backend().release_stale_for_this_node()
+    except Exception as e:
+        # Best-effort cleanup, never a reason to refuse to boot. This runs
+        # in the lifespan, and with REDIS_URL set but Redis not yet
+        # reachable — a compose restart bringing containers up in whatever
+        # order, a brief network blip — an exception here would take the
+        # whole API down at startup over some stale bookkeeping. The TTL
+        # sweep reclaims those slots anyway; this is only the fast path.
+        logger.warning(
+            f"[CAPACITY] Could not check for slots left by a previous run "
+            f"({type(e).__name__}: {e}). They will be swept by their TTL instead."
+        )
+        return
     if released:
         logger.warning(
             f"[CAPACITY] Released {released} call slot(s) left behind by a previous run of "

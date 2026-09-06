@@ -326,6 +326,33 @@ async def test_a_restart_never_touches_another_replicas_live_calls(redis_capacit
     assert await active_call_count() == 1, "the other replica's call stopped being counted"
 
 
+async def test_an_unreachable_redis_at_startup_does_not_stop_the_server_booting():
+    """This cleanup runs in the lifespan. With REDIS_URL set but Redis not
+    yet answering — a compose restart bringing containers up in whatever
+    order, a brief blip — an exception here would take the whole API down
+    at boot over stale bookkeeping. The TTL sweep reclaims those slots
+    regardless; this is only the fast path."""
+
+    class _UnreachableRedis:
+        async def try_acquire(self, limit):
+            raise ConnectionError("redis is not up yet")
+
+        async def release(self, token):
+            pass
+
+        async def current(self):
+            raise ConnectionError("redis is not up yet")
+
+        async def release_stale_for_this_node(self):
+            raise ConnectionError("redis is not up yet")
+
+    use_backend(_UnreachableRedis())
+    try:
+        await call_capacity.release_slots_from_a_previous_life()  # must not raise
+    finally:
+        use_backend(_InProcessCapacity())
+
+
 async def test_a_slot_older_than_any_possible_call_is_swept(redis_capacity):
     """The second, independent recovery path: a node that never comes back
     at all still has its slots reclaimed, because nothing can legitimately

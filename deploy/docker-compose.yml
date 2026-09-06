@@ -22,6 +22,18 @@ services:
       - "8080"
     # Not published to the host: only Caddy should reach the backend, so
     # nothing can bypass HTTPS by hitting the port directly.
+    #
+    # Waits for Redis to be ANSWERING, not merely started. Harmless when
+    # REDIS_URL is blank (the default) — the backend simply never talks to
+    # it. The app does not actually depend on this to boot either: startup
+    # treats an unreachable Redis as a warning rather than a failure (see
+    # call_capacity.release_slots_from_a_previous_life), because depends_on
+    # only orders the FIRST start and says nothing about a mid-life
+    # restart. This makes the common case clean; that makes every case
+    # safe.
+    depends_on:
+      redis:
+        condition: service_healthy
 
   caddy:
     image: caddy:2-alpine
@@ -55,6 +67,14 @@ services:
       - "6379"
     volumes:
       - redis_data:/data
+    # So the backend's depends_on can wait for "actually answering", not
+    # merely "container created" — the two are seconds apart on a cold VM.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     # No password by default: reachable only from inside this compose
     # project's own Docker network (nothing here publishes 6379 to the
     # host), the same trust boundary the backend already has with MongoDB.
