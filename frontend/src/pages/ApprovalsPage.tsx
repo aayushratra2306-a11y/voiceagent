@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { listApprovals, approveAction, denyAction } from '../lib/api'
+import { usePageChrome } from '../context/ChromeContext'
+import { APPROVALS_CHANGED } from '../lib/events'
 import type { PendingApproval } from '../lib/api'
 
 // Task 3.10 — where a person actually decides. Everything up to here only
@@ -12,12 +13,13 @@ import type { PendingApproval } from '../lib/api'
 const card = 'bg-white/4 border border-white/8 rounded-2xl p-5'
 
 export default function ApprovalsPage() {
-  const navigate = useNavigate()
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
   const [filter, setFilter] = useState<'pending' | 'all'>('pending')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [deciding, setDeciding] = useState<string | null>(null)
+
+  usePageChrome('Approvals', '/dashboard')
 
   useEffect(() => { refresh() }, [filter])
 
@@ -25,6 +27,7 @@ export default function ApprovalsPage() {
     setLoading(true)
     try {
       setApprovals(await listApprovals(filter === 'pending' ? 'pending' : undefined))
+      window.dispatchEvent(new Event(APPROVALS_CHANGED))
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -47,14 +50,6 @@ export default function ApprovalsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center gap-3 backdrop-blur-sm">
-        <button onClick={() => navigate('/dashboard')} className="text-slate-500 hover:text-white transition-colors">←</button>
-        <h1 className="text-sm font-semibold text-slate-200">Approvals</h1>
-      </header>
-
       <main className="relative z-10 max-w-2xl mx-auto px-6 py-10 space-y-6">
         <p className="text-sm text-slate-400">
           Actions above a value you've set wait here instead of happening on their own. Nothing
@@ -128,7 +123,6 @@ export default function ApprovalsPage() {
           </div>
         )}
       </main>
-    </div>
   )
 }
 

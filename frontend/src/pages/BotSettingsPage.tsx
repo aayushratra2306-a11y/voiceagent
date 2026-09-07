@@ -5,6 +5,8 @@ import {
   createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument,
   listBotTemplates, createTool,
 } from '../lib/api'
+import { usePageChrome } from '../context/ChromeContext'
+import PageLoader from '../components/PageLoader'
 import type { Bot, BotDocument, BotTemplate } from '../lib/api'
 
 // Voices per language. Until 2026-09-04 this was three English voices shown
@@ -97,6 +99,8 @@ export default function BotSettingsPage() {
   const { id } = useParams()
   const isNew = id === 'new'
   const navigate = useNavigate()
+
+  usePageChrome(isNew ? 'New Bot' : 'Edit Bot', '/dashboard')
   const [form, setForm] = useState<Omit<Bot, 'id'>>(DEFAULTS)
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
@@ -248,26 +252,9 @@ export default function BotSettingsPage() {
     }
   }
 
-  if (loading) return (
-    <div className="min-h-screen bg-[#070711] flex items-center justify-center">
-      <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
+  if (loading) return <PageLoader />
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-      <div className="absolute bottom-[-20%] left-[-5%] w-[400px] h-[400px] rounded-full bg-indigo-700/15 blur-[120px] pointer-events-none" />
-
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center gap-3 backdrop-blur-sm">
-        <button onClick={() => navigate('/dashboard')} className="p-1.5 text-slate-500 hover:text-white hover:bg-white/8 rounded-lg transition-all">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
-          </svg>
-        </button>
-        <h1 className="font-bold text-white">{isNew ? 'New Bot' : 'Edit Bot'}</h1>
-      </header>
-
       <main className="relative z-10 max-w-xl mx-auto px-6 py-10">
         <form onSubmit={handleSubmit} className="space-y-5">
           {error && (
@@ -566,6 +553,5 @@ export default function BotSettingsPage() {
           </div>
         </form>
       </main>
-    </div>
   )
 }

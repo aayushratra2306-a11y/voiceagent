@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import {
   listTools, createTool, updateTool, deleteTool, testTool,
 } from '../lib/api'
+import { usePageChrome } from '../context/ChromeContext'
+import PageLoader from '../components/PageLoader'
 import type { BotTool, BotToolInput, ToolParameter } from '../lib/api'
 
 // Task 3.1 — the form that makes a tool configuration rather than code.
@@ -54,7 +56,8 @@ const smallField = 'flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg 
 
 export default function BotToolsPage() {
   const { id } = useParams()
-  const navigate = useNavigate()
+
+  usePageChrome('Tools', `/bots/${id}`)
 
   const [tools, setTools] = useState<BotTool[]>([])
   const [loading, setLoading] = useState(true)
@@ -207,25 +210,9 @@ export default function BotToolsPage() {
     }
   }
 
-  if (loading) return (
-    <div className="min-h-screen bg-[#070711] flex items-center justify-center">
-      <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
+  if (loading) return <PageLoader />
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center gap-3 backdrop-blur-sm">
-        <button onClick={() => navigate(`/bots/${id}`)} className="p-1.5 text-slate-500 hover:text-white hover:bg-white/8 rounded-lg transition-all">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
-          </svg>
-        </button>
-        <h1 className="font-bold">Tools</h1>
-      </header>
-
       <main className="relative z-10 max-w-3xl mx-auto px-6 py-10 space-y-5">
         {error && (
           <div className="bg-red-500/10 text-red-400 border border-red-500/20 text-sm rounded-xl px-4 py-3">{error}</div>
@@ -679,7 +666,6 @@ export default function BotToolsPage() {
           </div>
         )}
       </main>
-    </div>
   )
 }
 

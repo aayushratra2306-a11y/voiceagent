@@ -1,22 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listBots, deleteBot, getPendingApprovalCount } from '../lib/api'
+import { listBots, deleteBot } from '../lib/api'
 import type { Bot } from '../lib/api'
-import { useAuth } from '../context/AuthContext'
-
-// How often the header re-checks for waiting approvals. An approval is
-// raised mid-call and a person is expected to act on it while the caller is
-// still on the line, so a badge that only appears on a page reload would
-// miss the entire window it exists for. Twelve seconds is frequent enough
-// to feel immediate at conversation pace, and slow enough that an idle
-// dashboard left open all day costs a handful of requests an hour.
-const APPROVAL_POLL_MS = 12_000
 
 export default function DashboardPage() {
   const [bots, setBots] = useState<Bot[]>([])
   const [loading, setLoading] = useState(true)
-  const [pendingApprovals, setPendingApprovals] = useState(0)
-  const { logout } = useAuth()
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -26,22 +15,6 @@ export default function DashboardPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    // Failures are swallowed deliberately: this is an ambient indicator, and
-    // one flaky poll must not surface an error over a dashboard the user is
-    // using for something else. A missed tick simply shows the previous
-    // count until the next one lands.
-    const check = () =>
-      getPendingApprovalCount()
-        .then(n => { if (!cancelled) setPendingApprovals(n) })
-        .catch(() => {})
-
-    check()
-    const timer = setInterval(check, APPROVAL_POLL_MS)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [])
-
   async function handleDelete(id: string) {
     if (!confirm('Delete this bot?')) return
     await deleteBot(id)
@@ -49,70 +22,6 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      {/* Background blobs */}
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-      <div className="absolute bottom-[-20%] left-[-5%] w-[400px] h-[400px] rounded-full bg-indigo-700/15 blur-[120px] pointer-events-none" />
-
-      {/* Header */}
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center justify-between backdrop-blur-sm">
-        <div className="flex items-center gap-2">
-          {/* Logomark */}
-          <svg width="18" height="18" viewBox="0 0 26 26" fill="none">
-            <rect x="0"  y="14" width="5" height="12" rx="2.5" fill="#00D4FF" opacity="0.5"/>
-            <rect x="7"  y="7"  width="5" height="19" rx="2.5" fill="#00D4FF" opacity="0.75"/>
-            <rect x="14" y="2"  width="5" height="24" rx="2.5" fill="#00D4FF"/>
-            <rect x="21" y="9"  width="5" height="17" rx="2.5" fill="#00D4FF" opacity="0.6"/>
-          </svg>
-          <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 900, fontSize: '1.45rem', letterSpacing: '0.07em', color: '#00D4FF', lineHeight: 1, textShadow: '0 0 16px rgba(0,212,255,0.22)' }}>
-            AURIS
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => navigate('/approvals')}
-            // aria-label carries the count too: the badge is a visual cue,
-            // and a screen reader announcing a bare "Approvals" would lose
-            // the only part that says something needs doing.
-            aria-label={
-              pendingApprovals > 0
-                ? `Approvals, ${pendingApprovals} waiting`
-                : 'Approvals'
-            }
-            className={`relative text-xs transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5 ${
-              pendingApprovals > 0
-                ? 'text-amber-300 hover:text-amber-200'
-                : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            Approvals
-            {pendingApprovals > 0 && (
-              <span
-                // Not a red dot: red reads as "something is broken", and a
-                // waiting approval is a normal request for a decision.
-                // Amber says "your turn" without implying a failure.
-                className="ml-1.5 inline-flex items-center justify-center min-w-[17px] h-[17px] px-1 rounded-full bg-amber-400 text-[10px] font-bold text-neutral-900 align-middle tabular-nums"
-              >
-                {/* Capped so a long-neglected queue can't stretch the nav */}
-                {pendingApprovals > 99 ? '99+' : pendingApprovals}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => navigate('/webhooks')}
-            className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
-          >
-            Webhooks
-          </button>
-          <button
-            onClick={() => { logout(); navigate('/') }}
-            className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
-
       <main className="relative z-10 max-w-3xl mx-auto px-6 py-10">
         <div className="flex items-center justify-between mb-7">
           <div>
@@ -204,6 +113,5 @@ export default function DashboardPage() {
           </div>
         )}
       </main>
-    </div>
   )
 }
