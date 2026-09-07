@@ -68,6 +68,15 @@ export default function BotToolsPage() {
   const [undoHeaderRows, setUndoHeaderRows] = useState<Pair[]>([])
   const [secretTouched, setSecretTouched] = useState(false)
   const [paymentSecretTouched, setPaymentSecretTouched] = useState(false)
+  // The request body is edited as raw JSON text, not as key/value rows like
+  // headers and query are. Those are flat maps of strings; a real request
+  // body is neither — Razorpay's payment-link call alone needs a nested
+  // object (`customer: {name, contact}`) and real booleans
+  // (`accept_partial: false`), and rows cannot express either. Kept as TEXT
+  // in its own state rather than parsed on every keystroke so a
+  // half-finished edit doesn't get thrown away mid-typing.
+  const [bodyText, setBodyText] = useState('')
+  const [bodyError, setBodyError] = useState('')
   const [saving, setSaving] = useState(false)
 
   const [testArgs, setTestArgs] = useState<Record<string, string>>({})
@@ -90,6 +99,7 @@ export default function BotToolsPage() {
     setEditingId('new'); setForm(BLANK)
     setHeaderRows([]); setQueryRows([]); setFieldMapRows([]); setUndoHeaderRows([])
     setSecretTouched(false); setPaymentSecretTouched(false)
+    setBodyText(''); setBodyError('')
     setTestArgs({}); setTestResult('')
   }
 
@@ -113,6 +123,10 @@ export default function BotToolsPage() {
     setHeaderRows(toPairs(t.headers)); setQueryRows(toPairs(t.query))
     setFieldMapRows(toPairs(t.field_map)); setUndoHeaderRows(toPairs(t.undo.headers))
     setSecretTouched(false); setPaymentSecretTouched(false)
+    // Pretty-printed rather than compact: this is the one field a customer
+    // reads back to check, and a one-line blob of JSON is unreadable.
+    setBodyText(t.body && Object.keys(t.body).length ? JSON.stringify(t.body, null, 2) : '')
+    setBodyError('')
     setTestArgs({}); setTestResult('')
   }
 
@@ -128,9 +142,30 @@ export default function BotToolsPage() {
   }
 
   async function save() {
+    // Parsed HERE rather than on every keystroke, and a failure stops the
+    // save outright. Saving anyway would silently store an empty body while
+    // the textarea still shows the customer's JSON — they would then watch a
+    // POST go out with nothing in it and have no way to tell why.
+    let parsedBody: Record<string, unknown> = {}
+    if (bodyText.trim()) {
+      try {
+        const parsed = JSON.parse(bodyText)
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          setBodyError('The body must be a JSON object — it starts with { and ends with }.')
+          return
+        }
+        parsedBody = parsed
+      } catch (e: any) {
+        setBodyError(`That is not valid JSON: ${e.message}`)
+        return
+      }
+    }
+    setBodyError('')
+
     setSaving(true); setError('')
     const payload: BotToolInput = {
       ...form,
+      body: parsedBody,
       headers: fromPairs(headerRows),
       query: fromPairs(queryRows),
       field_map: fromPairs(fieldMapRows),
@@ -318,6 +353,38 @@ export default function BotToolsPage() {
 
             <PairEditor title="Headers" rows={headerRows} onChange={setHeaderRows} placeholderKey="Content-Type" placeholderValue="application/json" />
             <PairEditor title="Query parameters" rows={queryRows} onChange={setQueryRows} placeholderKey="format" placeholderValue="json" />
+
+            {/* Request body. Only for methods that actually carry one — a GET
+                with a body is meaningless here (the server sends it as
+                `json=` only when non-empty) and showing the field would
+                invite someone to fill it in and wonder why nothing happened. */}
+            {['POST', 'PUT', 'PATCH'].includes(form.method) && (
+              <div>
+                <label className={label}>Body (JSON)</label>
+                <p className="text-xs text-slate-500 mb-2">
+                  Sent as the request body. Use <code className="text-slate-400">{'{name}'}</code> to
+                  drop in one of the inputs above — it works anywhere in here, including inside
+                  nested objects.
+                </p>
+                <textarea
+                  rows={10}
+                  spellCheck={false}
+                  value={bodyText}
+                  onChange={e => { setBodyText(e.target.value); if (bodyError) setBodyError('') }}
+                  placeholder={'{\n  "amount": "{amount}",\n  "currency": "INR"\n}'}
+                  className={`${field} font-mono text-xs leading-relaxed resize-y ${
+                    bodyError ? 'border-red-500/60 focus:border-red-500/60' : ''
+                  }`}
+                />
+                {bodyError && (
+                  <p className="text-xs text-red-400 mt-1.5">{bodyError}</p>
+                )}
+                <p className="text-xs text-slate-600 mt-1.5">
+                  Leave empty to send no body. Numbers and true/false stay as they are — only
+                  text in quotes has placeholders filled in.
+                </p>
+              </div>
+            )}
 
             {/* Auth */}
             <div>
