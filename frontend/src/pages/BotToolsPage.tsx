@@ -77,6 +77,7 @@ export default function BotToolsPage() {
   // half-finished edit doesn't get thrown away mid-typing.
   const [bodyText, setBodyText] = useState('')
   const [bodyError, setBodyError] = useState('')
+  const [copiedWebhook, setCopiedWebhook] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const [testArgs, setTestArgs] = useState<Record<string, string>>({})
@@ -504,9 +505,40 @@ export default function BotToolsPage() {
                   </div>
                   <p className="text-xs text-slate-500">
                     Without a matching secret every callback is rejected — that is what stops
-                    anyone else claiming a payment succeeded. Point your provider's webhook at{' '}
-                    <code className="font-mono text-slate-400">/payments/webhook/{editingId !== 'new' ? editingId : '<save first>'}</code>
+                    anyone else claiming a payment succeeded.
                   </p>
+
+                  {/* The full absolute URL, not just the path. This gets pasted
+                      into somebody else's dashboard, where a relative path is
+                      useless — and reconstructing the origin by hand is exactly
+                      the kind of step that gets one character wrong and then
+                      fails as a webhook that silently never arrives. */}
+                  <div className="mt-1">
+                    <span className="text-xs text-slate-500">Point your provider's webhook at</span>
+                    {editingId === 'new' ? (
+                      <p className="text-xs text-slate-600 mt-1">
+                        Save the tool first — the address includes its ID, which does not exist yet.
+                      </p>
+                    ) : (
+                      <div className="flex gap-2 items-center mt-1">
+                        <code className="flex-1 min-w-0 truncate bg-black/30 border border-white/10 rounded-lg px-2.5 py-2 font-mono text-xs text-slate-300">
+                          {`${window.location.origin}/payments/webhook/${editingId}`}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard
+                              ?.writeText(`${window.location.origin}/payments/webhook/${editingId}`)
+                              .then(() => { setCopiedWebhook(true); setTimeout(() => setCopiedWebhook(false), 1800) })
+                              .catch(() => {})
+                          }}
+                          className="shrink-0 text-xs px-2.5 py-2 rounded-lg border border-white/10 text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+                        >
+                          {copiedWebhook ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
