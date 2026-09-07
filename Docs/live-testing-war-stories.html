@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Nine real defects, every one found only after code that already passed its own test suite
+      Ten real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,10 +139,10 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">9</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">10</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">5</span><span class="l">were silent — no crash, no error</span></div>
-    <div class="stat"><span class="n">1,140+</span><span class="l">tests passing throughout</span></div>
+    <div class="stat"><span class="n">7</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">383</span><span class="l">tests in the suite — none caught these</span></div>
   </div>
 
   <div class="section-head">
@@ -459,6 +459,79 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
       </div>
     </div>
     <span class="commit">commit <code>efe91a0</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>An approval queue nobody could tell was full</h3>
+      <span class="tag">TASK 3.10 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">A live call raised a refund approval correctly, held the action, and waited
+          &mdash; and there was no way to know it had. The only signal was opening the Approvals page and
+          looking.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Every piece of the mechanism worked: the threshold check, the held action, the
+          authenticated approve and deny, the queue itself. What was never built was the part that says
+          <em>something is waiting</em>. The feature had been designed from the inside out &mdash; from
+          what the system must guarantee &mdash; and never once from the position of the person who has to
+          act within seconds while a caller holds the line. A test suite cannot catch this: nothing is
+          wrong, there is simply nothing there.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">A dedicated count endpoint (declared before the <code>/{id}</code> route, or the
+          router would read &ldquo;pending-count&rdquo; as an approval id), and an amber badge on the
+          Approvals link refreshed every twelve seconds. Amber rather than red: a waiting decision is a
+          normal request, not a failure. The count also goes into the accessible label, because a screen
+          reader announcing a bare &ldquo;Approvals&rdquo; loses the only part that says anything needs
+          doing.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>7435757</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Going to approve the refund hung up on the caller</h3>
+      <span class="tag">TASK 3.10 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Mid-call, pressing back to reach the Approvals page ended the call. The exact
+          workflow task 3.10 exists for &mdash; approve a large refund while the caller waits on the line
+          &mdash; could not be done in one browser tab.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The call page owned the WebRTC peer connection, and its setup effect ended
+          <code>return () =&gt; stopSession()</code>. React runs that on unmount, and a route change
+          unmounts the page &mdash; so navigating and hanging up were literally the same action. Underneath
+          that was a structural gap rather than a bug: <code>App.tsx</code> was thirty-eight lines of flat
+          routes with the auth provider as the only wrapper, so <em>nothing</em> sat between the router and
+          the pages, and nothing could outlive one. The same gap produced two quieter symptoms nobody had
+          connected to it: the approvals badge could only ever appear on the dashboard, because that was
+          the only page with any navigation on it; and every back button hardcoded a destination instead of
+          stepping back through history, so back from Approvals went to the dashboard rather than to the
+          call it came from.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Lifted the peer connection, microphone stream, audio element and data channel
+          into a call context mounted above the routes; the call page became a <em>view</em> of that state
+          rather than its owner, and nothing ends a call now except someone ending it. Added a layout route
+          owning the background, header, navigation and badge, plus a call bar pinned to every other page
+          while a call is live &mdash; bot name, timer, mute, end. Back became history-based with a
+          per-page fallback. Net effect was mostly deletion: six hand-rolled headers, five copies of the
+          background and six copies of the loading spinner went away.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>ead0f03</code></span>
   </article>
 
   <footer>
