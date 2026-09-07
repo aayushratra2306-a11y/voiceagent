@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Eight real defects, every one found only after code that already passed its own test suite
+      Nine real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,7 +139,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">8</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">9</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
     <div class="stat"><span class="n">5</span><span class="l">were silent — no crash, no error</span></div>
     <div class="stat"><span class="n">1,140+</span><span class="l">tests passing throughout</span></div>
@@ -357,6 +357,46 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
 
   <article class="incident">
     <div class="incident-head">
+      <h3>The same deploy command reported success and changed nothing — twice</h3>
+      <span class="tag">OPS · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Two unrelated incidents, hours apart, identical underneath. A rotated API
+          key that the running service kept ignoring. Then a fixed reverse-proxy route that stayed
+          broken after the fix was deployed. Both times the deploy command printed success.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Bringing a service up compares the <b>service definition</b> — image,
+          ports, declared environment — and does nothing if that is unchanged. Neither incident
+          changed it. The first was a value inside an env <i>file</i>; the second was a config file
+          mounted into the container. Both were correct on disk and neither was re-read, because
+          from the orchestrator's point of view there was nothing to do.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why it stayed hidden</span>
+        <div class="body">The output says <b>"Running"</b> or <b>"Started"</b> where a real change
+          says <b>"Recreated"</b> — one word, easy to read straight past, and no warning that the
+          file you just edited is not the one in effect. It cost a round of "the fix didn't work"
+          debugging on a fix that was correct both times.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Force a recreate for env changes, restart the service for a mounted config
+          file, and — the part worth keeping — <b>verify from inside the container rather than
+          trusting the deploy</b>: read the value back out of the running process's own environment,
+          and make a real authenticated request through the same client the application uses. A
+          convenience check gave a misleading answer here too: a bare HTTP client reported a
+          <code>403</code> that had nothing to do with the credential, because the provider's edge
+          network rejects unfamiliar user-agents.</div>
+      </div>
+    </div>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
       <h3>A container kept serving a rotated credential after the file was fixed</h3>
       <span class="tag">OPS · 2026-09-07</span>
     </div>
@@ -422,7 +462,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </article>
 
   <footer>
-    <span>Voice Agent · Phase 3 live testing, continued as tasks are tested</span>
+    <span>Voice Agent · Phase 3 live testing — complete, 3.1 through 3.10</span>
     <span>Last updated 2026-09-07</span>
   </footer>
 </div>
