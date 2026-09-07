@@ -291,7 +291,7 @@ export default function BotToolsPage() {
 
             <div>
               <label className={label}>Name the AI will use</label>
-              <input value={form.name} onChange={e => set('name', e.target.value)}
+              <input autoComplete="off" value={form.name} onChange={e => set('name', e.target.value)}
                 placeholder="check_stock" className={`${field} font-mono`} />
               <p className="text-xs text-slate-500 mt-1.5">Letters, numbers and underscores — it becomes a function name.</p>
             </div>
@@ -314,7 +314,7 @@ export default function BotToolsPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <label className={label}>URL</label>
-                <input value={form.url} onChange={e => set('url', e.target.value)}
+                <input autoComplete="off" value={form.url} onChange={e => set('url', e.target.value)}
                   placeholder="https://api.yourshop.com/stock/{sku}" className={`${field} font-mono text-xs`} />
               </div>
             </div>
@@ -329,16 +329,16 @@ export default function BotToolsPage() {
               <div className="space-y-2">
                 {form.parameters.map((p, i) => (
                   <div key={i} className="flex gap-2 items-start">
-                    <input value={p.name} onChange={e => setParam(i, { name: e.target.value })}
+                    <input autoComplete="off" value={p.name} onChange={e => setParam(i, { name: e.target.value })}
                       placeholder="sku" className={`${smallField} font-mono max-w-[130px]`} />
                     <select value={p.type} onChange={e => setParam(i, { type: e.target.value as ToolParameter['type'] })}
                       className={`${smallField} max-w-[110px]`}>
                       {PARAM_TYPES.map(t => <option key={t} value={t} className="bg-neutral-900">{t}</option>)}
                     </select>
-                    <input value={p.description} onChange={e => setParam(i, { description: e.target.value })}
+                    <input autoComplete="off" value={p.description} onChange={e => setParam(i, { description: e.target.value })}
                       placeholder="The item's SKU code" className={smallField} />
                     <label className="flex items-center gap-1.5 text-xs text-slate-400 py-2 shrink-0">
-                      <input type="checkbox" checked={p.required} onChange={e => setParam(i, { required: e.target.checked })}
+                      <input autoComplete="off" type="checkbox" checked={p.required} onChange={e => setParam(i, { required: e.target.checked })}
                         className="accent-violet-500" />
                       required
                     </label>
@@ -400,7 +400,7 @@ export default function BotToolsPage() {
               </p>
 
               {(form.auth.kind === 'header' || form.auth.kind === 'query') && (
-                <input value={form.auth.name}
+                <input autoComplete="off" value={form.auth.name}
                   onChange={e => set('auth', { ...form.auth, name: e.target.value })}
                   placeholder={form.auth.kind === 'header' ? 'X-Api-Key' : 'api_key'}
                   className={`${field} font-mono mt-2`} />
@@ -408,7 +408,7 @@ export default function BotToolsPage() {
 
               {form.auth.kind !== 'none' && (
                 <>
-                  <input type="password" value={form.auth.secret ?? ''}
+                  <input autoComplete="off" type="password" value={form.auth.secret ?? ''}
                     onChange={e => { setSecretTouched(true); set('auth', { ...form.auth, secret: e.target.value }) }}
                     placeholder={editingId === 'new' ? 'Your API key' : 'Leave blank to keep the saved key'}
                     className={`${field} font-mono mt-2`} />
@@ -434,7 +434,7 @@ export default function BotToolsPage() {
 
             <div>
               <label className={label}>Give up after (seconds)</label>
-              <input type="number" min={1} max={30} step={0.5}
+              <input autoComplete="off" type="number" min={1} max={30} step={0.5}
                 value={form.timeout_seconds}
                 onChange={e => set('timeout_seconds', Number(e.target.value) || 8)}
                 className={`${field} max-w-[140px]`} />
@@ -448,7 +448,7 @@ export default function BotToolsPage() {
             {/* Task 3.7 — the payment link tool */}
             <div className="border border-white/8 rounded-xl p-4">
               <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={form.payment.enabled}
+                <input autoComplete="off" type="checkbox" checked={form.payment.enabled}
                   onChange={e => set('payment', { ...form.payment, enabled: e.target.checked })}
                   className="accent-violet-500" />
                 This tool creates a payment link
@@ -470,7 +470,7 @@ export default function BotToolsPage() {
                   ] as const).map(([key, labelText, ph]) => (
                     <div key={key} className="flex gap-2 items-center">
                       <span className="text-xs text-slate-500 w-40 shrink-0">{labelText}</span>
-                      <input value={form.payment[key]} placeholder={ph}
+                      <input autoComplete="off" value={form.payment[key]} placeholder={ph}
                         onChange={e => set('payment', { ...form.payment, [key]: e.target.value })}
                         className={`${smallField} font-mono`} />
                     </div>
@@ -487,7 +487,7 @@ export default function BotToolsPage() {
                   ] as const).map(([key, labelText, ph]) => (
                     <div key={key} className="flex gap-2 items-center">
                       <span className="text-xs text-slate-500 w-40 shrink-0">{labelText}</span>
-                      <input value={form.payment[key]} placeholder={ph}
+                      <input autoComplete="off" value={form.payment[key]} placeholder={ph}
                         onChange={e => set('payment', { ...form.payment, [key]: e.target.value })}
                         className={`${smallField} font-mono`} />
                     </div>
@@ -495,7 +495,7 @@ export default function BotToolsPage() {
 
                   <div className="flex gap-2 items-center">
                     <span className="text-xs text-slate-500 w-40 shrink-0">Webhook secret</span>
-                    <input type="password" value={form.payment.webhook_secret ?? ''}
+                    <input autoComplete="off" type="password" value={form.payment.webhook_secret ?? ''}
                       onChange={e => {
                         setPaymentSecretTouched(true)
                         set('payment', { ...form.payment, webhook_secret: e.target.value })
@@ -558,7 +558,7 @@ export default function BotToolsPage() {
                   className={`${field} max-w-[120px]`}>
                   {METHODS.map(m => <option key={m} value={m} className="bg-[#12121f]">{m}</option>)}
                 </select>
-                <input value={form.undo.url}
+                <input autoComplete="off" value={form.undo.url}
                   onChange={e => set('undo', { ...form.undo, url: e.target.value })}
                   placeholder="https://your-system.com/bookings/{booking_id}" className={`${field} font-mono`} />
               </div>
@@ -581,7 +581,7 @@ export default function BotToolsPage() {
             {/* Task 3.10 — human approval for big actions */}
             <div className="border border-white/8 rounded-xl p-4">
               <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={form.approval.enabled}
+                <input autoComplete="off" type="checkbox" checked={form.approval.enabled}
                   onChange={e => set('approval', { ...form.approval, enabled: e.target.checked })}
                   className="accent-violet-500" />
                 Require a person's approval above a value
@@ -595,13 +595,13 @@ export default function BotToolsPage() {
                 <div className="mt-4 space-y-3 ml-6">
                   <div className="flex gap-2 items-center">
                     <span className="text-xs text-slate-500 w-32 shrink-0">Amount is in input</span>
-                    <input value={form.approval.amount_parameter}
+                    <input autoComplete="off" value={form.approval.amount_parameter}
                       onChange={e => set('approval', { ...form.approval, amount_parameter: e.target.value })}
                       placeholder="amount" className={`${smallField} font-mono`} />
                   </div>
                   <div className="flex gap-2 items-center">
                     <span className="text-xs text-slate-500 w-32 shrink-0">Approve automatically up to</span>
-                    <input type="number" min={0} step="any" value={form.approval.threshold}
+                    <input autoComplete="off" type="number" min={0} step="any" value={form.approval.threshold}
                       onChange={e => set('approval', { ...form.approval, threshold: Number(e.target.value) || 0 })}
                       className={`${smallField} font-mono max-w-[140px]`} />
                   </div>
@@ -616,7 +616,7 @@ export default function BotToolsPage() {
 
             <div className="space-y-3">
               <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={form.enabled}
+                <input autoComplete="off" type="checkbox" checked={form.enabled}
                   onChange={e => set('enabled', e.target.checked)} className="accent-violet-500" />
                 Available to the bot
               </label>
@@ -624,7 +624,7 @@ export default function BotToolsPage() {
               {/* Task 3.3 */}
               <div>
                 <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                  <input type="checkbox" checked={form.long_running}
+                  <input autoComplete="off" type="checkbox" checked={form.long_running}
                     onChange={e => set('long_running', e.target.checked)} className="accent-violet-500" />
                   This one is slow
                 </label>
@@ -648,7 +648,7 @@ export default function BotToolsPage() {
                   {form.parameters.filter(p => p.name).map(p => (
                     <div key={p.name} className="flex gap-2 items-center">
                       <span className="font-mono text-xs text-slate-500 w-28 shrink-0 truncate">{p.name}</span>
-                      <input value={testArgs[p.name] ?? ''}
+                      <input autoComplete="off" value={testArgs[p.name] ?? ''}
                         onChange={e => setTestArgs({ ...testArgs, [p.name]: e.target.value })}
                         placeholder="a real value to try" className={smallField} />
                     </div>
@@ -699,9 +699,9 @@ function PairEditor({ title, rows, onChange, placeholderKey, placeholderValue }:
       <div className="space-y-2">
         {rows.map((r, i) => (
           <div key={i} className="flex gap-2">
-            <input value={r.k} placeholder={placeholderKey} className={`${smallField} font-mono max-w-[190px]`}
+            <input autoComplete="off" value={r.k} placeholder={placeholderKey} className={`${smallField} font-mono max-w-[190px]`}
               onChange={e => onChange(rows.map((x, n) => (n === i ? { ...x, k: e.target.value } : x)))} />
-            <input value={r.v} placeholder={placeholderValue} className={`${smallField} font-mono`}
+            <input autoComplete="off" value={r.v} placeholder={placeholderValue} className={`${smallField} font-mono`}
               onChange={e => onChange(rows.map((x, n) => (n === i ? { ...x, v: e.target.value } : x)))} />
             <button onClick={() => onChange(rows.filter((_, n) => n !== i))}
               className="text-slate-600 hover:text-red-400 px-1 shrink-0">×</button>

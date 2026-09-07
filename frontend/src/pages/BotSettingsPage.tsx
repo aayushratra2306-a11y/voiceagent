@@ -314,7 +314,7 @@ export default function BotSettingsPage() {
           {/* Bot Name */}
           <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
             <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Bot Name</label>
-            <input
+            <input autoComplete="off"
               required
               value={form.name}
               onChange={e => set('name', e.target.value)}
@@ -349,7 +349,7 @@ export default function BotSettingsPage() {
                       : 'border-white/8 hover:border-white/15 hover:bg-white/4'
                   }`}
                 >
-                  <input
+                  <input autoComplete="off"
                     type="radio"
                     name="voice"
                     value={v.id}
@@ -415,7 +415,7 @@ export default function BotSettingsPage() {
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">Opens</label>
-                <input
+                <input autoComplete="off"
                   type="time"
                   required
                   value={form.booking_open}
@@ -425,7 +425,7 @@ export default function BotSettingsPage() {
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">Closes</label>
-                <input
+                <input autoComplete="off"
                   type="time"
                   required
                   value={form.booking_close}
@@ -435,7 +435,7 @@ export default function BotSettingsPage() {
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">Slot (min)</label>
-                <input
+                <input autoComplete="off"
                   type="number"
                   required
                   min={5}
@@ -507,7 +507,7 @@ export default function BotSettingsPage() {
                   )}
                   {uploading ? 'Uploading…' : 'Upload PDF'}
                 </button>
-                <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
+                <input autoComplete="off" ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
               </div>
 
               {uploadError && (
