@@ -193,6 +193,7 @@ async def _prepare_worker():
     from app.db.mongo import init_db
     from app.models.appointment import Appointment
     from app.models.approval import PendingApproval
+    from app.models.bot import Bot
     from app.models.bot_tool import BotTool
     from app.models.conversation import ConversationTurn
     from app.models.document import Document
@@ -206,12 +207,28 @@ async def _prepare_worker():
     # payment-link tool inserts one from inside this same process.
     # WebhookSubscription/Delivery/OutboxItem are here for Task 3.8: booking
     # a call, or ending it, queues an event from inside this same process.
+    #
+    # Bot is here for Task 3.5, and was missing until it was found on a live
+    # call 2026-09-07 — it had never been in this list, since task 2.4 first
+    # created this process. Most of a bot's configuration crosses into this
+    # process as a plain dict (see bot_config in api/connect.py), so nothing
+    # needed to READ a Bot document here until booking.get_config() did, and
+    # that one query raised CollectionWasNotInitialized on every call. Its
+    # own try/except then swallowed the error and fell back to the
+    # BookingConfig defaults, so a bot configured for Asia/Kolkata, 9-6 was
+    # silently offering UTC slots and speaking UTC times to every caller —
+    # no crash, no error surfaced to the caller, just quietly the wrong
+    # answer. Task 3.5's entire per-bot configurability was inert in
+    # production from the day it shipped.
+    #
     # Beanie raises CollectionWasNotInitialized for any model missing from
     # this list, so an omission here is the same failure this whole init_db
-    # call exists to fix.
+    # call exists to fix. test_call_worker_models.py now checks this list
+    # against what the call-path code actually queries.
     await init_db([
         Order, Appointment, ConversationTurn, Document, BotTool, PaymentSession,
         WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
+        Bot,
     ])
     return run_voice_pipeline
 
