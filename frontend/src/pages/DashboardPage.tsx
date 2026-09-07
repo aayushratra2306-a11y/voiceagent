@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listBots, deleteBot } from '../lib/api'
+import { listBots, deleteBot, getPendingApprovalCount } from '../lib/api'
 import type { Bot } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
+
+// How often the header re-checks for waiting approvals. An approval is
+// raised mid-call and a person is expected to act on it while the caller is
+// still on the line, so a badge that only appears on a page reload would
+// miss the entire window it exists for. Twelve seconds is frequent enough
+// to feel immediate at conversation pace, and slow enough that an idle
+// dashboard left open all day costs a handful of requests an hour.
+const APPROVAL_POLL_MS = 12_000
 
 export default function DashboardPage() {
   const [bots, setBots] = useState<Bot[]>([])
   const [loading, setLoading] = useState(true)
+  const [pendingApprovals, setPendingApprovals] = useState(0)
   const { logout } = useAuth()
   const navigate = useNavigate()
 
@@ -15,6 +24,22 @@ export default function DashboardPage() {
       .then(setBots)
       .catch(() => navigate('/'))
       .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    // Failures are swallowed deliberately: this is an ambient indicator, and
+    // one flaky poll must not surface an error over a dashboard the user is
+    // using for something else. A missed tick simply shows the previous
+    // count until the next one lands.
+    const check = () =>
+      getPendingApprovalCount()
+        .then(n => { if (!cancelled) setPendingApprovals(n) })
+        .catch(() => {})
+
+    check()
+    const timer = setInterval(check, APPROVAL_POLL_MS)
+    return () => { cancelled = true; clearInterval(timer) }
   }, [])
 
   async function handleDelete(id: string) {
@@ -46,9 +71,32 @@ export default function DashboardPage() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => navigate('/approvals')}
-            className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
+            // aria-label carries the count too: the badge is a visual cue,
+            // and a screen reader announcing a bare "Approvals" would lose
+            // the only part that says something needs doing.
+            aria-label={
+              pendingApprovals > 0
+                ? `Approvals, ${pendingApprovals} waiting`
+                : 'Approvals'
+            }
+            className={`relative text-xs transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5 ${
+              pendingApprovals > 0
+                ? 'text-amber-300 hover:text-amber-200'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
           >
             Approvals
+            {pendingApprovals > 0 && (
+              <span
+                // Not a red dot: red reads as "something is broken", and a
+                // waiting approval is a normal request for a decision.
+                // Amber says "your turn" without implying a failure.
+                className="ml-1.5 inline-flex items-center justify-center min-w-[17px] h-[17px] px-1 rounded-full bg-amber-400 text-[10px] font-bold text-neutral-900 align-middle tabular-nums"
+              >
+                {/* Capped so a long-neglected queue can't stretch the nav */}
+                {pendingApprovals > 99 ? '99+' : pendingApprovals}
+              </span>
+            )}
           </button>
           <button
             onClick={() => navigate('/webhooks')}

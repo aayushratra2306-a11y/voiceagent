@@ -457,6 +457,13 @@ export async function listApprovals(status?: string): Promise<PendingApproval[]>
   return request(`/approvals/${status ? `?status=${status}` : ''}`)
 }
 
+// Just the number, for the header badge — see the endpoint's own docstring
+// for why this isn't listApprovals('pending').length.
+export async function getPendingApprovalCount(): Promise<number> {
+  const { count } = await request<{ count: number }>('/approvals/pending-count')
+  return count
+}
+
 export async function approveAction(id: string): Promise<PendingApproval> {
   return request(`/approvals/${id}/approve`, { method: 'POST' })
 }
