@@ -99,6 +99,16 @@ export interface Bot {
   voice_id: string
   llm_model: string
   language: string
+  // Task 3.5 — the booking template's own configuration. The backend has
+  // accepted and validated these since 3.5 was built; they were simply
+  // never added to the editor, so a customer could not set them at all and
+  // every bot silently used the defaults (Asia/Kolkata, 09:00-18:00, 30m).
+  // Only app/pipeline/booking.py reads them — a bot with no booking tools
+  // is unaffected by whatever they say.
+  timezone: string
+  booking_open: string
+  booking_close: string
+  slot_minutes: number
 }
 
 export async function listBots(): Promise<Bot[]> {

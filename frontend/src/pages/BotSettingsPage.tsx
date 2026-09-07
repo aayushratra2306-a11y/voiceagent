@@ -59,12 +59,38 @@ const MODELS = [
   { id: 'gpt-4o', label: 'GPT-4o', desc: 'Smarter · Paid' },
 ]
 
+// Task 3.5 — a fixed list rather than a free-text box, deliberately. The
+// backend rejects anything ZoneInfo cannot resolve (bots.py's
+// _validate_timezone), and an offset like "+05:30" is refused there because
+// it cannot express daylight saving — so a typed field would mostly produce
+// save errors. A bot whose stored zone is not in this list keeps it: see
+// timezoneOptions below.
+const TIMEZONES = [
+  'Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Asia/Tokyo',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'Australia/Sydney', 'UTC',
+]
+
+// Keeps a zone this list doesn't know about (set through the API, or added
+// to the backend later) selectable instead of silently switching the bot to
+// whichever option happens to be first.
+const timezoneOptions = (current: string) =>
+  TIMEZONES.includes(current) ? TIMEZONES : [current, ...TIMEZONES]
+
 const DEFAULTS = {
   name: '',
   system_prompt: 'You are a helpful voice assistant.',
   voice_id: VOICES.en[0].id,
   llm_model: 'gpt-4o-mini',
   language: 'en',
+  // Must match the Bot model's own defaults in backend/app/models/bot.py —
+  // a new bot created from this form should behave identically to one
+  // created straight through the API.
+  timezone: 'Asia/Kolkata',
+  booking_open: '09:00',
+  booking_close: '18:00',
+  slot_minutes: 30,
 }
 
 export default function BotSettingsPage() {
@@ -114,7 +140,19 @@ export default function BotSettingsPage() {
         const voice_id = allowed.some(v => v.id === bot.voice_id)
           ? bot.voice_id
           : allowed[0].id
-        setForm({ name: bot.name, system_prompt: bot.system_prompt, voice_id, llm_model: bot.llm_model, language: bot.language })
+        setForm({
+          name: bot.name, system_prompt: bot.system_prompt, voice_id,
+          llm_model: bot.llm_model, language: bot.language,
+          // ?? DEFAULTS — a bot saved before these fields were sent by
+          // list_bots would otherwise load them as undefined, and a save
+          // would post undefined straight back. The same class of bug that
+          // silently blanked `language` and `system_prompt` on 2026-09-04
+          // (see the note on list_bots in backend/app/api/bots.py).
+          timezone: bot.timezone ?? DEFAULTS.timezone,
+          booking_open: bot.booking_open ?? DEFAULTS.booking_open,
+          booking_close: bot.booking_close ?? DEFAULTS.booking_close,
+          slot_minutes: bot.slot_minutes ?? DEFAULTS.slot_minutes,
+        })
       }
       setLoading(false)
     })
@@ -146,7 +184,7 @@ export default function BotSettingsPage() {
     }
   }
 
-  function set(field: keyof typeof form, value: string) {
+  function set(field: keyof typeof form, value: string | number) {
     setForm(prev => ({ ...prev, [field]: value }))
   }
 
@@ -350,6 +388,70 @@ export default function BotSettingsPage() {
               </svg>
             </button>
           )}
+
+          {/* Scheduling — Task 3.5. Only app/pipeline/booking.py reads these,
+              so they are inert for a bot with no booking tools; shown for
+              every bot anyway rather than guessed at from the tool list,
+              because tools live on their own page and a section that
+              appears and disappears based on another page's state is worse
+              than one that is simply explained. */}
+          <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Scheduling</label>
+            <p className="text-xs text-slate-600 mt-0.5 mb-3">
+              Used by the booking tools — the hours this bot offers, and the time zone it speaks in.
+            </p>
+
+            <label className="block text-xs text-slate-500 mb-1.5">Time zone</label>
+            <select
+              value={form.timezone}
+              onChange={e => set('timezone', e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all mb-4"
+            >
+              {timezoneOptions(form.timezone).map(tz => (
+                <option key={tz} value={tz} className="bg-neutral-900">{tz}</option>
+              ))}
+            </select>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Opens</label>
+                <input
+                  type="time"
+                  required
+                  value={form.booking_open}
+                  onChange={e => set('booking_open', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Closes</label>
+                <input
+                  type="time"
+                  required
+                  value={form.booking_close}
+                  onChange={e => set('booking_close', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Slot (min)</label>
+                <input
+                  type="number"
+                  required
+                  min={5}
+                  max={480}
+                  step={5}
+                  value={form.slot_minutes}
+                  // Number(): a bare e.target.value is a STRING, and the
+                  // backend's slot_minutes is an int with ge/le bounds —
+                  // posting "30" fails validation with a type error rather
+                  // than saving.
+                  onChange={e => set('slot_minutes', Number(e.target.value))}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
+                />
+              </div>
+            </div>
+          </div>
 
           {/* Language + Model */}
           <div className="grid grid-cols-2 gap-4">
