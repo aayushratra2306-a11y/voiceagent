@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Seven real defects, every one found only after code that already passed its own test suite
+      Eight real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,9 +139,9 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">7</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">8</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">4</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">5</span><span class="l">were silent — no crash, no error</span></div>
     <div class="stat"><span class="n">1,140+</span><span class="l">tests passing throughout</span></div>
   </div>
 
@@ -194,6 +194,49 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
       </div>
     </div>
     <span class="commit">commit <code>15eebb1</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A test that passed for the wrong reason</h3>
+      <span class="tag">TASK 3.5 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">There wasn't one — and that's the entry. Asked to book 11pm against a bot
+          that closes at 6pm, the assistant did exactly the right thing: it offered real morning
+          slots instead and never attempted the booking. <b>The test looked like a clean pass.</b></div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Nothing forced that behaviour. The opening and closing hours were consulted
+          in exactly two functions — the two that answer <i>"what could I offer?"</i> — and in neither
+          of the two that answer <i>"do it"</i>. The assistant only ever proposed in-hours times
+          because the list it was reading from was already filtered; it was never <i>prevented</i>
+          from booking one. A caller pushing past that offer — <i>"book it anyway, 11pm, I don't
+          care"</i> — reaches the booking function directly with a time nothing ever validated.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Every existing test drove the booking function with times taken from the
+          available-slots list, because that's what the system produces in normal use. None passed a
+          time from <i>outside</i> that list — so nothing ever probed whether the boundary was
+          actually defended or merely never approached.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">A server-side hours check on both entry points, refusing with real
+          alternatives rather than a bare "no". Proven rather than argued — with the check disabled,
+          the test run logs the appointment landing at 11pm:
+        <div class="evidence"><span class="bad-line">[BOOKING] Rescheduled 4L74 to 2026-09-08T17:30:00+00:00</span>
+<span class="bad-line">                                  ^ 17:30 UTC = 23:00 India time</span></div>
+        The principle worth carrying: <b>a business rule that holds only because of an assumption
+        about how the caller will behave is not enforced, it is hoped for.</b> The language model is
+        not a validation layer — it is the untrusted input.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>64eec0b</code></span>
   </article>
 
   <article class="incident">
