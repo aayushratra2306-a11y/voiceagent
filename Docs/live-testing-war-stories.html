@@ -1,0 +1,541 @@
+<title>Live Testing War Stories</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#F5F7FA; --surface:#FFFFFF; --surface-2:#EDF1F7;
+  --line:#DDE4EE; --line-soft:#E9EDF4;
+  --text:#101828; --text-2:#4E5875; --text-3:#7B849E;
+  --signal:#0E7C86; --signal-bg:#0E7C8614;
+  --amber:#8A5A0F; --amber-bg:#8A5A0F14;
+  --coral:#A8323F; --coral-bg:#A8323F12;
+  --ok:#12695A; --ok-bg:#12695A14;
+  --shadow:0 1px 2px rgba(16,24,40,.05), 0 8px 24px rgba(16,24,40,.05);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#070B13; --surface:#0F1626; --surface-2:#161F33;
+  --line:#232E47; --line-soft:#1B2437;
+  --text:#E9EFF9; --text-2:#9EAAC6; --text-3:#6D7898;
+  --signal:#3FD0C9; --signal-bg:#3FD0C918;
+  --amber:#E3A85C; --amber-bg:#E3A85C16;
+  --coral:#F0868F; --coral-bg:#F0868F16;
+  --ok:#4ED6AE; --ok-bg:#4ED6AE16;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.34);
+}}
+:root[data-theme="dark"]{
+  --paper:#070B13; --surface:#0F1626; --surface-2:#161F33;
+  --line:#232E47; --line-soft:#1B2437;
+  --text:#E9EFF9; --text-2:#9EAAC6; --text-3:#6D7898;
+  --signal:#3FD0C9; --signal-bg:#3FD0C918;
+  --amber:#E3A85C; --amber-bg:#E3A85C16;
+  --coral:#F0868F; --coral-bg:#F0868F16;
+  --ok:#4ED6AE; --ok-bg:#4ED6AE16;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.34);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--text);
+  font:400 16px/1.62 "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:900px; margin:0 auto; padding:56px 24px 100px}
+
+h1,h2,h3,.disp{font-family:"Archivo", system-ui, sans-serif; text-wrap:balance; margin:0}
+h1{font-size:clamp(32px,5vw,46px); font-weight:800; letter-spacing:-.022em; line-height:1.08}
+h2{font-size:22px; font-weight:700; letter-spacing:-.01em}
+h3{font-size:16px; font-weight:700}
+p{margin:0}
+code,.mono{font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:.85em}
+
+.eyebrow{
+  font-family:"IBM Plex Mono", monospace; font-size:11px; font-weight:600;
+  letter-spacing:.13em; text-transform:uppercase; color:var(--signal);
+}
+
+/* ---- header ---- */
+header{display:flex; flex-direction:column; gap:16px; margin-bottom:8px}
+header p.lede{font-size:17px; color:var(--text-2); max-width:56ch; line-height:1.6}
+
+.stat-row{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+  background:var(--line); border:1px solid var(--line); border-radius:14px;
+  overflow:hidden; margin:32px 0 44px;
+}
+.stat{background:var(--surface); padding:18px 16px; display:flex; flex-direction:column; gap:4px}
+.stat .n{font-family:"Archivo",sans-serif; font-size:28px; font-weight:800; letter-spacing:-.01em; font-variant-numeric:tabular-nums}
+.stat .l{font-size:12px; color:var(--text-3); letter-spacing:.02em}
+
+/* ---- section divider ---- */
+.section-head{display:flex; align-items:baseline; gap:14px; margin:52px 0 20px}
+.section-head .num{font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--text-3); font-variant-numeric:tabular-nums}
+.section-head h2{color:var(--text)}
+.section-head .rule{flex:1; height:1px; background:var(--line)}
+
+/* ---- incident card ---- */
+.incident{
+  background:var(--surface); border:1px solid var(--line); border-radius:16px;
+  padding:26px 26px 24px; margin-bottom:22px; box-shadow:var(--shadow);
+}
+.incident-head{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:6px}
+.incident-head .tag{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600;
+  letter-spacing:.08em; color:var(--text-3); white-space:nowrap; padding-top:4px;
+}
+.incident h3{font-size:19px; line-height:1.35}
+
+.anatomy{display:flex; flex-direction:column; gap:0; margin-top:18px}
+.beat{
+  display:grid; grid-template-columns:120px 1fr; gap:18px;
+  padding:14px 0; border-top:1px solid var(--line-soft);
+}
+.beat:first-child{border-top:none; padding-top:16px}
+.beat .label{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600;
+  letter-spacing:.09em; text-transform:uppercase; padding-top:2px;
+}
+.beat.symptom .label{color:var(--coral)}
+.beat.cause .label{color:var(--amber)}
+.beat.fix .label{color:var(--ok)}
+.beat.gap .label{color:var(--signal)}
+.beat .body{font-size:14.5px; color:var(--text-2); line-height:1.68}
+.beat .body b{color:var(--text); font-weight:600}
+.beat .body code{background:var(--surface-2); padding:1px 6px; border-radius:5px; color:var(--text)}
+
+.evidence{
+  margin-top:10px; background:var(--surface-2); border:1px solid var(--line-soft);
+  border-radius:10px; padding:12px 14px; font-family:"IBM Plex Mono",monospace;
+  font-size:12.5px; line-height:1.7; color:var(--text-2); overflow-x:auto;
+  white-space:pre;
+}
+.evidence .ok-line{color:var(--ok)}
+.evidence .bad-line{color:var(--coral)}
+
+.commit{
+  display:inline-flex; align-items:center; gap:6px; margin-top:4px;
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--text-3);
+}
+.commit code{background:var(--surface-2); padding:2px 7px; border-radius:5px; color:var(--text-2)}
+
+/* ---- footer ---- */
+footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); color:var(--text-3); font-size:13px; display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap}
+
+@media(max-width:640px){
+  .stat-row{grid-template-columns:repeat(2,1fr)}
+  .beat{grid-template-columns:1fr; gap:4px}
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Voice Agent — Interview Prep</span>
+    <h1>Live Testing War Stories</h1>
+    <p class="lede">
+      Ten real defects, every one found only after code that already passed its own test suite
+      was put in front of a real phone call. Each entry follows the same shape: what the symptom
+      looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
+      loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
+    </p>
+  </header>
+
+  <div class="stat-row">
+    <div class="stat"><span class="n">10</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
+    <div class="stat"><span class="n">7</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">383</span><span class="l">tests in the suite — none caught these</span></div>
+  </div>
+
+  <div class="section-head">
+    <span class="num">01</span><h2>Phase 3 — booking &amp; tool calling</h2><span class="rule"></span>
+  </div>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A bot's timezone was configured correctly and spoken back wrong</h3>
+      <span class="tag">TASK 3.5 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Bot set to <b>Asia/Kolkata, 09:00–18:00</b> in the UI. On a live call it offered
+          appointment slots and spoke times in <b>UTC</b> — a 2pm booking would have confirmed as 7:30pm
+          to an Indian caller. No error anywhere. The setting looked saved; it was silently ignored.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Every phone call spawns its <b>own OS process</b> (one worker per call, so a crash
+          on one call never touches another). That process registers, at startup, which database
+          collections it's allowed to query — a fixed list passed to the ODM's <code>init_db()</code>.
+          <code>Bot</code> had never been on that list, since the day per-call worker processes were
+          introduced — nothing inside a call had ever needed to <i>read</i> a bot document directly; its
+          config crosses into the process as a plain dict instead. The booking feature broke that
+          assumption: it queries <code>Bot.get(...)</code> live, mid-call. That query raised
+          <code>CollectionWasNotInitialized</code> on <b>every single call</b> — and its own
+          try/except caught the error, logged a warning nobody was watching, and silently fell back to
+          hardcoded defaults (UTC, 9–6, 30 min).</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">The test suite runs in <b>a different process</b> — the pytest runner — and
+          <i>that</i> process's own <code>init_db()</code> registers the full model list, <code>Bot</code>
+          included. So in tests, the exact same line of code succeeds, returns the real timezone, and the
+          test correctly asserts correct behaviour. The test wasn't wrong — it was standing somewhere the
+          bug structurally couldn't reach it.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Added <code>Bot</code> to the call worker's model list. Then wrote a
+          <b>structural</b> regression test — not a behavioural one — that parses the source of every file
+          that runs inside a call, finds every database model it queries, and asserts each is registered.
+          Verified by literally reverting the fix and re-running: both new tests fail and name the exact
+          file at fault.</div>
+        <div class="evidence"><span class="bad-line">before: "timezone": "UTC"   (config said Asia/Kolkata)</span>
+<span class="ok-line">after:  "timezone": "Asia/Kolkata"  — no fallback warning logged</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>15eebb1</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A test that passed for the wrong reason</h3>
+      <span class="tag">TASK 3.5 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">There wasn't one — and that's the entry. Asked to book 11pm against a bot
+          that closes at 6pm, the assistant did exactly the right thing: it offered real morning
+          slots instead and never attempted the booking. <b>The test looked like a clean pass.</b></div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Nothing forced that behaviour. The opening and closing hours were consulted
+          in exactly two functions — the two that answer <i>"what could I offer?"</i> — and in neither
+          of the two that answer <i>"do it"</i>. The assistant only ever proposed in-hours times
+          because the list it was reading from was already filtered; it was never <i>prevented</i>
+          from booking one. A caller pushing past that offer — <i>"book it anyway, 11pm, I don't
+          care"</i> — reaches the booking function directly with a time nothing ever validated.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Every existing test drove the booking function with times taken from the
+          available-slots list, because that's what the system produces in normal use. None passed a
+          time from <i>outside</i> that list — so nothing ever probed whether the boundary was
+          actually defended or merely never approached.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">A server-side hours check on both entry points, refusing with real
+          alternatives rather than a bare "no". Proven rather than argued — with the check disabled,
+          the test run logs the appointment landing at 11pm:
+        <div class="evidence"><span class="bad-line">[BOOKING] Rescheduled 4L74 to 2026-09-08T17:30:00+00:00</span>
+<span class="bad-line">                                  ^ 17:30 UTC = 23:00 India time</span></div>
+        The principle worth carrying: <b>a business rule that holds only because of an assumption
+        about how the caller will behave is not enforced, it is hoped for.</b> The language model is
+        not a validation layer — it is the untrusted input.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>64eec0b</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Rollback logic existed but could never fire</h3>
+      <span class="tag">TASK 3.4 · 2026-09-05</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">A tool call that should have been undone after a later step failed simply
+          wasn't. The rollback ("saga") code existed and was unit-tested. On a real call, nothing rolled
+          back, ever.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Two independent bugs stacked. First: the API schema for a tool never declared an
+          <code>undo.url</code> field, so pydantic silently dropped it on every save — every tool's undo
+          URL was permanently blank, making rollback unreachable by anything a customer could configure.
+          Second, deeper bug: the saga rolled back within <b>one batch</b> of tool calls. That assumes an
+          LLM calls multiple tools together in one response. <b>Groq's gpt-oss-120b — the model this
+          deployment actually runs — doesn't batch.</b> Asked for two things in one sentence, it called
+          them as two separate batches of one, 1.5 seconds apart. No batch ever held both the success and
+          the failure, so nothing ever qualified for rollback.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Unit tests constructed a batch containing both calls directly — a correct test
+          of the rollback <i>algorithm</i>, but one that assumed a batching behaviour the real model in
+          production never exhibits. The gap was between "the code is correct" and "the code's assumption
+          about the model matches the actual model."</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Declared <code>undo.url</code> in the schema. Rescoped the saga to accumulate
+          across one <b>caller request</b> — reset on the frame that marks the caller has stopped speaking
+          — rather than one batch, so it survives however many separate batches the model happens to split
+          a request into.</div>
+      </div>
+    </div>
+    <span class="commit">commits <code>44cd0e9</code> · <code>192f382</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A redirect reached the caller as "nothing was found"</h3>
+      <span class="tag">TASK 3.6 · 2026-09-05</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">A lookup tool hit against a real, renamed GitHub repository told the caller it
+          didn't exist.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">GitHub answers a renamed repo with <b>HTTP 301 and an empty body</b>. The HTTP
+          client used doesn't follow redirects by default; every field the tool was configured to extract
+          resolved to <code>None</code>, and the code's own "everything came back empty" rule — built to
+          catch APIs that return 200 with no real content — fired and reported the record as not found.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Deliberately <b>not</b> a blanket <code>follow_redirects=True</code> — that
+          checks nothing, and a customer's own endpoint answering
+          <code>302 → 169.254.169.254</code> (this server's own cloud metadata address) would have walked
+          the server into fetching its own credentials. Each redirect hop is re-checked against the same
+          SSRF allowlist as the original request, the auth header is dropped the moment the redirect
+          crosses to a different host, and only GET/HEAD are followed — a redirected POST is refused rather
+          than silently replayed, which could otherwise charge a payment twice.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>b573ba9</code></span>
+  </article>
+
+  <div class="section-head">
+    <span class="num">02</span><h2>Deployment &amp; infrastructure</h2><span class="rule"></span>
+  </div>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A reverse proxy fell through to the app's own HTML for three real API routes</h3>
+      <span class="tag">DEPLOYMENT · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Caught before the affected features were even reached in testing: three backend
+          routes — approvals, webhooks, payments — existed and worked, but nothing in the deployed reverse
+          proxy config listed them.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The proxy explicitly names which URL paths forward to the backend; everything
+          else falls through to the single-page app's own HTML with <b>HTTP 200</b>. Three routers had been
+          added to the backend across three different tasks, and the proxy config was never updated to
+          match — each request for one of those paths returned a page of HTML with a 200 status, not an
+          error.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">The local dev server's proxy forwards <i>anything it doesn't recognise itself</i>
+          to the backend by default — so all three routes worked perfectly on a laptop. Only the
+          production proxy config had the gap, and nothing tests a deployed reverse-proxy config against
+          the running application's actual route list.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Added the three missing routes to the proxy config. The one that mattered most:
+          the payment provider's own webhook lands on one of those paths — a provider POSTing "payment
+          received" would have received 200 and a page of HTML, marked the delivery successful, and never
+          retried. <b>A real payment, silently never recorded against the order</b>, and the postmortem
+          would have pointed at the payment provider instead of the proxy.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>a36f7bc</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>The same deploy command reported success and changed nothing — twice</h3>
+      <span class="tag">OPS · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Two unrelated incidents, hours apart, identical underneath. A rotated API
+          key that the running service kept ignoring. Then a fixed reverse-proxy route that stayed
+          broken after the fix was deployed. Both times the deploy command printed success.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Bringing a service up compares the <b>service definition</b> — image,
+          ports, declared environment — and does nothing if that is unchanged. Neither incident
+          changed it. The first was a value inside an env <i>file</i>; the second was a config file
+          mounted into the container. Both were correct on disk and neither was re-read, because
+          from the orchestrator's point of view there was nothing to do.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why it stayed hidden</span>
+        <div class="body">The output says <b>"Running"</b> or <b>"Started"</b> where a real change
+          says <b>"Recreated"</b> — one word, easy to read straight past, and no warning that the
+          file you just edited is not the one in effect. It cost a round of "the fix didn't work"
+          debugging on a fix that was correct both times.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Force a recreate for env changes, restart the service for a mounted config
+          file, and — the part worth keeping — <b>verify from inside the container rather than
+          trusting the deploy</b>: read the value back out of the running process's own environment,
+          and make a real authenticated request through the same client the application uses. A
+          convenience check gave a misleading answer here too: a bare HTTP client reported a
+          <code>403</code> that had nothing to do with the credential, because the provider's edge
+          network rejects unfamiliar user-agents.</div>
+      </div>
+    </div>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A container kept serving a rotated credential after the file was fixed</h3>
+      <span class="tag">OPS · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Rotated an LLM provider's API key after finding it exposed in a local permission
+          config. Every call afterwards greeted the caller, then went silent — the greeting is TTS-only and
+          worked; the actual conversation needs the LLM, which every request rejected with
+          <code>401 invalid_api_key</code>.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The env file on disk had the new key. The running container did not —
+          restarting a service with <code>up -d</code> reuses an existing container if its declared
+          config hasn't changed, rather than reading the env file fresh. Confirmed directly: querying the
+          key inside the running container returned the <i>old</i> prefix, not the new one.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body"><code>--force-recreate</code> on the container, then verified two ways before
+          trusting it: reading the key's prefix back out of the container's actual environment, and making
+          a real authenticated request through the exact SDK the application itself uses. Worth noting
+          separately: a <code>curl</code>-based check gave a false <code>403</code> here — the provider
+          sits behind an edge network that can reject a bare HTTP client's default user-agent — so the
+          decisive check was reproducing the real call path, not the most convenient tool at hand.</div>
+      </div>
+    </div>
+  </article>
+
+  <div class="section-head">
+    <span class="num">03</span><h2>Product gaps — correct backend, missing surface</h2><span class="rule"></span>
+  </div>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A fully built, validated setting had no way to be set</h3>
+      <span class="tag">TASK 3.5 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">The bot editor page had no timezone, opening-hours, or slot-length fields at
+          all — not broken, simply absent.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The backend had validated and stored all four fields since the booking feature
+          was first built — schema, per-field validation (a real IANA zone, not a raw UTC offset that
+          can't express daylight saving; HH:MM clocks), and the list endpoint already returned them. The
+          frontend simply never grew the corresponding inputs. Every bot silently ran on the class
+          defaults, with no way for an operator to say otherwise.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Added a Scheduling section to the editor: a time-zone dropdown (a closed list,
+          not free text — the backend rejects anything the zone database can't resolve, so a text field
+          would have mostly produced save errors), and opens/closes/slot-length inputs, wired straight to
+          the endpoints that already existed.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>efe91a0</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>An approval queue nobody could tell was full</h3>
+      <span class="tag">TASK 3.10 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">A live call raised a refund approval correctly, held the action, and waited
+          &mdash; and there was no way to know it had. The only signal was opening the Approvals page and
+          looking.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Every piece of the mechanism worked: the threshold check, the held action, the
+          authenticated approve and deny, the queue itself. What was never built was the part that says
+          <em>something is waiting</em>. The feature had been designed from the inside out &mdash; from
+          what the system must guarantee &mdash; and never once from the position of the person who has to
+          act within seconds while a caller holds the line. A test suite cannot catch this: nothing is
+          wrong, there is simply nothing there.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">A dedicated count endpoint (declared before the <code>/{id}</code> route, or the
+          router would read &ldquo;pending-count&rdquo; as an approval id), and an amber badge on the
+          Approvals link refreshed every twelve seconds. Amber rather than red: a waiting decision is a
+          normal request, not a failure. The count also goes into the accessible label, because a screen
+          reader announcing a bare &ldquo;Approvals&rdquo; loses the only part that says anything needs
+          doing.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>7435757</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Going to approve the refund hung up on the caller</h3>
+      <span class="tag">TASK 3.10 · 2026-09-07</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Mid-call, pressing back to reach the Approvals page ended the call. The exact
+          workflow task 3.10 exists for &mdash; approve a large refund while the caller waits on the line
+          &mdash; could not be done in one browser tab.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The call page owned the WebRTC peer connection, and its setup effect ended
+          <code>return () =&gt; stopSession()</code>. React runs that on unmount, and a route change
+          unmounts the page &mdash; so navigating and hanging up were literally the same action. Underneath
+          that was a structural gap rather than a bug: <code>App.tsx</code> was thirty-eight lines of flat
+          routes with the auth provider as the only wrapper, so <em>nothing</em> sat between the router and
+          the pages, and nothing could outlive one. The same gap produced two quieter symptoms nobody had
+          connected to it: the approvals badge could only ever appear on the dashboard, because that was
+          the only page with any navigation on it; and every back button hardcoded a destination instead of
+          stepping back through history, so back from Approvals went to the dashboard rather than to the
+          call it came from.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Lifted the peer connection, microphone stream, audio element and data channel
+          into a call context mounted above the routes; the call page became a <em>view</em> of that state
+          rather than its owner, and nothing ends a call now except someone ending it. Added a layout route
+          owning the background, header, navigation and badge, plus a call bar pinned to every other page
+          while a call is live &mdash; bot name, timer, mute, end. Back became history-based with a
+          per-page fallback. Net effect was mostly deletion: six hand-rolled headers, five copies of the
+          background and six copies of the loading spinner went away.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>ead0f03</code></span>
+  </article>
+
+  <footer>
+    <span>Voice Agent · Phase 3 live testing — complete, 3.1 through 3.10</span>
+    <span>Last updated 2026-09-07</span>
+  </footer>
+</div>

@@ -1,0 +1,454 @@
+<title>Anatomy of a Call</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#F5F7FA; --surface:#FFFFFF; --surface-2:#EDF1F7;
+  --line:#DDE4EE; --line-soft:#E9EDF4;
+  --text:#101828; --text-2:#4E5875; --text-3:#7B849E;
+  --signal:#0E7C86; --signal-bg:#0E7C8614;
+  --amber:#8A5A0F; --amber-bg:#8A5A0F14;
+  --coral:#A8323F; --coral-bg:#A8323F12;
+  --ok:#12695A; --ok-bg:#12695A14;
+  --shadow:0 1px 2px rgba(16,24,40,.05), 0 8px 24px rgba(16,24,40,.05);
+  --stage-rail:#C9D4E4;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#070B13; --surface:#0F1626; --surface-2:#161F33;
+  --line:#232E47; --line-soft:#1B2437;
+  --text:#E9EFF9; --text-2:#9EAAC6; --text-3:#6D7898;
+  --signal:#3FD0C9; --signal-bg:#3FD0C918;
+  --amber:#E3A85C; --amber-bg:#E3A85C16;
+  --coral:#F0868F; --coral-bg:#F0868F16;
+  --ok:#4ED6AE; --ok-bg:#4ED6AE16;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.34);
+  --stage-rail:#2A3552;
+}}
+:root[data-theme="dark"]{
+  --paper:#070B13; --surface:#0F1626; --surface-2:#161F33;
+  --line:#232E47; --line-soft:#1B2437;
+  --text:#E9EFF9; --text-2:#9EAAC6; --text-3:#6D7898;
+  --signal:#3FD0C9; --signal-bg:#3FD0C918;
+  --amber:#E3A85C; --amber-bg:#E3A85C16;
+  --coral:#F0868F; --coral-bg:#F0868F16;
+  --ok:#4ED6AE; --ok-bg:#4ED6AE16;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.34);
+  --stage-rail:#2A3552;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--text);
+  font:400 16px/1.62 "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1040px; margin:0 auto; padding:56px 24px 96px}
+
+h1,h2,h3,.disp{font-family:"Archivo", system-ui, sans-serif; text-wrap:balance; margin:0}
+h1{font-size:clamp(34px,5.2vw,52px); font-weight:800; letter-spacing:-.022em; line-height:1.06}
+h2{font-size:26px; font-weight:700; letter-spacing:-.012em}
+h3{font-size:17px; font-weight:700; letter-spacing:-.005em}
+p{margin:0}
+code,.mono{font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:.88em}
+
+.eyebrow{
+  font-family:"IBM Plex Mono", monospace; font-size:11px; font-weight:500;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--signal);
+}
+
+/* ---- header ---- */
+header{display:flex; flex-direction:column; gap:16px; margin-bottom:14px}
+.lede{font-size:18px; color:var(--text-2); max-width:64ch}
+.meta{
+  display:flex; flex-wrap:wrap; gap:8px 22px; padding-top:18px;
+  border-top:1px solid var(--line); margin-top:8px;
+  font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--text-3);
+}
+.meta b{color:var(--text-2); font-weight:500}
+
+/* ---- section ---- */
+section{margin-top:60px; display:flex; flex-direction:column; gap:20px}
+.sec-head{display:flex; flex-direction:column; gap:7px}
+.sec-desc{color:var(--text-2); max-width:70ch; font-size:15.5px}
+
+/* ---- pipeline stages ---- */
+.stages{display:flex; flex-direction:column; gap:0}
+.stage{
+  display:grid; grid-template-columns:64px 1fr; gap:0 22px;
+  padding-bottom:30px; position:relative;
+}
+.stage:not(:last-child)::before{
+  content:""; position:absolute; left:23px; top:38px; bottom:0;
+  width:2px; background:var(--stage-rail); border-radius:2px;
+}
+.dot{
+  width:46px; height:46px; border-radius:50%;
+  display:grid; place-items:center; z-index:1;
+  background:var(--surface); border:2px solid var(--stage-rail);
+  font-family:"IBM Plex Mono",monospace; font-size:13px; font-weight:500;
+  color:var(--text-2);
+}
+.stage-body{display:flex; flex-direction:column; gap:11px; padding-top:9px; min-width:0}
+.stage-top{display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 12px}
+.pick{
+  font-family:"IBM Plex Mono",monospace; font-size:12.5px; font-weight:500;
+  color:var(--signal); background:var(--signal-bg);
+  padding:3px 9px; border-radius:5px; white-space:nowrap;
+}
+.stage p{color:var(--text-2); font-size:15px; max-width:72ch}
+.why{
+  display:grid; gap:9px; padding:14px 16px; border-radius:9px;
+  background:var(--surface); border:1px solid var(--line-soft);
+}
+.why div{display:grid; grid-template-columns:96px 1fr; gap:14px; align-items:start}
+.why dt{
+  font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:500;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--text-3);
+  padding-top:3px;
+}
+.why dd{margin:0; font-size:14.5px; color:var(--text-2)}
+.why dd b{color:var(--text); font-weight:600}
+
+/* ---- measured figures ---- */
+.figs{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:1px;
+  background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden;
+}
+.fig{background:var(--surface); padding:15px 17px; display:flex; flex-direction:column; gap:3px}
+.fig .n{
+  font-family:"IBM Plex Mono",monospace; font-size:21px; font-weight:500;
+  color:var(--signal); font-variant-numeric:tabular-nums;
+}
+.fig .l{font-size:12.5px; color:var(--text-3); line-height:1.35}
+
+/* ---- platform table ---- */
+.tw{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:620px; font-size:14.5px}
+th,td{text-align:left; padding:12px 16px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+th{
+  font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:500;
+  letter-spacing:.09em; text-transform:uppercase; color:var(--text-3);
+  background:var(--surface-2); border-bottom:1px solid var(--line);
+}
+tbody tr:last-child td{border-bottom:0}
+td b{font-weight:600}
+td.t{white-space:nowrap}
+.tier{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; padding:2px 7px;
+  border-radius:4px; white-space:nowrap;
+}
+.tier.free{color:var(--ok); background:var(--ok-bg)}
+.tier.cap{color:var(--amber); background:var(--amber-bg)}
+
+/* ---- decision cards ---- */
+.decisions{display:grid; grid-template-columns:repeat(auto-fit,minmax(292px,1fr)); gap:14px}
+.dec{
+  background:var(--surface); border:1px solid var(--line); border-radius:11px;
+  padding:19px 20px; display:flex; flex-direction:column; gap:9px; box-shadow:var(--shadow);
+}
+.dec h3{color:var(--text)}
+.dec p{font-size:14.5px; color:var(--text-2)}
+.dec .q{
+  font-size:13px; color:var(--signal); font-weight:500;
+  padding-top:10px; margin-top:auto; border-top:1px dashed var(--line);
+}
+
+/* ---- war stories ---- */
+.stories{display:flex; flex-direction:column; gap:12px}
+.story{
+  border-left:3px solid var(--coral); background:var(--coral-bg);
+  border-radius:0 10px 10px 0; padding:17px 20px;
+  display:flex; flex-direction:column; gap:8px;
+}
+.story h3{color:var(--text)}
+.story p{font-size:14.5px; color:var(--text-2)}
+.story .lesson{font-size:13.5px; color:var(--text); font-weight:500}
+.story .lesson::before{content:"Lesson  "; font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px; letter-spacing:.08em; color:var(--coral); font-weight:500}
+
+.note{
+  padding:15px 18px; border-radius:9px; background:var(--amber-bg);
+  border:1px solid color-mix(in srgb, var(--amber) 26%, transparent);
+  font-size:14.5px; color:var(--text-2);
+}
+.note b{color:var(--text)}
+
+footer{
+  margin-top:64px; padding-top:20px; border-top:1px solid var(--line);
+  font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--text-3);
+}
+
+@media (max-width:620px){
+  .wrap{padding:38px 17px 68px}
+  .stage{grid-template-columns:38px 1fr; gap:0 15px}
+  .stage:not(:last-child)::before{left:15px; top:32px}
+  .dot{width:30px; height:30px; font-size:11px}
+  .why div{grid-template-columns:1fr; gap:3px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">Interview reference · Phases 1–2 complete</span>
+  <h1>Anatomy of a Call</h1>
+  <p class="lede">
+    Every technology in the voice agent, arranged in the order a single spoken sentence
+    passes through it — what each piece does, why it was chosen over the alternative,
+    and the question an interviewer is likely to ask about it.
+  </p>
+  <div class="meta">
+    <span><b>Stack</b> Python · FastAPI · Pipecat 1.7 · React · TypeScript</span>
+    <span><b>Runs on</b> GCP VM, Docker Compose</span>
+    <span><b>Tasks done</b> 18 of 68</span>
+  </div>
+</header>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">The path</span>
+    <h2>What happens when someone speaks</h2>
+    <p class="sec-desc">
+      A caller says one sentence. Between their microphone and the reply they hear,
+      it passes through eight stages. Each stage is a decision, and each decision has
+      an alternative that was considered and rejected.
+    </p>
+  </div>
+
+  <div class="stages">
+
+    <div class="stage">
+      <div class="dot">01</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Getting the audio there</h3><span class="pick">WebRTC · aiortc · coturn</span></div>
+        <p>The browser captures the microphone and streams it to the server as it is spoken — not as a file uploaded afterwards.</p>
+        <dl class="why">
+          <div><dt>Why this</dt><dd>WebRTC is the only browser technology built for <b>live, low-latency, two-way audio</b>. Anything file-based adds seconds before a word is even heard.</dd></div>
+          <div><dt>Instead of</dt><dd>WebSockets carrying raw audio — workable, but you rebuild jitter buffering, packet loss handling and echo cancellation yourself.</dd></div>
+          <div><dt>The catch</dt><dd>WebRTC needs UDP and a <b>TURN relay</b> (coturn) for callers behind restrictive networks — mobile data especially. This is the reason the project runs on a plain VM instead of a serverless host.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">02</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Noticing that someone is speaking</h3><span class="pick">Silero VAD</span></div>
+        <p>A small model watches the audio and decides, moment to moment, whether the sound is human speech or just noise.</p>
+        <dl class="why">
+          <div><dt>Why this</dt><dd>Runs locally in milliseconds, costs nothing per call, and scores <b>speech probability</b> rather than mere loudness — so a slammed door doesn't register as talking.</dd></div>
+          <div><dt>Instead of</dt><dd>A volume threshold. Simple, and wrong: it cannot tell a loud room from a quiet voice.</dd></div>
+          <div><dt>Tuned to</dt><dd><code>confidence 0.6</code>, set from measurements, not guesswork — real speech scores <b>0.92–0.99</b> on this microphone, background noise <b>0.18–0.43</b>.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">03</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Deciding they have finished</h3><span class="pick">Smart Turn v3 · ONNX</span></div>
+        <p>The hardest problem in voice. A pause mid-sentence is not the same as being done, and answering into a pause is what makes bots feel robotic.</p>
+        <dl class="why">
+          <div><dt>Why this</dt><dd>A classifier that listens to <b>how</b> the sentence trailed off — intonation, not just silence — so "I'd like to book…" is recognised as unfinished.</dd></div>
+          <div><dt>Instead of</dt><dd>A fixed silence timer. Too short and it interrupts; too long and every reply feels sluggish. There is no value that is right for both.</dd></div>
+          <div><dt>Runs</dt><dd>Locally as an ONNX model inside the call process — no network round-trip in the most latency-critical decision in the system.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">04</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Turning speech into text</h3><span class="pick">Deepgram · Whisper fallback</span></div>
+        <p>Streaming transcription: words arrive as they are spoken, refined as more context arrives, then finalised.</p>
+        <dl class="why">
+          <div><dt>Why this</dt><dd>Genuinely streaming, strong on Indian-accented English and Hindi, and exposes <b>endpointing</b> — control over how long a pause must be before a sentence is closed.</dd></div>
+          <div><dt>Instead of</dt><dd>OpenAI Whisper API, which transcribes complete audio files — excellent quality, unusable for live conversation.</dd></div>
+          <div><dt>Also built</dt><dd>Local <code>faster-whisper</code> behind the same interface, so the system can run with no speech vendor at all.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">05</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Finding the relevant documents</h3><span class="pick">Pinecone · hybrid + rerank</span></div>
+        <p>The caller's question is matched against their uploaded documents, and the best passages are handed to the AI along with the question.</p>
+        <dl class="why">
+          <div><dt>Why hybrid</dt><dd>Two indexes are searched at once. Dense vectors find <b>meaning</b> ("refund policy" ≈ "money back"); sparse keyword search finds <b>exact strings</b> — order numbers, part codes — that embeddings represent poorly.</dd></div>
+          <div><dt>Why rerank</dt><dd>Raw similarity scores cluster tightly: good and irrelevant matches both land around 0.6, so no threshold separates them. A cross-encoder reads the question <em>against</em> each candidate and spreads scores <b>0.0 to 0.9</b>, which makes a real cut-off possible.</dd></div>
+          <div><dt>Also</dt><dd>Spoken questions are rewritten before searching — "umm what about the second one" is not a search query.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">06</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Thinking of a reply</h3><span class="pick">Groq · gpt-oss-120b</span></div>
+        <p>The language model receives the conversation, the retrieved documents and the available tools, and writes the answer.</p>
+        <dl class="why">
+          <div><dt>Why Groq</dt><dd>Speed, and only speed. Groq runs open models on custom silicon and <b>starts</b> replying in roughly 80ms where a conventional host takes 400ms. In a voice call that difference is audible.</dd></div>
+          <div><dt>Instead of</dt><dd>GPT-4o directly — better at hard reasoning, but the added latency is felt on every single turn. It stays available as a per-bot setting.</dd></div>
+          <div><dt>The principle</dt><dd>Below about <b>800ms</b> a reply feels conversational; past 1.5s it feels like a machine. Latency is the product, not a metric.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">07</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Speaking it aloud</h3><span class="pick">Cartesia Sonic · Piper fallback</span></div>
+        <p>Text becomes audio and streams back while the rest of the sentence is still being generated.</p>
+        <dl class="why">
+          <div><dt>Why this</dt><dd>First audio in <b>60–100ms</b>, measured live, and genuinely multilingual — the same system speaks Hindi, French and Spanish with native voices.</dd></div>
+          <div><dt>Instead of</dt><dd>ElevenLabs (higher quality, higher latency and cost) or cloud TTS from Google/Azure (slower to start speaking).</dd></div>
+          <div><dt>Free path</dt><dd><b>Piper</b> runs locally at no cost with a Hindi voice, switchable with one setting — the answer to "what happens when the credits run out".</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">08</div>
+      <div class="stage-body">
+        <div class="stage-top"><h3>Holding it all together</h3><span class="pick">Pipecat 1.7</span></div>
+        <p>The framework that connects all of the above as a pipeline of processors, with audio flowing through as frames.</p>
+        <dl class="why">
+          <div><dt>Why a framework</dt><dd>Turn-taking, interruption, frame ordering and back-pressure are each subtle enough to get wrong. Pipecat solves them and leaves the domain logic to you.</dd></div>
+          <div><dt>Instead of</dt><dd>LiveKit Agents or a hand-rolled asyncio pipeline. Hand-rolling means owning barge-in and interruption semantics forever.</dd></div>
+          <div><dt>Worth saying</dt><dd>Custom processors were still written on top of it — Markdown stripping, transcript recording, and retrieval placement.</dd></div>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Measured, not estimated</span>
+    <h2>Numbers from real calls</h2>
+    <p class="sec-desc">Taken from production logs on the deployed server. Being able to quote these is more convincing than describing the architecture.</p>
+  </div>
+  <div class="figs">
+    <div class="fig"><span class="n">60–100<span style="font-size:13px">ms</span></span><span class="l">Cartesia time to first audio</span></div>
+    <div class="fig"><span class="n">~750<span style="font-size:13px">ms</span></span><span class="l">Deepgram transcript latency</span></div>
+    <div class="fig"><span class="n">1.4<span style="font-size:13px">s</span></span><span class="l">Best full turn, caller to reply</span></div>
+    <div class="fig"><span class="n">0.04<span style="font-size:13px">s</span></span><span class="l">Worker claim, after pooling</span></div>
+    <div class="fig"><span class="n">13.7<span style="font-size:13px">s</span></span><span class="l">Worker claim, before pooling</span></div>
+    <div class="fig"><span class="n">28/32</span><span class="l">Retrieval accuracy baseline</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Accounts and services</span>
+    <h2>Every platform, and what it costs</h2>
+    <p class="sec-desc">Expect "how would this scale, and what does it cost?" — knowing which tier each service sits on answers it concretely.</p>
+  </div>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Service</th><th>Role</th><th class="t">Tier</th><th>Worth knowing</th></tr></thead>
+      <tbody>
+        <tr><td class="t"><b>Deepgram</b></td><td>Speech to text</td><td><span class="tier free">Credits</span></td><td>Streaming transcription; endpointing is configurable</td></tr>
+        <tr><td class="t"><b>Cartesia</b></td><td>Text to speech</td><td><span class="tier cap">Metered</span></td><td>Credits are consumed per character; Piper is the free fallback</td></tr>
+        <tr><td class="t"><b>Groq</b></td><td>Language model</td><td><span class="tier free">Free tier</span></td><td>Open models on custom hardware, chosen for latency</td></tr>
+        <tr><td class="t"><b>OpenAI</b></td><td>Embeddings, query rewriting</td><td><span class="tier cap">Metered</span></td><td>Also the alternative LLM provider</td></tr>
+        <tr><td class="t"><b>Pinecone</b></td><td>Vector search + rerank</td><td><span class="tier cap">500/mo rerank</span></td><td>Two indexes: one dense, one sparse</td></tr>
+        <tr><td class="t"><b>MongoDB Atlas</b></td><td>Bots, users, transcripts, files</td><td><span class="tier free">Free M0</span></td><td>Beanie ODM; PDFs stored in GridFS</td></tr>
+        <tr><td class="t"><b>Google Cloud</b></td><td>The server itself</td><td><span class="tier cap">Trial</span></td><td>2 vCPU / 4GB VM in Mumbai, static IP</td></tr>
+        <tr><td class="t"><b>Sentry</b></td><td>Error tracking</td><td><span class="tier free">Free tier</span></td><td>Separate projects for backend and browser</td></tr>
+        <tr><td class="t"><b>Langfuse</b></td><td>AI call tracing and cost</td><td><span class="tier free">Hobby</span></td><td>EU region, chosen for the data-residency answer</td></tr>
+        <tr><td class="t"><b>GitHub Actions</b></td><td>Automated testing</td><td><span class="tier free">Free</span></td><td>Lint, tests, dependency scan, secret scan</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note">
+    <b>The honest answer on cost:</b> every paid piece has a free replacement already built and switchable by configuration — local Whisper for speech, Piper for voice. That was the entire point of the provider layer, and it is a stronger answer than a price list.
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Design decisions</span>
+    <h2>Choices worth defending</h2>
+    <p class="sec-desc">These are the parts an interviewer will probe, because each one has a real trade-off behind it.</p>
+  </div>
+  <div class="decisions">
+
+    <div class="dec">
+      <h3>One process per call</h3>
+      <p>Every call runs in its own operating-system process rather than sharing one. A crash takes down that call and nothing else.</p>
+      <p class="q">"How do you stop one bad call taking out the server?"</p>
+    </div>
+
+    <div class="dec">
+      <h3>A pool of warm workers</h3>
+      <p>Starting a process means loading the whole audio stack — 13.7s cold. Processes are started <em>before</em> anyone calls, so claiming one takes 0.04s.</p>
+      <p class="q">"Where did your latency actually go?"</p>
+    </div>
+
+    <div class="dec">
+      <h3>A provider layer, not direct calls</h3>
+      <p>Nothing calls Deepgram or Cartesia directly. A factory returns whichever provider configuration names, so cloud and local swap with no code change.</p>
+      <p class="q">"What if a vendor doubles their price?"</p>
+    </div>
+
+    <div class="dec">
+      <h3>Retrieval after turn assembly</h3>
+      <p>Document search was firing on half-sentences, because it sat before the component that assembles a complete turn. Moving it after made the bug structurally impossible.</p>
+      <p class="q">"Tell me about a bug that changed your design."</p>
+    </div>
+
+    <div class="dec">
+      <h3>Spawn, never fork</h3>
+      <p>Linux defaults to <code>fork</code> for new processes; the database client inherits a dead event loop and every call fails. Forcing <code>spawn</code> everywhere makes Linux behave like the machine it was written on.</p>
+      <p class="q">"Something that only broke in production?"</p>
+    </div>
+
+    <div class="dec">
+      <h3>Language reaches all three layers</h3>
+      <p>A bot's language must reach transcription, speech synthesis <em>and</em> the model's prompt. Reaching only two produced a bot that heard Hindi and answered in English.</p>
+      <p class="q">"How do you handle multiple languages?"</p>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">War stories</span>
+    <h2>Bugs worth telling</h2>
+    <p class="sec-desc">
+      "Tell me about a difficult bug" is asked in almost every interview. These are real, they were found in production logs, and each has a transferable lesson.
+    </p>
+  </div>
+  <div class="stories">
+
+    <div class="story">
+      <h3>Two bots answered the same caller</h3>
+      <p>A caller heard two voices talking over each other — one replying in Hindi that it could hear them, the other in English that it could not speak. The logs showed two complete pipelines running for one call, each with its own conversation history. A second connection had been created without the first being closed, leaving it live but unreachable from the page that made it.</p>
+      <p class="lesson">Fixed on both sides. The client stopped creating the second connection; the server stopped being willing to run two — because the server must hold even when the client misbehaves.</p>
+    </div>
+
+    <div class="story">
+      <h3>Settings that were silently ignored</h3>
+      <p>Passing <code>language="hi"</code> to the speech service did nothing. No error, no warning — the value was discarded and the default kept, so every Hindi call was transcribed and synthesised as English. The same pattern was eventually found in <b>four</b> different places in the codebase.</p>
+      <p class="lesson">A configuration value that silently fails to apply produces no error and no log line. Tests now assert on the constructed object, not just that construction succeeded.</p>
+    </div>
+
+    <div class="story">
+      <h3>Sentences cut in half</h3>
+      <p>Callers' sentences were being split mid-thought, with the second half arriving as a separate question. Two rounds of fixes to the transcription settings changed nothing. The real cause: the speech detector was never firing at all, so the framework silently fell back to guessing turn boundaries from transcripts.</p>
+      <p class="lesson">The debug logging was itself wrong — it labelled a different event as "VAD", so the logs asserted a component was working while it was completely idle. Instrumentation was added to measure the real values; the threshold was then set by arithmetic rather than a fourth guess.</p>
+    </div>
+
+  </div>
+</section>
+
+<footer>
+  Voice agent · Phases 1–2 of 8 complete · 18 of 68 tasks · figures from production logs, September 2026
+</footer>
+
+</div>

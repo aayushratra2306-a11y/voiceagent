@@ -19,14 +19,22 @@ from pathlib import Path
 
 from loguru import logger
 from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.deepgram.stt import DeepgramSTTService, DeepgramSTTSettings
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.piper.tts import PiperTTSService
-from pipecat.services.whisper.stt import WhisperSTTService
 from websockets.protocol import State
 
 from app.core.config import settings
+from app.pipeline.language import resolve_voice
+
+# The LOCAL providers (Whisper, Piper) are imported inside their factory
+# branches, not here. Task 2.4 spawns a fresh interpreter per call, so every
+# module imported at this level is re-imported on every single call before
+# the caller hears anything. faster-whisper pulls in CTranslate2 and costs
+# about 2s of that startup — paid on every call even when stt_provider is
+# 'deepgram', which is the default and what the deployed server actually
+# runs. Measured 2026-09-03: 3.75s to import with it, 1.71s without.
+
 
 # Task 2.2 — where local model files (Whisper weights via faster-whisper's
 # own cache, Piper .onnx voices) get stored. Keeping this inside the repo
@@ -105,6 +113,9 @@ def get_stt_service(language: str = "en"):
     'deepgram' (cloud, default) or 'whisper' (local, free, via faster-whisper).
     """
     if settings.stt_provider == "whisper":
+        # Imported here, not at module level — see the note by the imports.
+        from pipecat.services.whisper.stt import WhisperSTTService
+
         logger.info(f"[PROVIDERS] STT: local Whisper ({settings.whisper_model}, cpu)")
         return WhisperSTTService(
             model=settings.whisper_model,
@@ -114,12 +125,102 @@ def get_stt_service(language: str = "en"):
     # endpointing/interim_results explicit rather than left at Deepgram's
     # undocumented default — see voice_pipeline.py's original Task 1.1 note
     # for the full story (a final transcript never arrived without this).
+    #
+    # endpointing=500, not 300 (found 2026-09-03 from live transcripts).
+    # This is the silence duration, in ms, before Deepgram closes a chunk
+    # out as `is_final` and pipecat pushes it downstream as its own
+    # TranscriptionFrame. Pipecat 1.7.0's Deepgram wrapper does this
+    # unconditionally for every is_final result — confirmed by reading
+    # _on_message directly — with no merging and no handler for Deepgram's
+    # own UtteranceEnd event (utterance_end_ms is accepted and forwarded,
+    # but nothing consumes the event it produces in this version). So a
+    # pause anywhere above the endpointing threshold splits one spoken
+    # sentence into multiple separate "final" transcripts — confirmed live:
+    # "this today's date and time, I mean," and "I just" arrived as two
+    # unrelated user turns for what was one continuous sentence with a
+    # mid-thought pause.
+    #
+    # 300ms was more aggressive than the turn-detector already tolerates:
+    # the VAD's own stop_secs is 500ms (raised deliberately on 2026-08-31,
+    # see the long note in voice_pipeline.py, after live testing showed the
+    # bot cutting people off before that change). Deepgram closing a chunk
+    # at 300ms while the rest of the system already accepts a pause up to
+    # 500ms as still-mid-turn meant Deepgram was fragmenting sentences the
+    # turn-detector itself would have waited through. Matching the two
+    # numbers doesn't eliminate the risk — a pause longer than 500ms still
+    # splits — but it stops Deepgram being the MORE trigger-happy of the
+    # two systems making this decision.
+    #
+    # (What this alone didn't fix — RAGContextProcessor reacting to every
+    # fragment instead of a real completed turn — was addressed separately
+    # in rag_processor.py's latest_user_text(), 2026-09-03.)
+    #
+    # ttfs_p99_latency=0.7 (found 2026-09-03, following pipecat's own
+    # documented remedy, not a guess). Deepgram's built-in default here is
+    # 0.35s — but pipecat's stt_latency.py states plainly that figure was
+    # benchmarked at their recommended stop_secs=0.2, and says explicitly:
+    # "If you change stop_secs, re-run the benchmark ... and pass the
+    # measured value to your STT service constructor." We changed stop_secs
+    # to 0.5 (see the note above) and never did that — the result, logged on
+    # every single call: "STT wait timeout collapsed to 0s, which may cause
+    # delayed turn detection". Confirmed by reading
+    # turn_analyzer_user_turn_stop_strategy.py directly: once
+    # stt_timeout <= stop_secs, the safety-net window that's supposed to
+    # wait a little extra for a transcript to actually arrive computes to
+    # zero and stops doing its job.
+    #
+    # 0.7 is a deliberately conservative margin above 0.5, not a re-run
+    # benchmark result — this environment has no way to run pipecat's own
+    # https://github.com/pipecat-ai/stt-benchmark tool against this specific
+    # network path. It's large enough to guarantee the collapse condition
+    # never triggers, small enough to add at most ~200ms over the minimum
+    # that would satisfy it. Re-running the real benchmark would give a
+    # more precise number; this removes the defect without needing to.
+    #
+    # This is NOT a fix for Smart Turn's own COMPLETE/INCOMPLETE judgment —
+    # checked directly: BaseSmartTurn and LocalSmartTurnV3 expose no
+    # confidence threshold or similar tunable, only stop_secs (already set
+    # above). Smart Turn misjudging a genuine pause is a separate, real
+    # model-accuracy limit this change does not touch.
+    # BUG FOUND 2026-09-03, and it's a serious one: language, endpointing and
+    # interim_results were being passed as bare keyword arguments to
+    # DeepgramSTTService(...) — which silently drops every one of them. This
+    # is the SAME silent-extra-field-drop pattern already found twice before
+    # in this project (Task 1.1's VAD params, and PipelineParams' audio
+    # fields) — a fourth occurrence would have been worth a project-wide
+    # sweep on its own, but three is already the pattern to watch for.
+    #
+    # Confirmed directly by constructing the real service and inspecting
+    # `_settings` afterward: a bare `language="hi"` produced `_settings.
+    # language == "en"` — the class's own hardcoded default, completely
+    # unaffected by what we passed. Concretely, this means every Hindi-
+    # configured bot has been transcribed as if it were English on this,
+    # the DEFAULT cloud path, for as long as this code has existed. The
+    # earlier "faster-whisper verified live in English and Hindi" note in
+    # project memory is real but describes the LOCAL provider path
+    # (stt_provider="whisper") — a different code path from this one, which
+    # is what every bot actually uses unless explicitly switched over.
+    # `endpointing=500` (this session's earlier fix, commit 55059c7) never
+    # took effect either, for the same reason — Deepgram has been running
+    # on its own undocumented server-side default the whole time regardless
+    # of what number was written here.
+    #
+    # The Deepgram service's docstring names the fix directly: these three
+    # are "runtime-updatable fields" that belong on `settings=Deepgram
+    # STTService.Settings(...)`, not passed as init kwargs — init kwargs are
+    # for "connection-level config" only (api_key, ttfs_p99_latency, and the
+    # like). Verified the corrected form actually lands: constructing with
+    # `settings=DeepgramSTTSettings(language="hi", ...)` produces
+    # `_settings.language == "hi"`, matching what was intended all along.
     logger.info("[PROVIDERS] STT: Deepgram (cloud)")
     return DeepgramSTTService(
         api_key=settings.deepgram_api_key,
-        language=language,
-        endpointing=300,
-        interim_results=True,
+        ttfs_p99_latency=0.7,
+        settings=DeepgramSTTSettings(
+            language=language,
+            endpointing=500,
+            interim_results=True,
+        ),
     )
 
 
@@ -164,6 +265,9 @@ def get_tts_service(voice_id: str, language: str = "en"):
     project's distribution plans ever need it.
     """
     if settings.tts_provider == "piper":
+        # Imported here, not at module level — see the note by the imports.
+        from pipecat.services.piper.tts import PiperTTSService
+
         voice = _PIPER_VOICES.get(_base_lang(language), _PIPER_VOICES["en"])
         logger.info(f"[PROVIDERS] TTS: local Piper (voice={voice})")
         return PiperTTSService(
@@ -171,5 +275,30 @@ def get_tts_service(voice_id: str, language: str = "en"):
             download_dir=LOCAL_MODELS_DIR,
         )
 
-    logger.info("[PROVIDERS] TTS: Cartesia (cloud)")
-    return ResilientCartesiaTTSService(api_key=settings.cartesia_api_key, voice_id=voice_id, language=language)
+    # The bot's stored voice may predate per-language voices, in which case
+    # it is an English voice about to read Hindi with an English accent.
+    # See language.resolve_voice() — it corrects only a known mismatch.
+    voice_id = resolve_voice(voice_id, language)
+    lang = _base_lang(language)
+
+    # FOUND 2026-09-04, and it is the FOURTH time this exact pattern has bitten
+    # this project (after task 1.1's VAD params, PipelineParams' audio fields,
+    # and Deepgram's language/endpointing in dd5d3a7). `voice_id=` and
+    # `language=` as bare constructor kwargs are not both honoured:
+    # pipecat maps the deprecated voice_id onto settings.voice, but `language`
+    # is silently discarded and left at its 'en' default. Confirmed by direct
+    # inspection — constructing with language="hi" produced
+    # CartesiaTTSSettings(..., language='en').
+    #
+    # So every Hindi call has been synthesised with Cartesia told the text was
+    # ENGLISH. That is a direct cause of the accent the user reported on
+    # 2026-09-04, and separate from which voice is chosen: even a native Hindi
+    # voice would be rendered with English pronunciation rules.
+    #
+    # Routed through settings= per the deprecation warning pipecat itself
+    # emits, which is the documented path for both fields.
+    logger.info(f"[PROVIDERS] TTS: Cartesia (cloud, voice={voice_id}, lang={lang})")
+    return ResilientCartesiaTTSService(
+        api_key=settings.cartesia_api_key,
+        settings=ResilientCartesiaTTSService.Settings(voice=voice_id, language=lang),
+    )

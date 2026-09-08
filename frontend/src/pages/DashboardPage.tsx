@@ -2,12 +2,10 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { listBots, deleteBot } from '../lib/api'
 import type { Bot } from '../lib/api'
-import { useAuth } from '../context/AuthContext'
 
 export default function DashboardPage() {
   const [bots, setBots] = useState<Bot[]>([])
   const [loading, setLoading] = useState(true)
-  const { logout } = useAuth()
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -24,33 +22,6 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      {/* Background blobs */}
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-      <div className="absolute bottom-[-20%] left-[-5%] w-[400px] h-[400px] rounded-full bg-indigo-700/15 blur-[120px] pointer-events-none" />
-
-      {/* Header */}
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center justify-between backdrop-blur-sm">
-        <div className="flex items-center gap-2">
-          {/* Logomark */}
-          <svg width="18" height="18" viewBox="0 0 26 26" fill="none">
-            <rect x="0"  y="14" width="5" height="12" rx="2.5" fill="#00D4FF" opacity="0.5"/>
-            <rect x="7"  y="7"  width="5" height="19" rx="2.5" fill="#00D4FF" opacity="0.75"/>
-            <rect x="14" y="2"  width="5" height="24" rx="2.5" fill="#00D4FF"/>
-            <rect x="21" y="9"  width="5" height="17" rx="2.5" fill="#00D4FF" opacity="0.6"/>
-          </svg>
-          <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 900, fontSize: '1.45rem', letterSpacing: '0.07em', color: '#00D4FF', lineHeight: 1, textShadow: '0 0 16px rgba(0,212,255,0.22)' }}>
-            AURIS
-          </span>
-        </div>
-        <button
-          onClick={() => { logout(); navigate('/') }}
-          className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
-        >
-          Sign out
-        </button>
-      </header>
-
       <main className="relative z-10 max-w-3xl mx-auto px-6 py-10">
         <div className="flex items-center justify-between mb-7">
           <div>
@@ -142,6 +113,5 @@ export default function DashboardPage() {
           </div>
         )}
       </main>
-    </div>
   )
 }

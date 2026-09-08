@@ -1,5 +1,8 @@
 import asyncio
 import multiprocessing as mp
+import time
+from dataclasses import dataclass
+from multiprocessing.synchronize import Event as EventClass
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -9,7 +12,7 @@ from app.core.auth import get_current_user
 from app.core.config import settings
 from app.core.deps import fetch_owned_bot
 from app.models.user import User
-from app.pipeline.call_worker import call_worker_main
+from app.pipeline.call_worker import call_worker_main, pooled_worker_main
 
 router = APIRouter(tags=["voice"])
 
@@ -37,14 +40,149 @@ _MP = mp.get_context("spawn")
 # over the 15s this used to allow.
 CALL_SETUP_TIMEOUT_SECONDS = 45
 
-# Task 2.4 — pc_id -> (process, ice_queue) for every currently-live call.
-# Populated in connect(), read by ice_candidate() to route trickle ICE to
-# the right process, cleaned up by _reap_dead_calls() (started in main.py's
+# Task 2.4 — pc_id -> the currently-live call for it. Populated in
+# connect(), read by ice_candidate() to route trickle ICE to the right
+# process, cleaned up by _reap_dead_calls() (started in main.py's
 # lifespan). In-memory and single-process-API-server only — fine for now
 # (matches the rest of this project's current scale), but if the API layer
 # itself is ever run as multiple replicas, this registry needs to move to
 # something shared (Redis) so any replica can route to any call's worker.
-_active_calls: dict[str, tuple[mp.Process, mp.Queue]] = {}
+@dataclass
+class _ActiveCall:
+    process: mp.Process
+    ice_queue: mp.Queue
+    user_id: str
+    # Task 3.7 — parent -> child, for a payment webhook that lands here
+    # minutes after the link was sent and needs to reach the call that is
+    # still in progress. See get_payment_queue() below.
+    payment_queue: "mp.Queue | None" = None
+
+
+_active_calls: dict[str, _ActiveCall] = {}
+
+
+def _end_previous_calls_for(user_id: str) -> None:
+    """Enforce one live call per user, killing any earlier one.
+
+    FOUND 2026-09-03, from a call the user reported as "not a proper call".
+    The backend had no such rule, and the logs showed the consequence
+    plainly: two pipelines, two conversation IDs, two turn counters
+    (5->6->7->8 alongside 4->5->6), both transcribing the same spoken words
+    within milliseconds of each other, each running its own RAG lookup and
+    its own LLM completion against its own private history, and each
+    speaking its own answer into the same call. The caller heard two bots at
+    once — one replying in Hindi that it could hear them, the other in
+    English that it was "just sending you text responses, so you won't
+    actually hear a voice from me".
+
+    The stale pipeline is not idle in this state, which is what makes it so
+    disruptive: it still holds a live inbound media track, so it keeps
+    hearing the caller and keeps answering. It also does not clean itself up
+    promptly — the orphan in that log sat on an open Deepgram stream for 209
+    seconds and was only reaped when aiortc's own no-audio timeout finally
+    fired, minutes after the caller had hung up.
+
+    A browser is not required to misbehave badly for this to happen: any
+    path that reaches startSession() twice leaves the first RTCPeerConnection
+    live but unreachable from the page's own ref, so the browser can neither
+    close it nor even know it exists. That is fixed on the frontend too, but
+    the rule belongs here as well — the server should not be willing to run
+    two pipelines for one caller no matter what the client does, and this
+    side is the one that still holds when the client is a stale tab, a
+    reloaded page, or a network that dropped without a close handshake.
+    """
+    stale = [pc_id for pc_id, call in _active_calls.items() if call.user_id == user_id]
+    for pc_id in stale:
+        call = _active_calls.pop(pc_id)
+        if call.process.is_alive():
+            call.process.terminate()
+            logger.warning(
+                f"[CALL] Ending previous live call pc_id={pc_id} pid={call.process.pid} "
+                f"— same user started a new one"
+            )
+        call.process.join(timeout=1)
+
+
+# Latency (2026-09-03) — the pre-warmed worker pool.
+#
+# Task 2.4 spawns a fresh interpreter per call, and that process has to
+# import the whole pipecat stack and connect to MongoDB before it can even
+# answer the WebRTC offer. Measured on the deployed VM: 6.8s warm, 13.7s
+# cold, and the caller sat through all of it after pressing Start.
+#
+# The work has to happen; it does not have to happen while someone waits. So
+# a few workers do it in advance and idle until a call arrives.
+#
+# Still ONE CALL PER PROCESS. That is the point of Task 2.4 and pooling does
+# not weaken it: a claimed worker is replaced immediately, so a crash still
+# only ever takes down the call it happened in. The only thing that changes
+# is when the startup cost is paid.
+#
+# Each worker owns a private set of queues rather than sharing one job queue,
+# because a multiprocessing.Queue cannot be sent through another queue — it
+# has to be handed over at Process construction. That also means the parent
+# always knows exactly which process took which call, which the ICE routing
+# and the reaper both depend on.
+@dataclass
+class _PooledWorker:
+    process: mp.Process
+    job_queue: mp.Queue
+    answer_queue: mp.Queue
+    ice_queue: mp.Queue
+    ready: EventClass
+    spawned_at: float
+    # Task 3.7 — created up front like the others, for the same reason: a
+    # multiprocessing.Queue has to be handed over at Process construction
+    # and cannot be sent through another queue afterwards.
+    payment_queue: "mp.Queue | None" = None
+
+
+_idle_pool: list[_PooledWorker] = []
+
+
+def _spawn_pooled_worker() -> _PooledWorker:
+    job_queue: mp.Queue = _MP.Queue()
+    answer_queue: mp.Queue = _MP.Queue()
+    ice_queue: mp.Queue = _MP.Queue()
+    payment_queue: mp.Queue = _MP.Queue()
+    ready = _MP.Event()
+    proc = _MP.Process(
+        target=pooled_worker_main,
+        args=(job_queue, answer_queue, ice_queue, ready, payment_queue),
+        daemon=True,
+    )
+    proc.start()
+    return _PooledWorker(
+        proc, job_queue, answer_queue, ice_queue, ready, time.monotonic(), payment_queue
+    )
+
+
+def _top_up_pool() -> None:
+    """Bring the pool back to size. Blocking (Process.start forks a process),
+    so callers on the event loop run it in an executor."""
+    while len(_idle_pool) < settings.call_worker_pool_size:
+        _idle_pool.append(_spawn_pooled_worker())
+
+
+async def maintain_worker_pool_loop(interval_seconds: int = 15) -> None:
+    """Background loop (started from main.py's lifespan). Fills the pool at
+    startup and replaces workers that die while idle — a worker that fails
+    during import would otherwise silently shrink the pool to nothing and
+    every call would quietly fall back to the slow path."""
+    loop = asyncio.get_event_loop()
+    while True:
+        dead = [w for w in _idle_pool if not w.process.is_alive()]
+        for w in dead:
+            _idle_pool.remove(w)
+            w.process.join(timeout=1)
+            logger.warning(f"[POOL] Idle worker pid={w.process.pid} died before use, replacing")
+
+        before = len(_idle_pool)
+        await loop.run_in_executor(None, _top_up_pool)
+        if len(_idle_pool) != before:
+            logger.info(f"[POOL] {len(_idle_pool)} warm worker(s) ready")
+
+        await asyncio.sleep(interval_seconds)
 
 
 async def reap_dead_calls_loop(interval_seconds: int = 10) -> None:
@@ -54,11 +192,16 @@ async def reap_dead_calls_loop(interval_seconds: int = 10) -> None:
     and finished child processes are never actually reaped."""
     while True:
         await asyncio.sleep(interval_seconds)
-        dead_pc_ids = [pc_id for pc_id, (proc, _) in _active_calls.items() if not proc.is_alive()]
+        dead_pc_ids = [
+            pc_id for pc_id, call in _active_calls.items() if not call.process.is_alive()
+        ]
         for pc_id in dead_pc_ids:
-            proc, _ice_queue = _active_calls.pop(pc_id)
-            proc.join(timeout=1)
-            logger.info(f"[CALL] Cleaned up finished call pc_id={pc_id} (exitcode={proc.exitcode})")
+            call = _active_calls.pop(pc_id)
+            call.process.join(timeout=1)
+            logger.info(
+                f"[CALL] Cleaned up finished call pc_id={pc_id} "
+                f"(exitcode={call.process.exitcode})"
+            )
 
 
 class WebRTCOffer(BaseModel):
@@ -122,19 +265,54 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         "llm_model": bot.llm_model,
         "language": bot.language,
         "bot_id": str(bot.id),
+        # Task 3.8 — the bot's owner, not the caller. A webhook fires to
+        # whichever customer of THIS platform configured it (Bot.user_id),
+        # so their own system hears about their own bot's events.
+        "user_id": str(bot.user_id),
     }
 
-    # Queues must come from the same context as the process that reads them.
-    answer_queue: mp.Queue = _MP.Queue()
-    ice_queue: mp.Queue = _MP.Queue()
-    proc = _MP.Process(
-        target=call_worker_main,
-        args=(bot_config, body.sdp, body.type, body.pc_id, answer_queue, ice_queue),
-        daemon=True,
-    )
-    proc.start()
+    # Before anything else: this caller gets exactly one live pipeline. A
+    # previous one still running would otherwise keep hearing them and keep
+    # answering over the new one — see _end_previous_calls_for().
+    _end_previous_calls_for(str(current_user.id))
 
     loop = asyncio.get_event_loop()
+
+    # Take a warm worker if one is waiting. The pool is topped up straight
+    # afterwards, off the event loop, so the replacement is already importing
+    # while this call negotiates.
+    worker = _idle_pool.pop(0) if _idle_pool else None
+
+    if worker is not None:
+        proc, answer_queue, ice_queue = worker.process, worker.answer_queue, worker.ice_queue
+        payment_queue = worker.payment_queue
+        worker.job_queue.put({
+            "bot_config": bot_config,
+            "sdp": body.sdp,
+            "sdp_type": body.type,
+            "pc_id": body.pc_id,
+        })
+        warm = "warm" if worker.ready.is_set() else "still starting"
+        logger.info(f"[POOL] Claimed {warm} worker pid={proc.pid} ({len(_idle_pool)} left)")
+        loop.run_in_executor(None, _top_up_pool)
+    else:
+        # Pool exhausted — a burst of simultaneous calls. Fall back to the
+        # original behaviour: spawn a worker for this call. Slower to answer,
+        # but it answers, which beats making the caller queue behind the pool.
+        logger.warning("[POOL] Empty, spawning a cold worker for this call")
+        answer_queue = _MP.Queue()
+        ice_queue = _MP.Queue()
+        payment_queue = _MP.Queue()
+        proc = _MP.Process(
+            target=call_worker_main,
+            args=(
+                bot_config, body.sdp, body.type, body.pc_id,
+                answer_queue, ice_queue, payment_queue,
+            ),
+            daemon=True,
+        )
+        proc.start()
+
     try:
         # answer_queue.get() is a blocking call — run it off the event loop
         # so the API server keeps serving other requests while this call's
@@ -146,9 +324,25 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         proc.terminate()
         raise HTTPException(status_code=504, detail="Call setup timed out") from e
 
-    _active_calls[answer["pc_id"]] = (proc, ice_queue)
+    _active_calls[answer["pc_id"]] = _ActiveCall(
+        proc, ice_queue, str(current_user.id), payment_queue
+    )
     logger.info(f"[CALL] Started call worker pid={proc.pid} pc_id={answer['pc_id']} bot={bot.name}")
     return answer
+
+
+def get_payment_queue(pc_id: str) -> "mp.Queue | None":
+    """Task 3.7 — the channel into a specific live call, or None if it has
+    already ended.
+
+    Exposed as a function rather than letting the payments route reach into
+    `_active_calls` directly: this registry's shape is an implementation
+    detail of the process model (and the comment above it notes it will
+    have to move to Redis if the API is ever run as more than one replica).
+    One accessor is one place to change when that happens.
+    """
+    call = _active_calls.get(pc_id)
+    return call.payment_queue if call else None
 
 
 @router.post("/connect/ice")
@@ -161,8 +355,7 @@ async def ice_candidate(body: IcePatchBody, current_user: User = Depends(get_cur
         logger.debug(f"[CALL] ICE candidate for unknown/ended pc_id={body.pc_id}, ignoring")
         return {"status": "ok"}
 
-    _proc, ice_queue = entry
-    ice_queue.put({
+    entry.ice_queue.put({
         "pc_id": body.pc_id,
         "candidates": [c.model_dump() for c in body.candidates],
     })

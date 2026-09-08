@@ -99,10 +99,33 @@ export interface Bot {
   voice_id: string
   llm_model: string
   language: string
+  // Task 3.5 — the booking template's own configuration. The backend has
+  // accepted and validated these since 3.5 was built; they were simply
+  // never added to the editor, so a customer could not set them at all and
+  // every bot silently used the defaults (Asia/Kolkata, 09:00-18:00, 30m).
+  // Only app/pipeline/booking.py reads them — a bot with no booking tools
+  // is unaffected by whatever they say.
+  timezone: string
+  booking_open: string
+  booking_close: string
+  slot_minutes: number
 }
 
 export async function listBots(): Promise<Bot[]> {
   return request('/bots/')
+}
+
+// Task 3.9 — starting points instead of a blank instruction box.
+export interface BotTemplate {
+  id: string
+  name: string
+  description: string
+  system_prompt: string
+  tools: string[]
+}
+
+export async function listBotTemplates(): Promise<BotTemplate[]> {
+  return request('/bots/templates')
 }
 
 export async function createBot(data: Omit<Bot, 'id'>): Promise<Bot> {
@@ -115,6 +138,120 @@ export async function updateBot(id: string, data: Partial<Omit<Bot, 'id'>>): Pro
 
 export async function deleteBot(id: string): Promise<void> {
   return request(`/bots/${id}`, { method: 'DELETE' })
+}
+
+// ── Bot tools (Task 3.1) ────────────────────────────────────────────────────
+// A tool is a database record rather than code: a name, a description the AI
+// reads to decide when to use it, the inputs it must supply, and where to send
+// them. The credential is write-only across this API — it goes out in `secret`
+// and comes back only as `secret_masked`.
+export interface ToolParameter {
+  name: string
+  type: 'string' | 'number' | 'integer' | 'boolean'
+  description: string
+  required: boolean
+}
+
+export interface BotTool {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  /** Task 3.3 — returns an acknowledgement at once and speaks the real
+   *  result when it arrives, instead of leaving the caller in silence. */
+  long_running: boolean
+  kind: 'http' | 'builtin'
+  builtin: string
+  method: string
+  url: string
+  headers: Record<string, string>
+  query: Record<string, string>
+  body: Record<string, unknown>
+  parameters: ToolParameter[]
+  /** Task 3.6 — AI-facing name -> dotted path into the raw response, e.g.
+   *  {"status": "data.order.delivery_status"}, so the model reads a name
+   *  it can rely on regardless of how the customer's API nests things. */
+  field_map: Record<string, string>
+  /** Task 3.6 — the manual's own number for a lookup is "around three
+   *  seconds," far shorter than the 8s default a booking call may
+   *  legitimately need. */
+  timeout_seconds: number
+  /** Task 3.7 — makes this tool a payment-link tool: the reference and link
+   *  are pulled out of the provider's response so a later webhook can find
+   *  the call that asked for it. The webhook secret is write-only, like the
+   *  API key. */
+  payment: PaymentConfig
+  /** Task 3.10 — above this value on the named parameter, the underlying
+   *  action waits for a person instead of running automatically. */
+  approval: ApprovalGateConfig
+  /** Task 3.4 — how this tool takes back what it did. Only a tool that
+   *  declares this is ever rolled back when a later step in the same turn
+   *  fails; an empty url means "cannot be undone". */
+  undo: ToolUndoConfig
+  auth: { kind: string; name: string; secret_masked: string; has_secret: boolean }
+}
+
+export interface ToolUndoConfig {
+  url: string
+  method: string
+  headers: Record<string, string>
+  body: Record<string, unknown>
+}
+
+export interface ApprovalGateConfig {
+  enabled: boolean
+  amount_parameter: string
+  threshold: number
+}
+
+export interface PaymentConfig {
+  enabled: boolean
+  reference_field: string
+  amount_field: string
+  link_field: string
+  signature_header: string
+  webhook_reference_field: string
+  webhook_status_field: string
+  webhook_paid_value: string
+  has_webhook_secret?: boolean
+  /** Write-only. Omit to keep the stored one. */
+  webhook_secret?: string
+}
+
+/** What the form sends. Omitting `auth.secret` means "keep the stored one",
+ *  which is what lets the URL be edited without re-typing the API key. */
+export type BotToolInput = Omit<BotTool, 'id' | 'auth' | 'payment'> & {
+  auth: { kind: string; name: string; secret?: string }
+  payment: Omit<PaymentConfig, 'has_webhook_secret'>
+}
+
+export async function listTools(botId: string): Promise<BotTool[]> {
+  return request(`/bots/${botId}/tools/`)
+}
+
+export async function createTool(botId: string, data: BotToolInput): Promise<BotTool> {
+  return request(`/bots/${botId}/tools/`, { method: 'POST', body: JSON.stringify(data) })
+}
+
+export async function updateTool(botId: string, toolId: string, data: BotToolInput): Promise<BotTool> {
+  return request(`/bots/${botId}/tools/${toolId}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+
+export async function deleteTool(botId: string, toolId: string): Promise<void> {
+  return request(`/bots/${botId}/tools/${toolId}`, { method: 'DELETE' })
+}
+
+/** Run a tool once, now, without placing a call — so a wrong URL or key is
+ *  found at configuration time rather than mid-conversation. */
+export async function testTool(
+  botId: string,
+  toolId: string,
+  args: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  return request(`/bots/${botId}/tools/${toolId}/test`, {
+    method: 'POST',
+    body: JSON.stringify(args),
+  })
 }
 
 // ── Documents ───────────────────────────────────────────────────────────────
@@ -190,6 +327,36 @@ export async function getIceServers(): Promise<RTCIceServer[]> {
   return data.iceServers
 }
 
+// Trickle ICE (added 2026-09-03). The browser used to wait for ICE gathering
+// to FINISH before sending its offer — up to a 5 second timeout, paid on every
+// single call before the caller heard anything. Gathering is slowest exactly
+// when a TURN server is configured, because the relay allocation is a network
+// round trip of its own, so the wait was longest for the users who need the
+// relay most.
+//
+// The backend has accepted trickled candidates all along (POST /connect/ice,
+// routed to that call's worker) — the frontend simply never used it. Now the
+// offer goes immediately and candidates follow as they are discovered, which
+// is what trickle ICE is for.
+export async function sendIceCandidates(
+  pcId: string, candidates: RTCIceCandidate[],
+): Promise<void> {
+  if (!candidates.length) return
+  // Best-effort: a dropped candidate degrades connectivity, it does not break
+  // the call, and throwing here would surface as a session failure to the user.
+  await request('/connect/ice', {
+    method: 'POST',
+    body: JSON.stringify({
+      pc_id: pcId,
+      candidates: candidates.map(c => ({
+        candidate: c.candidate,
+        sdp_mid: c.sdpMid ?? '0',
+        sdp_mline_index: c.sdpMLineIndex ?? 0,
+      })),
+    }),
+  }).catch(() => {})
+}
+
 export async function connectBot(
   botId: string, sdp: string, type: string, pcId?: string
 ): Promise<{ sdp: string; type: string; pc_id: string }> {
@@ -197,4 +364,110 @@ export async function connectBot(
     method: 'POST',
     body: JSON.stringify({ bot_id: botId, sdp, type, pc_id: pcId ?? null }),
   })
+}
+
+// ── Webhooks (Task 3.8) ─────────────────────────────────────────────────────
+// Outbound events — this system telling a CUSTOMER's own system when
+// something happened (a call ended, an appointment was booked). The mirror
+// of task 3.7's inbound payment webhook: signed the same way, verified the
+// same way, just in the other direction.
+export interface WebhookSubscription {
+  id: string
+  event: string
+  url: string
+  enabled: boolean
+  secret_masked: string
+  created_at: string
+}
+
+export interface WebhookSubscriptionInput {
+  event: string
+  url: string
+  enabled: boolean
+  /** Write-only, like a tool's API key. Omit to keep the stored secret. */
+  secret?: string
+}
+
+export interface WebhookDeliveryLogEntry {
+  event: string
+  attempt: number
+  ok: boolean
+  status_code: number | null
+  error: string
+  created_at: string
+}
+
+export async function listWebhookEvents(): Promise<string[]> {
+  return (await request<{ events: string[] }>('/webhooks/events')).events
+}
+
+export async function listWebhookSubscriptions(): Promise<WebhookSubscription[]> {
+  return request('/webhooks/')
+}
+
+export async function createWebhookSubscription(
+  data: WebhookSubscriptionInput
+): Promise<WebhookSubscription> {
+  return request('/webhooks/', { method: 'POST', body: JSON.stringify(data) })
+}
+
+export async function updateWebhookSubscription(
+  id: string, data: WebhookSubscriptionInput
+): Promise<WebhookSubscription> {
+  return request(`/webhooks/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+
+export async function deleteWebhookSubscription(id: string): Promise<void> {
+  return request(`/webhooks/${id}`, { method: 'DELETE' })
+}
+
+export async function listWebhookDeliveries(id: string): Promise<WebhookDeliveryLogEntry[]> {
+  return request(`/webhooks/${id}/deliveries`)
+}
+
+/** Sends one real, signed event right now — no queue, no waiting for a
+ *  retry schedule. For proving an endpoint actually works before relying
+ *  on it. */
+export async function testWebhookSubscription(id: string): Promise<Record<string, unknown>> {
+  return request(`/webhooks/${id}/test`, { method: 'POST' })
+}
+
+// ── Approvals (Task 3.10) ───────────────────────────────────────────────────
+// A tool can declare a value above which it needs a person's sign-off before
+// the underlying action happens at all — never automatically, and never from
+// the call itself. This is that person's own queue.
+export interface PendingApproval {
+  id: string
+  tool_name: string
+  bot_id: string
+  arguments: Record<string, unknown>
+  amount: number
+  threshold: number
+  // 'approving' is brief and real: claimed the instant someone presses
+  // approve, before the action runs, so a second press cannot run it
+  // again. It only persists if the server died mid-action — in which case
+  // it correctly means "nobody knows whether this went through".
+  status: 'pending' | 'approving' | 'approved' | 'denied'
+  created_at: string
+  decided_at: string | null
+  decided_by: string
+}
+
+export async function listApprovals(status?: string): Promise<PendingApproval[]> {
+  return request(`/approvals/${status ? `?status=${status}` : ''}`)
+}
+
+// Just the number, for the header badge — see the endpoint's own docstring
+// for why this isn't listApprovals('pending').length.
+export async function getPendingApprovalCount(): Promise<number> {
+  const { count } = await request<{ count: number }>('/approvals/pending-count')
+  return count
+}
+
+export async function approveAction(id: string): Promise<PendingApproval> {
+  return request(`/approvals/${id}/approve`, { method: 'POST' })
+}
+
+export async function denyAction(id: string): Promise<PendingApproval> {
+  return request(`/approvals/${id}/deny`, { method: 'POST' })
 }

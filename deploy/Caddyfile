@@ -34,6 +34,29 @@
 		reverse_proxy backend:8080
 	}
 
+	# Found 2026-09-07, during Phase 3 live testing, BEFORE these features
+	# were reached. Every route below existed in the backend and was
+	# reachable in local development (Vite's dev proxy forwards anything it
+	# does not serve), but was missing here — so in production each one fell
+	# through to the SPA handler at the bottom and returned index.html with
+	# HTTP 200. The frontend would then try to JSON.parse a page of HTML and
+	# fail with a parse error rather than anything naming the real problem.
+	#
+	# The payment one is worse than a broken page: /payments is also where
+	# the provider's own webhook lands (task 3.7). A provider POSTing a
+	# "payment received" callback would have got 200 and HTML back, treated
+	# it as delivered, and never retried — a paid order silently never
+	# recorded.
+	handle /approvals/* {
+		reverse_proxy backend:8080
+	}
+	handle /webhooks/* {
+		reverse_proxy backend:8080
+	}
+	handle /payments/* {
+		reverse_proxy backend:8080
+	}
+
 	# Static frontend build (vite's dist/), with SPA fallback so client-side
 	# routes like /dashboard survive a hard refresh.
 	handle {

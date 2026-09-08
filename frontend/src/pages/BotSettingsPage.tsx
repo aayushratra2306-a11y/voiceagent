@@ -1,14 +1,52 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument } from '../lib/api'
-import type { Bot, BotDocument } from '../lib/api'
+import {
+  createBot, updateBot, listBots, listDocuments, uploadDocument, deleteDocument,
+  listBotTemplates, createTool,
+} from '../lib/api'
+import { usePageChrome } from '../context/ChromeContext'
+import PageLoader from '../components/PageLoader'
+import type { Bot, BotDocument, BotTemplate } from '../lib/api'
 
-const VOICES = [
-  { id: 'a0e99841-438c-4a64-b679-ae501e7d6091', label: 'Aria — Neutral', desc: 'Clear, balanced tone' },
-  { id: '694f9389-aac1-45b6-b726-9d9369183238', label: 'Luna — Friendly', desc: 'Warm female voice' },
-  { id: 'b7d50908-b17c-442d-ad8d-810c63997ed9', label: 'Atlas — Professional', desc: 'Confident male voice' },
-]
+// Voices per language. Until 2026-09-04 this was three English voices shown
+// to every bot whatever its language, so a Hindi bot was necessarily given
+// an English voice and Cartesia — which is multilingual — read Hindi words
+// with an English accent. Voices are now native to the language selected.
+//
+// The English three are unchanged in id (existing bots point at them) but
+// their labels were simply wrong: 'Atlas — Professional, confident male
+// voice' is really Sierra, a Californian woman, and 'Aria — Neutral' is
+// really Greg, a man. Verified against Cartesia's API; names are the real
+// ones now.
+//
+// Must stay in sync with VOICES in backend/app/pipeline/language.py, which
+// applies the same mapping server-side for bots saved before this existed.
+const VOICES: Record<string, { id: string; label: string; desc: string }[]> = {
+  en: [
+    { id: 'a0e99841-438c-4a64-b679-ae501e7d6091', label: 'Greg — Supportive', desc: 'Clear, balanced male voice' },
+    { id: '694f9389-aac1-45b6-b726-9d9369183238', label: 'Sarah — Mindful', desc: 'Warm female voice' },
+    { id: 'b7d50908-b17c-442d-ad8d-810c63997ed9', label: 'Sierra — Bright', desc: 'Upbeat female voice' },
+  ],
+  hi: [
+    { id: '6b02ffe5-e3cb-48c0-a023-c72f85953375', label: 'Sneha — Empathetic', desc: 'Gentle, reassuring female voice' },
+    { id: 'adf97b9d-905c-41de-9fe9-afb387116d06', label: 'Vikas — Approachable', desc: 'Polite, friendly male voice' },
+  ],
+  fr: [
+    { id: 'e2ab5462-e7c8-492d-a244-41f39444af6e', label: 'Audrey — Customer Service', desc: 'Clear, attentive female voice' },
+    { id: 'cc4276e6-1ebc-429a-8c7d-930993d51abc', label: 'Julien — Polished', desc: 'Professional, warm male voice' },
+  ],
+  de: [
+    { id: '38aabb6a-f52b-4fb0-a3d1-988518f4dc06', label: 'Alina — Engaging', desc: 'Warm female voice for assistants' },
+    { id: 'e00dd3df-19e7-4cd4-827a-7ff6687b6954', label: 'Lukas — Professional', desc: 'Confident male voice' },
+  ],
+  es: [
+    { id: 'de38f545-c574-44e8-9b54-a7d6fec1c6b1', label: 'Marta — Friendly Guide', desc: 'Approachable female voice' },
+    { id: 'b0689631-eee7-4a6c-bb86-195f1d267c2e', label: 'Emilio — Optimistic', desc: 'Upbeat male voice' },
+  ],
+}
+
+const voicesFor = (lang: string) => VOICES[lang] ?? VOICES.en
 
 const LANGUAGES = [
   { code: 'en', label: 'English', flag: '🇺🇸' },
@@ -23,18 +61,46 @@ const MODELS = [
   { id: 'gpt-4o', label: 'GPT-4o', desc: 'Smarter · Paid' },
 ]
 
+// Task 3.5 — a fixed list rather than a free-text box, deliberately. The
+// backend rejects anything ZoneInfo cannot resolve (bots.py's
+// _validate_timezone), and an offset like "+05:30" is refused there because
+// it cannot express daylight saving — so a typed field would mostly produce
+// save errors. A bot whose stored zone is not in this list keeps it: see
+// timezoneOptions below.
+const TIMEZONES = [
+  'Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Asia/Tokyo',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'Australia/Sydney', 'UTC',
+]
+
+// Keeps a zone this list doesn't know about (set through the API, or added
+// to the backend later) selectable instead of silently switching the bot to
+// whichever option happens to be first.
+const timezoneOptions = (current: string) =>
+  TIMEZONES.includes(current) ? TIMEZONES : [current, ...TIMEZONES]
+
 const DEFAULTS = {
   name: '',
   system_prompt: 'You are a helpful voice assistant.',
-  voice_id: VOICES[0].id,
+  voice_id: VOICES.en[0].id,
   llm_model: 'gpt-4o-mini',
   language: 'en',
+  // Must match the Bot model's own defaults in backend/app/models/bot.py —
+  // a new bot created from this form should behave identically to one
+  // created straight through the API.
+  timezone: 'Asia/Kolkata',
+  booking_open: '09:00',
+  booking_close: '18:00',
+  slot_minutes: 30,
 }
 
 export default function BotSettingsPage() {
   const { id } = useParams()
   const isNew = id === 'new'
   const navigate = useNavigate()
+
+  usePageChrome(isNew ? 'New Bot' : 'Edit Bot', '/dashboard')
   const [form, setForm] = useState<Omit<Bot, 'id'>>(DEFAULTS)
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
@@ -44,11 +110,54 @@ export default function BotSettingsPage() {
   const [uploadError, setUploadError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Task 3.9 — starting points instead of a blank instruction box. Only
+  // fetched for a brand new bot; an existing one is already past this.
+  const [templates, setTemplates] = useState<BotTemplate[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (isNew) listBotTemplates().then(setTemplates).catch(() => {})
+  }, [isNew])
+
+  function applyTemplate(t: BotTemplate) {
+    setSelectedTemplateId(t.id)
+    // Only the prompt — name is the customer's own to choose, and voice/
+    // language aren't part of what a template is curating. "Edit freely
+    // afterwards" (the manual's own fourth step) means this is a starting
+    // point, not a lock: every field below stays fully editable.
+    setForm(prev => ({ ...prev, system_prompt: t.system_prompt }))
+  }
+
   useEffect(() => {
     if (isNew) return
     listBots().then(bots => {
       const bot = bots.find(b => b.id === id)
-      if (bot) setForm({ name: bot.name, system_prompt: bot.system_prompt, voice_id: bot.voice_id, llm_model: bot.llm_model, language: bot.language })
+      // Bots saved before voices were per-language hold a voice from the old
+      // English-only list, so their stored voice_id is not among the ones now
+      // offered for their language and NO radio would appear selected —
+      // making the form look broken and letting a save write the mismatch
+      // straight back. Show the language's default instead, which is also
+      // what the server substitutes at call time (language.resolve_voice), so
+      // the page agrees with what the caller actually hears.
+      if (bot) {
+        const allowed = voicesFor(bot.language)
+        const voice_id = allowed.some(v => v.id === bot.voice_id)
+          ? bot.voice_id
+          : allowed[0].id
+        setForm({
+          name: bot.name, system_prompt: bot.system_prompt, voice_id,
+          llm_model: bot.llm_model, language: bot.language,
+          // ?? DEFAULTS — a bot saved before these fields were sent by
+          // list_bots would otherwise load them as undefined, and a save
+          // would post undefined straight back. The same class of bug that
+          // silently blanked `language` and `system_prompt` on 2026-09-04
+          // (see the note on list_bots in backend/app/api/bots.py).
+          timezone: bot.timezone ?? DEFAULTS.timezone,
+          booking_open: bot.booking_open ?? DEFAULTS.booking_open,
+          booking_close: bot.booking_close ?? DEFAULTS.booking_close,
+          slot_minutes: bot.slot_minutes ?? DEFAULTS.slot_minutes,
+        })
+      }
       setLoading(false)
     })
     listDocuments(id!).then(setDocs).catch(() => {})
@@ -79,8 +188,21 @@ export default function BotSettingsPage() {
     }
   }
 
-  function set(field: keyof typeof form, value: string) {
+  function set(field: keyof typeof form, value: string | number) {
     setForm(prev => ({ ...prev, [field]: value }))
+  }
+
+  // Changing language has to move the voice with it, otherwise the form
+  // keeps a voice that speaks the old language and the radio list shows
+  // nothing selected — the state that produced Hindi in an English accent.
+  // Kept in one updater rather than two set() calls so language and voice
+  // can never be briefly inconsistent with each other.
+  function setLanguage(value: string) {
+    setForm(prev => {
+      const allowed = voicesFor(value)
+      const keep = allowed.some(v => v.id === prev.voice_id)
+      return { ...prev, language: value, voice_id: keep ? prev.voice_id : allowed[0].id }
+    })
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -88,8 +210,40 @@ export default function BotSettingsPage() {
     setSaving(true)
     setError('')
     try {
-      if (isNew) await createBot(form)
-      else await updateBot(id!, form)
+      if (isNew) {
+        const created = await createBot(form)
+        // Task 3.9's "sensible tool selections" — a template names builtin
+        // tools by their function name; each becomes one BotTool(kind=
+        // "builtin") row, exactly like any other tool a customer could
+        // configure by hand (see BotToolsPage). A bot with these rows gets
+        // ONLY these tools rather than every builtin there is (task 3.1's
+        // fallback for a bot with nothing configured) — a Tutor template
+        // offered book_appointment would be exactly the irrelevant-tool
+        // problem 3.1 exists to get away from.
+        const template = templates.find(t => t.id === selectedTemplateId)
+        if (template) {
+          await Promise.all(template.tools.map(toolName => createTool(created.id, {
+            name: toolName, description: `Template default: ${toolName}`,
+            enabled: true, long_running: false, kind: 'builtin', builtin: toolName,
+            method: 'GET', url: '', headers: {}, query: {}, body: {},
+            parameters: [], auth: { kind: 'none', name: '' },
+            field_map: {}, timeout_seconds: 8,
+            payment: {
+              enabled: false, reference_field: '', amount_field: '', link_field: '',
+              signature_header: 'X-Razorpay-Signature',
+              webhook_reference_field: 'payload.payment_link.entity.id',
+              webhook_status_field: 'payload.payment_link.entity.status',
+              webhook_paid_value: 'paid',
+            },
+            approval: { enabled: false, amount_parameter: 'amount', threshold: 0 },
+            // A builtin has nothing to undo, and saying so is the point:
+            // an empty url is what tells the saga this cannot be taken back.
+            undo: { url: '', method: 'DELETE', headers: {}, body: {} },
+          })))
+        }
+      } else {
+        await updateBot(id!, form)
+      }
       navigate('/dashboard')
     } catch (err: any) {
       setError(err.message)
@@ -98,26 +252,9 @@ export default function BotSettingsPage() {
     }
   }
 
-  if (loading) return (
-    <div className="min-h-screen bg-[#070711] flex items-center justify-center">
-      <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
+  if (loading) return <PageLoader />
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-      <div className="absolute bottom-[-20%] left-[-5%] w-[400px] h-[400px] rounded-full bg-indigo-700/15 blur-[120px] pointer-events-none" />
-
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center gap-3 backdrop-blur-sm">
-        <button onClick={() => navigate('/dashboard')} className="p-1.5 text-slate-500 hover:text-white hover:bg-white/8 rounded-lg transition-all">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
-          </svg>
-        </button>
-        <h1 className="font-bold text-white">{isNew ? 'New Bot' : 'Edit Bot'}</h1>
-      </header>
-
       <main className="relative z-10 max-w-xl mx-auto px-6 py-10">
         <form onSubmit={handleSubmit} className="space-y-5">
           {error && (
@@ -126,10 +263,45 @@ export default function BotSettingsPage() {
             </div>
           )}
 
+          {/* Task 3.9 — starting points instead of a blank instruction box */}
+          {isNew && templates.length > 0 && (
+            <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                Start from a template
+              </label>
+              <p className="text-xs text-slate-500 mb-3">
+                Fills in a ready-made personality below — edit anything you like afterwards.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {templates.map(t => (
+                  <button
+                    type="button"
+                    key={t.id}
+                    onClick={() => applyTemplate(t)}
+                    className={`text-left rounded-xl border px-3.5 py-3 transition-all ${
+                      selectedTemplateId === t.id
+                        ? 'border-violet-500/60 bg-violet-500/10'
+                        : 'border-white/10 bg-white/5 hover:bg-white/8'
+                    }`}
+                  >
+                    <div className="text-sm font-semibold text-white">{t.name}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{t.description}</div>
+                  </button>
+                ))}
+              </div>
+              {selectedTemplateId && (
+                <button type="button" onClick={() => setSelectedTemplateId(null)}
+                  className="text-xs text-slate-500 hover:text-slate-300 mt-3">
+                  Clear selection — start blank instead
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Bot Name */}
           <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
             <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Bot Name</label>
-            <input
+            <input autoComplete="off"
               required
               value={form.name}
               onChange={e => set('name', e.target.value)}
@@ -155,7 +327,7 @@ export default function BotSettingsPage() {
           <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
             <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Voice</label>
             <div className="space-y-2">
-              {VOICES.map(v => (
+              {voicesFor(form.language).map(v => (
                 <label
                   key={v.id}
                   className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
@@ -164,7 +336,7 @@ export default function BotSettingsPage() {
                       : 'border-white/8 hover:border-white/15 hover:bg-white/4'
                   }`}
                 >
-                  <input
+                  <input autoComplete="off"
                     type="radio"
                     name="voice"
                     value={v.id}
@@ -181,13 +353,100 @@ export default function BotSettingsPage() {
             </div>
           </div>
 
+          {/* Tools — Task 3.1. A separate page rather than a section here:
+              a tool has a dozen fields of its own, and burying that inside an
+              already-long settings form would make both harder to use. New
+              bots have no id to hang tools off yet, so it appears after the
+              first save. */}
+          {!isNew && (
+            <button
+              type="button"
+              onClick={() => navigate(`/bots/${id}/tools`)}
+              className="w-full bg-white/4 border border-white/8 rounded-2xl p-5 flex items-center gap-4 text-left hover:border-violet-500/40 hover:bg-white/6 transition-all"
+            >
+              <div className="flex-1">
+                <p className="font-semibold text-white text-sm">Tools</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Let this bot look things up, book slots, or call your own systems
+                </p>
+              </div>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-slate-500">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          )}
+
+          {/* Scheduling — Task 3.5. Only app/pipeline/booking.py reads these,
+              so they are inert for a bot with no booking tools; shown for
+              every bot anyway rather than guessed at from the tool list,
+              because tools live on their own page and a section that
+              appears and disappears based on another page's state is worse
+              than one that is simply explained. */}
+          <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Scheduling</label>
+            <p className="text-xs text-slate-600 mt-0.5 mb-3">
+              Used by the booking tools — the hours this bot offers, and the time zone it speaks in.
+            </p>
+
+            <label className="block text-xs text-slate-500 mb-1.5">Time zone</label>
+            <select
+              value={form.timezone}
+              onChange={e => set('timezone', e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all mb-4"
+            >
+              {timezoneOptions(form.timezone).map(tz => (
+                <option key={tz} value={tz} className="bg-neutral-900">{tz}</option>
+              ))}
+            </select>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Opens</label>
+                <input autoComplete="off"
+                  type="time"
+                  required
+                  value={form.booking_open}
+                  onChange={e => set('booking_open', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Closes</label>
+                <input autoComplete="off"
+                  type="time"
+                  required
+                  value={form.booking_close}
+                  onChange={e => set('booking_close', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Slot (min)</label>
+                <input autoComplete="off"
+                  type="number"
+                  required
+                  min={5}
+                  max={480}
+                  step={5}
+                  value={form.slot_minutes}
+                  // Number(): a bare e.target.value is a STRING, and the
+                  // backend's slot_minutes is an int with ge/le bounds —
+                  // posting "30" fails validation with a type error rather
+                  // than saving.
+                  onChange={e => set('slot_minutes', Number(e.target.value))}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Language + Model */}
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-white/4 border border-white/8 rounded-2xl p-5">
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Language</label>
               <select
                 value={form.language}
-                onChange={e => set('language', e.target.value)}
+                onChange={e => setLanguage(e.target.value)}
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/60 transition-all"
               >
                 {LANGUAGES.map(l => (
@@ -235,7 +494,7 @@ export default function BotSettingsPage() {
                   )}
                   {uploading ? 'Uploading…' : 'Upload PDF'}
                 </button>
-                <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
+                <input autoComplete="off" ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
               </div>
 
               {uploadError && (
@@ -294,6 +553,5 @@ export default function BotSettingsPage() {
           </div>
         </form>
       </main>
-    </div>
   )
 }
