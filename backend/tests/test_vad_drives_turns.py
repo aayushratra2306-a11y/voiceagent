@@ -30,10 +30,15 @@ turn frames as "VAD".
 
 import inspect
 
+import pytest
+from loguru import logger
 from pipecat.frames.frames import (
+    InterimTranscriptionFrame,
+    TranscriptionFrame,
     UserStartedSpeakingFrame,
     VADUserStartedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection
 
 from app.pipeline import voice_pipeline
 from app.pipeline.voice_pipeline import AudioDebugger
@@ -99,6 +104,64 @@ def test_a_working_vad_produces_no_warning():
     assert dbg._warned_vad_silent is False, (
         "warned about a silent VAD on a call where VAD was in fact firing"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_raw_card_number_never_reaches_the_audio_debug_log():
+    """Found reviewing the phase-6 branch: this logger call sits upstream of
+    every place that redacts a transcript before storage -- including
+    TranscriptRecorder, which only redacts once a turn is finished -- so a
+    caller reading a card number aloud was written to loguru's default
+    stderr sink, and from there the container's log driver, in full, even
+    though that same number never reaches the database. Task 6.2's own
+    guarantee was "not even transiently"; this was the transient path."""
+    lines: list[str] = []
+    sink_id = logger.add(lines.append, format="{message}")
+    try:
+        dbg = AudioDebugger()
+        # A running pipeline always sends StartFrame through every processor
+        # before any real audio flows -- process_frame() is never called
+        # ahead of that in production. Driving it directly here, without
+        # that, would trip pipecat's own _check_started diagnostic, which
+        # logs the frame's raw, UNREDACTED repr at ERROR level. That is a
+        # framework-wide behaviour on every FrameProcessor, not something
+        # this fix introduced or could reach in a real call, and simulating
+        # it accurately -- rather than asserting around it -- is what proves
+        # the redaction fix itself, not a test artifact.
+        dbg._FrameProcessor__started = True
+        await dbg.process_frame(
+            TranscriptionFrame(text="my card is 4111 1111 1111 1111", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    logged = "".join(lines)
+    assert "4111" not in logged, "a raw card number reached the log"
+    assert "[card number]" in logged
+
+
+@pytest.mark.asyncio
+async def test_an_interim_transcription_is_also_redacted():
+    """InterimTranscriptionFrame subclasses TextFrame directly, not
+    TranscriptionFrame -- so it takes AudioDebugger's OTHER branch, the
+    class-name catch-all that also logs the model's own reply text. That
+    branch needed its own fix, not just the isinstance one above, and this
+    proves it rather than assuming the same fix covered both."""
+    lines: list[str] = []
+    sink_id = logger.add(lines.append, format="{message}")
+    try:
+        dbg = AudioDebugger()
+        dbg._FrameProcessor__started = True  # see the sibling test above
+        await dbg.process_frame(
+            InterimTranscriptionFrame(text="card 4111 1111 1111 1111", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    logged = "".join(lines)
+    assert "4111" not in logged, "a raw card number reached the log via the interim path"
 
 
 def test_the_warning_fires_once_not_every_turn():

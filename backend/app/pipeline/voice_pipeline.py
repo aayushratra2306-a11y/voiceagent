@@ -99,9 +99,26 @@ class AudioDebugger(FrameProcessor):
             logger.info("[AUDIO] Turn stopped")
             self._warn_if_vad_silent()
         elif isinstance(frame, TranscriptionFrame):
-            logger.info(f"[AUDIO] TranscriptionFrame: '{frame.text}'")
+            logger.info(f"[AUDIO] TranscriptionFrame: '{redaction.redact(frame.text).text}'")
         elif any(k in name for k in ("Transcri", "STT", "Speech", "Word", "Text")):
-            logger.info(f"[AUDIO] {name}: text={getattr(frame, 'text', getattr(frame, 'content', '?'))!r}")
+            # Task 6.2 found by its own review: this line predates the
+            # redaction module and sits upstream of every place that now
+            # redacts — TranscriptRecorder only finalises a turn (and
+            # redacts it) once it's over, but this fires on every frame as
+            # it streams past, including the caller's raw digits the instant
+            # Deepgram emits them and the model's own reply text (which can
+            # echo back a tool result). Loguru's default sink writes to
+            # stderr with no level filter configured, and that reaches the
+            # container's log driver — so an unredacted line here was a
+            # second, undocumented path to disk for exactly what Task 6.2
+            # exists to keep out of storage. Same default kinds as
+            # TranscriptRecorder's fallback (ALL_KINDS): a bot's own
+            # `redact_transcripts` setting governs what a customer chose to
+            # keep in THEIR stored transcript, not what leaks into shared
+            # operational logs nobody configured per bot.
+            raw = getattr(frame, 'text', getattr(frame, 'content', '?'))
+            safe = redaction.redact(raw).text if isinstance(raw, str) else raw
+            logger.info(f"[AUDIO] {name}: text={safe!r}")
         await self.push_frame(frame, direction)
 
     def _warn_if_vad_silent(self):
