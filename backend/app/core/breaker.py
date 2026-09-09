@@ -295,24 +295,43 @@ def record_failure(name: str, reason: str = "") -> None:
         stamps = [t for t in stamps if now - t < cfg.window_seconds]
         stamps.append(now)
 
+        # A fresh trip and a failed trial both genuinely restart the
+        # cooldown — the provider was just asked, one way or another, and
+        # said no. A third case looks the same at a glance and is not:
+        # `len(stamps) >= threshold` can also go True while the breaker is
+        # ALREADY open and no trial has been granted yet (trial_at is
+        # None), when a call that started before the trip finally reports
+        # its own failure. allows() never let that call through as a
+        # probe — opened_at already refused it — so it proves nothing
+        # about recovery, and moving opened_at for it would let a trickle
+        # of such stragglers re-arm the cooldown indefinitely during a
+        # real, ongoing outage. Found reviewing this branch: the original
+        # code took `if opened_at is None: fresh-open else: trial-failed`,
+        # which silently folded this third case into "trial failed" and
+        # extended the cooldown for it anyway.
         should_open = was_trial or len(stamps) >= cfg.failure_threshold
+        # `should_open` via the count, with the breaker ALREADY open and no
+        # trial granted (trial_at is None), is a call that started before
+        # the trip finally reporting its own failure. allows() never let it
+        # through as a probe -- opened_at already refused it -- so it
+        # proves nothing about recovery. Moving opened_at for it anyway
+        # would let a trickle of such stragglers re-arm the cooldown
+        # indefinitely during a real, ongoing outage. Found reviewing this
+        # branch: the original code only branched on `opened_at is None`,
+        # which silently folded this case into "trial failed" and extended
+        # the cooldown for it regardless.
+        reopened_without_a_trial = opened_at is not None and not was_trial and should_open
 
-        if should_open:
-            if opened_at is None:
-                trips += 1
-                # Loud on purpose — the manual asks for every trip to be
-                # logged loudly, because a tripped breaker means callers are
-                # being served by a fallback and somebody needs to know.
-                logger.error(
-                    f"[BREAKER] {name} OPENED after {len(stamps)} failure(s) in "
-                    f"{cfg.window_seconds:.0f}s — refusing calls for "
-                    f"{cfg.cooldown_seconds:.0f}s. Last reason: {reason or 'unknown'}"
-                )
-            else:
-                logger.warning(
-                    f"[BREAKER] {name}: trial call failed ({reason or 'unknown'}), "
-                    f"staying open another {cfg.cooldown_seconds:.0f}s"
-                )
+        if opened_at is None and should_open:
+            trips += 1
+            # Loud on purpose — the manual asks for every trip to be
+            # logged loudly, because a tripped breaker means callers are
+            # being served by a fallback and somebody needs to know.
+            logger.error(
+                f"[BREAKER] {name} OPENED after {len(stamps)} failure(s) in "
+                f"{cfg.window_seconds:.0f}s — refusing calls for "
+                f"{cfg.cooldown_seconds:.0f}s. Last reason: {reason or 'unknown'}"
+            )
             conn.execute(
                 "INSERT INTO breakers (name, failures, opened_at, trial_at, last_reason, trips) "
                 "VALUES (?, ?, ?, NULL, ?, ?) "
@@ -320,6 +339,32 @@ def record_failure(name: str, reason: str = "") -> None:
                 "  failures = excluded.failures, opened_at = excluded.opened_at,"
                 "  trial_at = NULL, last_reason = excluded.last_reason, trips = excluded.trips",
                 (name, json.dumps(stamps), now, reason[:500], trips),
+            )
+        elif was_trial:
+            logger.warning(
+                f"[BREAKER] {name}: trial call failed ({reason or 'unknown'}), "
+                f"staying open another {cfg.cooldown_seconds:.0f}s"
+            )
+            conn.execute(
+                "INSERT INTO breakers (name, failures, opened_at, trial_at, last_reason, trips) "
+                "VALUES (?, ?, ?, NULL, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET "
+                "  failures = excluded.failures, opened_at = excluded.opened_at,"
+                "  trial_at = NULL, last_reason = excluded.last_reason, trips = excluded.trips",
+                (name, json.dumps(stamps), now, reason[:500], trips),
+            )
+        elif reopened_without_a_trial:
+            logger.warning(
+                f"[BREAKER] {name}: a failure landed while already open with "
+                f"no trial in progress ({reason or 'unknown'}) — a call that "
+                f"started before the trip, not a probe. Cooldown left as it was."
+            )
+            conn.execute(
+                "INSERT INTO breakers (name, failures, opened_at, trial_at, last_reason, trips) "
+                "VALUES (?, ?, NULL, NULL, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET "
+                "  failures = excluded.failures, last_reason = excluded.last_reason",
+                (name, json.dumps(stamps), reason[:500], trips),
             )
         else:
             logger.warning(

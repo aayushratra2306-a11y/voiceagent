@@ -124,6 +124,41 @@ def test_a_failed_trial_re_opens_immediately():
     assert breaker.allows("cartesia") is False
 
 
+def test_a_straggler_failure_after_the_trip_does_not_extend_the_cooldown():
+    """Found reviewing this branch, and reproduced against the real module
+    before this test existed: several concurrent calls hit a bad provider
+    at once, one of them tips the breaker over the threshold and opens it,
+    and the others -- which started before the trip and were never gated
+    by allows() -- report their own failures a moment later. None of those
+    is a trial; allows() never let them through as one. A late one moving
+    opened_at forward would let a trickle of such stragglers re-arm the
+    cooldown indefinitely during a real, ongoing outage, and the breaker
+    would never reach half-open to test recovery."""
+    breaker.configure("cartesia", FAST)
+    for _ in range(3):
+        breaker.record_failure("cartesia", "timeout")
+
+    opened_at = breaker.snapshot()["cartesia"]["opened_at"]
+    assert opened_at is not None
+
+    # Well inside the cooldown, and no trial has been granted -- allows()
+    # is deliberately never called here, so trial_at stays None and this
+    # failure is unambiguously a straggler, not a trial report.
+    time.sleep(0.05)
+    breaker.record_failure("cartesia", "a late one from before the trip")
+
+    assert breaker.snapshot()["cartesia"]["opened_at"] == opened_at, (
+        "a non-trial failure moved the cooldown anchor"
+    )
+
+    # Proof in the unit that matters to a caller: half-open arrives exactly
+    # cfg.cooldown_seconds after the ORIGINAL trip, not later.
+    time.sleep(FAST.cooldown_seconds - 0.05 + 0.02)
+    assert breaker.state("cartesia") == "half_open", (
+        "the straggler pushed the cooldown out past its real deadline"
+    )
+
+
 def test_a_trial_that_never_reports_back_does_not_wedge_the_breaker_shut():
     """Task 2.4 runs calls in their own processes, and a process can be
     killed mid-call. If the trial holder simply vanishes, nothing ever calls
