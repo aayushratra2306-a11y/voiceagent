@@ -102,7 +102,24 @@ async def refresh(request: Request, response: Response):
         raise HTTPException(status_code=401, detail="No refresh token")
 
     email, _jti, _exp = await verify_refresh_token(token)
-    await revoke_refresh_token(token)
+    # Review finding I2 (2026-09-10) — the revocation IS the claim, and
+    # losing it means somebody else is already rotating this exact token.
+    #
+    # Verification above only proves the token was valid a moment ago. It
+    # cannot prove this request is the only one holding it, because the
+    # request racing this one passed the same check. `revoke_refresh_token`
+    # now settles that atomically (a unique index on jti), and a False
+    # answer means this cookie was spent by someone else — which is the
+    # definition of refresh-token reuse, so it is refused.
+    #
+    # Deliberately the same 401 and the same wording verify_refresh_token
+    # raises: telling a caller which check they failed is free information
+    # for whoever is holding a stolen token.
+    if not await revoke_refresh_token(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
 
     access_token = create_access_token({"sub": email})
     new_refresh_token, _new_jti, new_expires_at = create_refresh_token({"sub": email})

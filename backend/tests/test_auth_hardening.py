@@ -103,3 +103,119 @@ async def test_a_duplicate_signup_still_reads_as_a_plain_rejection():
     assert first.status_code == 201
     assert second.status_code == 400
     assert second.json()["detail"] == "Email already registered"
+
+
+# =========================================================================
+# I2 / I3 — refresh-token rotation was not atomic, and the revocation
+#           list was unindexed
+# =========================================================================
+
+
+async def test_the_revocation_list_is_uniquely_indexed_by_jti():
+    """I3 as well as I2. Only `expires_at` carried an index (the TTL one),
+    so the existence check every single refresh performs — "has this jti
+    been revoked?" — was a collection scan on the hot path. The unique
+    index I2 needs to make the claim atomic is the same index I3 needs to
+    make the lookup fast, so one change answers both.
+    """
+    from app.models.revoked_token import RevokedRefreshToken
+
+    indexes = await RevokedRefreshToken.get_motor_collection().index_information()
+    unique_on_jti = [
+        name
+        for name, spec in indexes.items()
+        if spec.get("key") == [("jti", 1)] and spec.get("unique")
+    ]
+    assert unique_on_jti, f"no unique index on jti; have {list(indexes)}"
+    # The TTL index is what stops this collection growing forever — it must
+    # survive the change, not be replaced by it.
+    ttl = [
+        name for name, spec in indexes.items()
+        if spec.get("key") == [("expires_at", 1)] and spec.get("expireAfterSeconds") == 0
+    ]
+    assert ttl, f"the TTL index on expires_at is gone; have {list(indexes)}"
+
+
+async def _logged_in_client():
+    """A client holding a live refresh cookie, and that cookie's value."""
+    email = f"rotate-{next(_next_fake_ip)}@voiceagent-test.com"
+    client = await _fresh_client()
+    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
+    await client.post("/auth/login", json={"email": email, "password": PASSWORD})
+    return client, client.cookies["refresh_token"]
+
+
+async def test_two_refreshes_with_one_cookie_leave_exactly_one_live_lineage(monkeypatch):
+    """Rotation is what makes a stolen refresh token detectable: the
+    thief's copy and the owner's copy cannot both keep working, because
+    whichever is used next invalidates the other.
+
+    Verifying and then revoking is two steps, and there was no unique
+    index on jti to stop the second writer, so two refreshes presenting
+    the same cookie at the same time both got past `verify_refresh_token`
+    before either recorded a revocation. Both were handed a brand new,
+    fully valid refresh token, and the theft-detection guarantee quietly
+    stopped holding: two lineages ran on side by side, neither ever
+    stepping on the other.
+
+    The window between those two statements is a few hundred microseconds
+    wide, so simply firing two requests at once hits it rarely enough that
+    the test would pass against the broken code most runs — which is worse
+    than no test. Both requests are therefore parked in the window on
+    purpose: `verify_refresh_token` is wrapped so that each request waits
+    there until the other has also finished verifying. That is not a
+    contrived scenario, it is the same scenario with the timing made
+    reliable — a page firing several API calls as the access token expires
+    produces it for real.
+    """
+    from app.api import auth as auth_api
+
+    client, cookie = await _logged_in_client()
+    real_verify = auth_api.verify_refresh_token
+    both_verified = asyncio.Event()
+    arrived = 0
+
+    async def gated_verify(token: str):
+        nonlocal arrived
+        result = await real_verify(token)
+        arrived += 1
+        if arrived >= 2:
+            both_verified.set()
+        try:
+            await asyncio.wait_for(both_verified.wait(), timeout=10)
+        except TimeoutError:
+            pass  # the other request never got here; let this one proceed
+        return result
+
+    monkeypatch.setattr(auth_api, "verify_refresh_token", gated_verify)
+
+    try:
+        async def attempt():
+            # Separate clients so httpx's own cookie jar cannot serialise
+            # them or rewrite the cookie out from under the other one.
+            async with await _fresh_client() as c:
+                c.cookies.set("refresh_token", cookie)
+                resp = await c.post("/auth/refresh")
+                return resp.status_code
+
+        statuses = await asyncio.gather(*(attempt() for _ in range(2)))
+    finally:
+        await client.aclose()
+
+    assert arrived == 2, "the two requests never overlapped; the test proves nothing"
+    assert statuses.count(200) == 1, f"more than one lineage survived: {statuses}"
+    assert statuses.count(401) == 1, f"expected the loser to be refused as reuse: {statuses}"
+
+
+async def test_the_ordinary_rotation_still_works():
+    """The sequential path is the one every real session takes — it must
+    still hand back a working token, not get caught by the new claim."""
+    client, _cookie = await _logged_in_client()
+    try:
+        resp = await client.post("/auth/refresh")
+        assert resp.status_code == 200
+        token = resp.json()["access_token"]
+        me = await client.get("/bots/", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+    finally:
+        await client.aclose()
