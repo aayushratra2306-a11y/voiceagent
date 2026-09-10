@@ -78,6 +78,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // Set the instant a start begins, cleared only by endCall(). See the
   // comment at the top of startCall() for why `status` cannot do this.
   const startingRef = useRef(false)
+  // Bumped by every startCall() and every endCall(). startCall captures the
+  // value at its first line and re-reads it after each await; a mismatch
+  // means the attempt was superseded while it was suspended and must tear
+  // its own resources down rather than publish them. See startCall().
+  const genRef = useRef(0)
   // Blob URLs stay alive while their tab is open — revoking one immediately
   // after window.open() gives the user a blank viewer. Held here and
   // released together when the call ends.
@@ -130,6 +135,52 @@ export function CallProvider({ children }: { children: ReactNode }) {
     // endCall() on purpose: endCall clears the guard we just set, which
     // would hand the very race above back to the second click.
     closeConnection()
+
+    // The guard above only closes the window where two starts land in the
+    // same React batch. It does nothing about the much wider window this
+    // function is suspended for: connecting a call takes seconds and awaits
+    // four times, and endCall() can land in any of those gaps. It ran
+    // closeConnection(), which tears down whatever refs are assigned AT THAT
+    // INSTANT — so a microphone granted one line later, or a peer connection
+    // built one line later, was never seen by it. This code then carried
+    // happily on and handed the caller a live mic and a running server-side
+    // pipeline that nothing on the page referenced any more: the End button
+    // was gone, the call bar was gone, and the recording light stayed on
+    // until the tab was closed. Sign-out was the worst version — the session
+    // was over and the mic was still hot. Found in review 2026-09-10.
+    //
+    // So every start gets a generation number. endCall() bumps it, and so
+    // does the next startCall(); after each await this attempt asks whether
+    // it is still the current one, and if not it stops its OWN resources by
+    // hand and returns without publishing anything.
+    const myGen = ++genRef.current
+    // Held as locals, not read back from the refs: by the time an abandoned
+    // attempt cleans up, the refs may have been nulled by closeConnection()
+    // or already re-pointed at a newer call's objects. These are the things
+    // THIS attempt created, and they are the only things it may destroy.
+    const owned: {
+      stream?: MediaStream
+      pc?: RTCPeerConnection
+      ctx?: AudioContext
+      dc?: RTCDataChannel
+    } = {}
+    const superseded = () => genRef.current !== myGen
+    function abandon() {
+      owned.stream?.getTracks().forEach(t => t.stop())
+      owned.pc?.close()
+      owned.ctx?.close().catch(() => {})
+      // Only retract a ref that still points at our own object. If a newer
+      // call has already claimed it, nulling it here would strand THAT
+      // call's peer connection — reintroducing the same bug one turn later.
+      if (streamRef.current === owned.stream) streamRef.current = null
+      if (pcRef.current === owned.pc) pcRef.current = null
+      if (audioCtxRef.current === owned.ctx) audioCtxRef.current = null
+      if (dcRef.current === owned.dc) dcRef.current = null
+      // startingRef is deliberately untouched. The only things that bump the
+      // generation are endCall(), which has already cleared it, and a newer
+      // startCall(), which has just set it and still needs it.
+    }
+
     setBot(target)
     setStatus('connecting')
     setMuted(false)
@@ -154,6 +205,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
         },
         video: false,
       })
+      // Claimed before the check, so that if the call was ended while the
+      // permission prompt was up the tracks below are stopped rather than
+      // left running on a page with no call on it.
+      owned.stream = stream
+      if (superseded()) { abandon(); return }
       streamRef.current = stream
 
       // Task 2.3 — ask the server what ICE servers to use rather than
@@ -178,13 +234,26 @@ export function CallProvider({ children }: { children: ReactNode }) {
       } catch {
         addLog('ICE config lookup failed — falling back to public STUN')
       }
+      // Checked before building the peer, not after: there is no reason to
+      // create one at all if the call is already over. The fallback path
+      // above swallows its own error, so an /connect/ice request still in
+      // flight when the user signs out lands here rather than in catch.
+      if (superseded()) { abandon(); return }
 
       const pc = new RTCPeerConnection({ iceServers })
+      owned.pc = pc
       pcRef.current = pc
 
       stream.getTracks().forEach(t => pc.addTrack(t, stream))
 
+      // Every handler below is guarded the same way. A peer that has been
+      // abandoned is closed a moment later, but "a moment later" is after
+      // the event loop turn these fire on — and the audio element, the log
+      // and the sources list are shared with whatever call is current now.
+      // Without the guard an abandoned attempt can put its bot's voice
+      // through the speakers of the call that replaced it.
       pc.ontrack = e => {
+        if (superseded()) return
         if (audioRef.current) audioRef.current.srcObject = e.streams[0]
         addLog('Bot audio connected ✓')
       }
@@ -196,6 +265,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       const pending: RTCIceCandidate[] = []
 
       pc.onicecandidate = e => {
+        if (superseded()) return
         if (!e.candidate) { addLog('ICE gathering complete'); return }
         addLog(`Candidate: ${e.candidate.type} ${e.candidate.address ?? ''}`)
         if (pcId) sendIceCandidates(pcId, [e.candidate])
@@ -203,6 +273,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
 
       pc.oniceconnectionstatechange = () => {
+        if (superseded()) return
         addLog(`ICE: ${pc.iceConnectionState}`)
         if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
           setStatus('connected')
@@ -233,13 +304,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
 
       const ctx = new AudioContext()
+      owned.ctx = ctx
       audioCtxRef.current = ctx
       const analyser = ctx.createAnalyser()
       const src = ctx.createMediaStreamSource(stream)
       src.connect(analyser)
       const data = new Uint8Array(analyser.frequencyBinCount)
       const tick = () => {
-        if (!pcRef.current) return
+        // superseded() as well as the ref, because the ref is a poor stop
+        // signal once a second call exists: after this call ended and
+        // another began, pcRef.current is truthy again and this loop —
+        // reading a closed AudioContext's analyser — would drive the
+        // speaking indicator for a microphone that is no longer on.
+        if (superseded() || !pcRef.current) return
         analyser.getByteFrequencyData(data)
         const vol = data.reduce((a, b) => a + b, 0) / data.length
         setSpeaking(vol > 10)
@@ -256,11 +333,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
       // "Data channel not ready, queuing message" line in the live logs.
       // The label is arbitrary: the server accepts whatever the client makes.
       const dc = pc.createDataChannel('pipecat')
+      owned.dc = dc
       dcRef.current = dc
 
-      dc.onopen = () => addLog('Data channel open ✓')
+      dc.onopen = () => { if (!superseded()) addLog('Data channel open ✓') }
 
       dc.onmessage = e => {
+        if (superseded()) return
         try {
           const msg = JSON.parse(e.data)
           if (msg.type === 'rag-sources') {
@@ -275,6 +354,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
       addLog('Creating WebRTC offer…')
       await pc.setLocalDescription(await pc.createOffer())
+      if (superseded()) { abandon(); return }
 
       // Sent immediately, without waiting for ICE gathering to complete.
       // That wait used to cost up to 5 seconds of dead air at the start of
@@ -284,7 +364,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
       // is already starting up, so the two overlap instead of queueing.
       addLog('Connecting to bot…')
       const answer = await connectBot(target.id, pc.localDescription!.sdp, pc.localDescription!.type)
+      // The last and most expensive gap: the server has now started a worker
+      // for this call. There is no hangup endpoint to tell it otherwise, so
+      // the answer is deliberately never applied — closing the peer without
+      // a remote description leaves the server with a connection that never
+      // completes, and pipecat tears the pipeline down on its own timeout.
+      // Not instant, but it is the difference between a worker that expires
+      // and a worker holding an open microphone.
+      if (superseded()) { abandon(); return }
       await pc.setRemoteDescription({ sdp: answer.sdp, type: answer.type as RTCSdpType })
+      if (superseded()) { abandon(); return }
 
       pcId = answer.pc_id
       if (pending.length) {
@@ -292,6 +381,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
       addLog('Handshake complete ✓')
     } catch (e: any) {
+      // An abandoned attempt fails silently. Signing out mid-connect makes
+      // connectBot reject with a 401 a moment later, and without this the
+      // teardown below would run on a signed-out app and paint "Error" over
+      // it — or, if a new call had already started, end that one instead.
+      if (superseded()) { abandon(); return }
       addLog(`Error: ${e.message}`)
       // Order matters, and it was wrong before: endCall() sets the status to
       // 'idle', so setting 'error' first meant the teardown immediately
@@ -310,6 +404,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
     // connected it deliberately stays set, which also blocks a second Start
     // on top of a live call.
     startingRef.current = false
+    // Cancels a startCall() that is currently suspended on an await. Without
+    // this, closeConnection() below only reaches what has been assigned so
+    // far and the rest of that start runs to completion unattended.
+    genRef.current++
     closeConnection()
     setStatus('idle')
     setSpeaking(false)
