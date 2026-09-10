@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
+from pymongo.errors import DuplicateKeyError
 
 from app.core.auth import (
     REFRESH_COOKIE_NAME,
@@ -53,11 +54,24 @@ def _set_refresh_cookie(response: Response, token: str, expires_at) -> None:
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
 async def register(request: Request, body: RegisterRequest):
-    existing = await User.find_one(User.email == body.email)
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    # Review finding I1 (2026-09-10) — no pre-check any more.
+    #
+    # This used to `find_one` for an existing account and then `insert`.
+    # Between those two statements is a window, and two signups for the
+    # same address arriving inside it both read "nobody has this" and both
+    # inserted. The check read like a guard and was not one: it can only
+    # see writes that already finished.
+    #
+    # The unique index on User.email (see models/user.py) is the guard, and
+    # it is one because MongoDB applies it to whichever write arrives
+    # second no matter how close together they are. So: just insert, and
+    # let the duplicate-key error tell us. The response is deliberately the
+    # same 400 the pre-check returned, so nothing downstream changes.
     user = User(email=body.email, password_hash=hash_password(body.password))
-    await user.insert()
+    try:
+        await user.insert()
+    except DuplicateKeyError as e:
+        raise HTTPException(status_code=400, detail="Email already registered") from e
     return {"message": "User created successfully"}
 
 
