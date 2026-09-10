@@ -1,0 +1,635 @@
+<title>Auris Review Tracker</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+:root{
+  --paper:#f6f7f9; --surface:#ffffff; --surface-2:#eef0f3; --sunk:#f0f2f5;
+  --line:#e2e5ea; --line-soft:#edeff2;
+  --text:#191c22; --text-2:#586070; --text-3:#8b93a1;
+  --crit:#c92a1e; --crit-bg:#c92a1e12;
+  --imp:#a85400; --imp-bg:#a8540012;
+  --min:#556274; --min-bg:#5562740f;
+  --done:#0a7c46; --done-bg:#0a7c4614;
+  --accent:#0b7285;
+  --shadow:0 1px 2px rgba(20,24,32,.05), 0 4px 14px rgba(20,24,32,.04);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0c0d11; --surface:#15171d; --surface-2:#1c1f26; --sunk:#101216;
+  --line:#262a32; --line-soft:#1e222a;
+  --text:#e7e9ec; --text-2:#9aa2b0; --text-3:#6b7382;
+  --crit:#ff6f61; --crit-bg:#ff6f6116;
+  --imp:#e0912f; --imp-bg:#e0912f16;
+  --min:#8b94a4; --min-bg:#8b94a412;
+  --done:#3fc47e; --done-bg:#3fc47e18;
+  --accent:#2bc4dc;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
+}}
+:root[data-theme="dark"]{
+  --paper:#0c0d11; --surface:#15171d; --surface-2:#1c1f26; --sunk:#101216;
+  --line:#262a32; --line-soft:#1e222a;
+  --text:#e7e9ec; --text-2:#9aa2b0; --text-3:#6b7382;
+  --crit:#ff6f61; --crit-bg:#ff6f6116;
+  --imp:#e0912f; --imp-bg:#e0912f16;
+  --min:#8b94a4; --min-bg:#8b94a412;
+  --done:#3fc47e; --done-bg:#3fc47e18;
+  --accent:#2bc4dc;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--text);
+  font:400 15px/1.6 "DM Sans",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:940px;margin:0 auto;padding:40px 22px 120px}
+
+h1,h2,h3{font-family:"Barlow Condensed",system-ui,sans-serif;margin:0;letter-spacing:.01em}
+h1{font-size:34px;font-weight:700;line-height:1.05}
+.sub{color:var(--text-2);font-size:14.5px;margin-top:6px}
+code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.83em}
+
+/* progress header */
+.dash{position:sticky;top:0;z-index:20;background:var(--paper);
+  padding:14px 0 12px;margin-bottom:4px;border-bottom:1px solid var(--line)}
+.dash-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.dash-big{font-family:"Barlow Condensed",sans-serif;font-weight:700;font-size:22px}
+.dash-note{color:var(--text-3);font-size:12.5px;font-family:"JetBrains Mono",monospace}
+.bars{display:flex;gap:6px;margin-top:9px}
+.bar{flex:1;height:7px;border-radius:20px;background:var(--surface-2);overflow:hidden}
+.bar > i{display:block;height:100%;border-radius:20px;transition:width .3s}
+.bar.crit > i{background:var(--crit)} .bar.imp > i{background:var(--imp)} .bar.min > i{background:var(--min)}
+.bar-labels{display:flex;gap:6px;margin-top:5px}
+.bar-labels > span{flex:1;font-size:10.5px;font-family:"JetBrains Mono",monospace;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em}
+
+.plan{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:9px;padding:15px 17px;margin:22px 0 30px;font-size:14px;color:var(--text-2)}
+.plan b{color:var(--text)}
+.plan ol{margin:8px 0 0;padding-left:20px}
+.plan li{margin:3px 0}
+
+section{margin-top:34px}
+.sec-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.sec-head h2{font-size:20px;font-weight:700}
+.pill{font-family:"JetBrains Mono",monospace;font-size:10.5px;font-weight:500;
+  padding:2px 8px;border-radius:20px;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.pill.crit{background:var(--crit-bg);color:var(--crit)}
+.pill.imp{background:var(--imp-bg);color:var(--imp)}
+.pill.min{background:var(--min-bg);color:var(--min)}
+.sec-desc{color:var(--text-3);font-size:13px;margin:2px 0 14px}
+
+.item{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  margin-bottom:9px;box-shadow:var(--shadow);overflow:hidden;transition:opacity .2s}
+.item-top{display:flex;gap:12px;padding:13px 15px;cursor:pointer;align-items:flex-start}
+.cb{appearance:none;-webkit-appearance:none;flex:none;width:19px;height:19px;margin-top:1px;
+  border:2px solid var(--line);border-radius:5px;background:var(--sunk);cursor:pointer;
+  display:grid;place-content:center;transition:all .15s}
+.cb:hover{border-color:var(--accent)}
+.cb:checked{background:var(--done);border-color:var(--done)}
+.cb:checked::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;
+  transform:rotate(45deg) translateY(-1px)}
+.cb:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.item-mid{flex:1;min-width:0}
+.item-title{font-weight:600;font-size:14.5px;line-height:1.35}
+.item-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:5px;align-items:center}
+.tag{font-family:"JetBrains Mono",monospace;font-size:10.5px;padding:1px 7px;border-radius:5px;
+  background:var(--surface-2);color:var(--text-3)}
+.ref{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text-3);word-break:break-all}
+.chev{flex:none;color:var(--text-3);transition:transform .2s;margin-top:3px}
+.item.open .chev{transform:rotate(90deg)}
+.item.done{opacity:.55}
+.item.done .item-title{text-decoration:line-through;text-decoration-color:var(--text-3)}
+
+.item-body{display:none;padding:0 15px 15px 46px;font-size:13.5px;color:var(--text-2);
+  border-top:1px solid var(--line-soft)}
+.item.open .item-body{display:block}
+.item-body .row{margin-top:11px}
+.item-body .k{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--text-3);display:block;margin-bottom:2px}
+.item-body .row.gain .k{color:var(--done)}
+.item-body b{color:var(--text)}
+.item-body .note{margin-top:11px;font-size:12px;color:var(--text-3);font-style:italic}
+
+.foot{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);
+  font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--text-3);line-height:1.9}
+
+@media (max-width:560px){
+  .wrap{padding:28px 14px 100px}
+  h1{font-size:27px}
+  .item-body{padding-left:15px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<h1>Auris — Code Review Tracker</h1>
+<p class="sub">Phases 1&ndash;3 (everything on <span class="mono">main</span>), reviewed 10 Sep 2026 by four independent reviewers.
+Tick an item when it&rsquo;s fixed &mdash; progress saves in this browser.</p>
+
+<div class="dash">
+  <div class="dash-row">
+    <span class="dash-big" id="overall">0 / 0 resolved</span>
+    <span class="dash-note" id="breakdown"></span>
+  </div>
+  <div class="bars">
+    <div class="bar crit"><i id="bar-crit" style="width:0"></i></div>
+    <div class="bar imp"><i id="bar-imp" style="width:0"></i></div>
+    <div class="bar min"><i id="bar-min" style="width:0"></i></div>
+  </div>
+  <div class="bar-labels"><span id="lbl-crit">critical</span><span id="lbl-imp">important</span><span id="lbl-min">minor</span></div>
+</div>
+
+<div class="plan">
+  <b>Agreed plan.</b>
+  <ol>
+    <li><b>Now:</b> the 3 Critical items, on a fresh branch off <span class="mono">main</span> &mdash; each reproduced, fixed, re-verified.</li>
+    <li><b>Then:</b> triage the Important items together &mdash; fix vs. log-and-defer.</li>
+    <li><b>Phases 4+:</b> their own review findings fold into live-call testing as each phase is tested. The two confirmed Criticals there (breaker cooldown, log redaction) are already fixed on their branches.</li>
+  </ol>
+  Minor items are recorded for completeness; most are one-liners to batch later.
+</div>
+
+<div id="list"></div>
+
+<div class="foot">
+  Reviewers: pipeline &amp; RAG &middot; auth &amp; infrastructure &middot; tools &amp; multi-tasking &middot; frontend<br>
+  Base: initial commit &rarr; <span class="mono">f5f8654</span> &nbsp;|&nbsp; generated 10 Sep 2026<br>
+  Nothing here has been changed or merged &mdash; this is the findings list only.
+</div>
+</div>
+
+<script>
+const DATA = [
+  // ---------------- CRITICAL ----------------
+  { id:"C1", sev:"crit", area:"auth", fixed:"11c4458 (branch review-fixes)", title:"Rate limiting collapses to one global bucket in production",
+    ref:"deploy/Dockerfile:42 · backend/main.py",
+    what:"uvicorn isn't told to trust Caddy's forwarding headers, so every request looks like it comes from Caddy's one container IP. slowapi then keys every unauthenticated caller to that single address.",
+    why:"<code>/auth/login</code> (5/min), <code>/auth/refresh</code> (20/min) and <code>/auth/register</code> (5/min) become one shared limit for the entire internet. One actor sending 5 failed logins a minute keeps every real user 429'd out of login, indefinitely, with no account needed.",
+    gain:"Rate limiting actually starts working. The login / refresh / signup denial-of-service closes. This is a one-line change to the Dockerfile (<code>--forwarded-allow-ips=\"*\"</code>), safe because the backend port isn't published to the host.",
+    note:"Confirmed twice by the reviewer — once from config, once by grepping the whole codebase for the missing setting (zero hits outside vendored libs)." },
+
+  { id:"C2", sev:"crit", area:"pipeline", fixed:"eb54df6 (branch review-fixes)", title:"Hindi turns skip document search entirely",
+    ref:"backend/app/pipeline/rag_processor.py:77-84",
+    what:"<code>needs_retrieval()</code> only recognises English words (<code>[a-z']+</code>). A pure-Devanagari question produces an empty word list, so it's treated as small talk and RAG is skipped.",
+    why:"The bot answers a document question from general knowledge, silently — nothing is shown to the caller. Deepgram rarely emits <code>?</code> for Hindi (it uses <code>।</code>), so for a Hindi caller this is the <b>normal</b> path, not an edge case. The project has real Hindi call volume and RAG is a core feature.",
+    gain:"Hindi callers get real answers from their documents. Removes a whole class of confidently-wrong answers on the language you actually serve. Fix: make the check script-aware (treat any non-filler token as meaningful) and add Hindi cases to the test.",
+    note:"" },
+
+  { id:"C3", sev:"crit", area:"frontend", title:"Ending a call mid-connect leaves the microphone live and a phantom call running",
+    ref:"frontend/src/context/CallContext.tsx:115-320 · AppShell.tsx:86-91",
+    what:"<code>startCall</code> has no cancellation. Pressing End (or Sign out) while <code>getUserMedia</code> / ICE lookup is still pending — <code>endCall</code> runs, finds nothing assigned yet to tear down, sets status to idle. Then setup resumes: mic goes live, a server pipeline starts, the UI jumps back to \"connected\".",
+    why:"The operator pressed End, briefly saw \"Ready\", and is now on a live call they didn't start — with the mic having stayed open the whole time. It's a privacy hole (live mic under an idle-looking UI), a server pipeline nobody is watching, and it breaks the exact guarantee the call-bar refactor exists to provide.",
+    gain:"End means end, on every path including Sign out. Fix: a generation token bumped by <code>endCall</code>/<code>signOut</code> and re-checked after every <code>await</code>, tearing down whatever local resources exist in the bail path.",
+    note:"Needs a regression test — and the frontend has no test runner yet, so a minimal Vitest setup comes with this fix.",
+    fixed:"1b825db (branch review-fixes)" },
+
+  // ---------------- IMPORTANT ----------------
+  { id:"I1", sev:"imp", area:"auth", title:"No unique index on User.email; register is check-then-insert",
+    ref:"backend/app/models/user.py:6 · api/auth.py:56-60",
+    what:"<code>email</code> has no unique index, and registration does <code>find_one</code> then <code>insert</code> with no atomicity.",
+    why:"Two near-simultaneous signups for the same address both pass the check and both persist. Login's <code>find_one</code> then returns one arbitrarily — a user can end up authenticating against a different password hash than the one they set.",
+    gain:"Duplicate accounts become impossible. Fix: add <code>Indexed(..., unique=True)</code> and rely on a duplicate-key error instead of the pre-check. (Also: <code>get_current_user</code> does an unindexed email lookup on every authenticated request — same index helps.)",
+    note:"" },
+  { id:"I2", sev:"imp", area:"auth", title:"Refresh-token rotation is not atomic",
+    ref:"backend/app/api/auth.py:90-91 · models/revoked_token.py:18",
+    what:"<code>verify_refresh_token()</code> then <code>revoke_refresh_token()</code> as two steps, and <code>jti</code> has no unique index.",
+    why:"Two concurrent <code>/auth/refresh</code> calls with the same cookie both pass verification before either writes the revocation row — two live token lineages, and the \"whichever is used next invalidates the other\" theft-detection guarantee is weakened.",
+    gain:"Token theft detection works as designed. Fix: an atomic claim (the same <code>find_one_and_update</code> pattern already built for approvals), or a unique index on <code>jti</code> with insert-or-fail.",
+    note:"" },
+  { id:"I3", sev:"imp", area:"auth", title:"Revocation-list lookup is unindexed on the hot path",
+    ref:"backend/app/core/auth.py:66",
+    what:"<code>verify_refresh_token</code> queries <code>RevokedRefreshToken.jti == jti</code>; only <code>expires_at</code> is indexed (for TTL).",
+    why:"Every token refresh does a collection scan over a set that grows by one row per logout and one per rotation across a 7-day window. Also a mild DoS amplifier — inflate the list, slow every refresh.",
+    gain:"Token refresh stays fast as usage grows. Fix: add <code>Indexed()</code> to <code>jti</code>.",
+    note:"" },
+  { id:"I4", sev:"imp", area:"auth · tools", title:"SSRF check fails open on DNS failure, and resolves separately from the HTTP client",
+    ref:"backend/app/core/url_safety.py:87-89, 130-131",
+    what:"<code>_host_is_public</code> returns <code>None</code> on a resolver error and <code>rejection_reason</code> lets <code>None</code> through. Separately, validation resolves the hostname here while <code>httpx</code> resolves it again at connect time — the checked IP is never pinned.",
+    why:"For tool and webhook URLs the hostname is attacker-influenced. An attacker controlling their own nameserver can SERVFAIL / time out the safety check (→ allowed) and then answer <code>127.0.0.1</code> or <code>169.254.169.254</code> for the actual request. Even without that, it's a check-then-connect TOCTOU window.",
+    gain:"Closes the last real gap in an otherwise solid SSRF story. Fix: fail <b>closed</b> on resolution failure for these paths; resolve once and connect to the pinned IP with the original Host header.",
+    note:"Flagged independently by two reviewers (auth + tools) — raises confidence it's real." },
+  { id:"I5", sev:"imp", area:"auth", title:"coturn peer-deny list is incomplete; TURN credentials are effectively public",
+    ref:"deploy/turnserver.conf:31-34 · docker-compose.yml:83",
+    what:"Denies 10/8, 172.16/12, 192.168/16, 127/8 — but NOT <code>169.254.0.0/16</code> (GCP metadata / link-local) and no IPv6 internal ranges. Single static credential, handed to every browser in the ICE config. No bandwidth quotas.",
+    why:"The relay is usable by anyone who reads their own browser's network settings — to relay into link-local / IPv6 internal targets, and to burn your bandwidth with no cap.",
+    gain:"The relay can't be turned into an SSRF pivot or a bandwidth sink. Fix: add the missing ranges to <code>denied-peer-ip</code>, add <code>user-quota</code>/<code>total-quota</code>/<code>bps-capacity</code>, and move to time-limited credentials (<code>use-auth-secret</code>).",
+    note:"" },
+  { id:"I6", sev:"imp", area:"auth", title:"No password strength or length requirement",
+    ref:"backend/app/api/auth.py:18-20",
+    what:"<code>RegisterRequest.password</code> is a bare <code>str</code> with no validator anywhere.",
+    why:"<code>\"\"</code> or <code>\"a\"</code> is an acceptable password for a system holding payment-adjacent customer data.",
+    gain:"A basic floor on account security. Fix: add <code>Field(min_length=…)</code>, and note bcrypt's 72-byte truncation (pre-hash with SHA-256, or use <code>bcrypt_sha256</code>).",
+    note:"" },
+
+  { id:"I7", sev:"imp", area:"pipeline", title:"Reranker outage injects unfiltered candidates as authoritative document context",
+    ref:"backend/app/services/rag.py:365-373",
+    what:"On the happy path, the 0.15 rerank threshold is the only thing separating \"relevant\" from \"nearest of 20 raw vector hits\". In the <code>except</code> branch, no threshold at all is applied — the first 4 deduped candidates pass through for any query.",
+    why:"<code>rag_processor</code> then wraps them in \"…the text below IS the document content: do NOT say you cannot access files…\". So a reranker outage turns <b>every</b> query into a confident answer from whatever 4 chunks were closest, even for a completely unrelated question.",
+    gain:"A reranker outage degrades to an honest \"I don't have that in the documents\" instead of a fabrication. Fix: filter the fallback by a raw-cosine threshold (keep the old 0.2); return empty if nothing passes.",
+    note:"" },
+  { id:"I8", sev:"imp", area:"pipeline", title:"Hard page filter silently empties retrieval on a mis-heard page number",
+    ref:"backend/app/services/rag.py:231-236, 276-277",
+    what:"A page reference in the query becomes a hard <code>{\"page\": {\"$eq\": N}}</code> filter on both indexes. If STT hears \"page fifty\" as \"page fifteen\", or the rewrite garbles it, the filter yields 0 candidates and the function returns empty.",
+    why:"The bot answers from general knowledge while the document sits right there. <code>_extract_page_num</code>'s regex is also English-only, so a Hindi caller's page reference never filters at all — inconsistent behaviour across languages.",
+    gain:"A mis-heard page number degrades to a normal search instead of no answer. Fix: retry once without the filter on 0 results; consider making the page reference a soft boost rather than a hard filter.",
+    note:"" },
+  { id:"I9", sev:"imp", area:"pipeline", title:"Query-rewrite prompt is English-only, with no language-preservation instruction",
+    ref:"backend/app/services/rag.py:186-191",
+    what:"The rewrite runs on every RAG turn. Given a Devanagari transcript, the model may translate to English, partially clean it, or reword unpredictably — the prompt never says \"keep the original language\".",
+    why:"Cross-lingual query→passage retrieval against Hindi chunks (embedded with <code>text-embedding-3-small</code>) is materially weaker than same-language.",
+    gain:"Hindi retrieval quality improves for free. Fix: add \"Preserve the original language of the question\" to the rewrite system prompt.",
+    note:"" },
+  { id:"I10", sev:"imp", area:"pipeline", title:"document.py uses a bare default for created_at, not default_factory",
+    ref:"backend/app/models/document.py:11",
+    what:"<code>created_at: datetime = datetime.now(UTC)</code>. Pydantic 2 evaluates a bare default once, at class-definition time.",
+    why:"Every <code>Document</code> created in the long-lived API-server process gets an <b>identical</b> <code>created_at</code> — the moment the module was imported. The frontend returns and sorts by this value. It's a data-correctness bug, not cosmetic.",
+    gain:"Upload timestamps become real. Fix: <code>Field(default_factory=lambda: datetime.now(UTC))</code> — the pattern every other model already uses. Worth a quick grep for the same shape elsewhere.",
+    note:"" },
+  { id:"I11", sev:"imp", area:"pipeline", title:"parse_pdf / chunk_text block the API event loop",
+    ref:"backend/app/api/documents.py:39,43 · services/rag.py:74-96",
+    what:"<code>upload_document</code> is <code>async</code>, but <code>parse_pdf(content)</code> and <code>chunk_text(pages)</code> are synchronous CPU-bound calls run inline.",
+    why:"pypdf extraction on a large PDF (the code references a real 183-chunk document) is seconds of fully-blocked event loop, during which the shared API server serves no other request — health checks included.",
+    gain:"Uploads stop freezing the whole server. Fix: <code>await loop.run_in_executor(None, parse_pdf, content)</code>, likewise for <code>chunk_text</code>.",
+    note:"" },
+  { id:"I12", sev:"imp", area:"pipeline", title:"A failed vector upsert leaves an orphan Document that looks healthy",
+    ref:"backend/app/api/documents.py:44-63",
+    what:"Order is: store GridFS file → <code>doc.insert()</code> → <code>upsert_document(...)</code>. If the upsert raises (Pinecone / OpenAI error, or the dense/sparse gather half-fails), the route 500s but the Document row and blob persist.",
+    why:"<code>list_documents</code> then shows it with a normal <code>chunk_count</code> and <code>has_file: True</code>, while RAG returns partial or no results for it — a silent knowledge-base gap with no cleanup and no partial-failure handling.",
+    gain:"A failed upload either fully rolls back or is clearly flagged as not-indexed. Fix: on failure, delete the just-inserted Document + blob before re-raising; or mark <code>indexed: False</code> and exclude such rows from retrieval + flag them in the UI.",
+    note:"" },
+  { id:"I13", sev:"imp", area:"pipeline", title:"Pool-maintenance and reaper loops have no error handling around the loop body",
+    ref:"backend/app/api/connect.py:167-185, 188-204",
+    what:"<code>maintain_worker_pool_loop</code> and <code>reap_dead_calls_loop</code> are <code>while True</code> loops with no try/except inside. If <code>_top_up_pool</code> (which calls <code>Process.start()</code>) raises even once — transient <code>OSError</code>, resource limit — the loop exits and the task dies.",
+    why:"The pool then never refills, and every subsequent call silently falls to the slow cold-spawn path. Same structure in the reaper — a bad <code>process.join</code> and <code>_active_calls</code> grows unbounded.",
+    gain:"A transient failure costs one loop iteration, not the whole background task. Fix: wrap each loop body in <code>try/except Exception: logger.exception(...)</code>.",
+    note:"" },
+  { id:"I14", sev:"imp", area:"pipeline", title:"pinecone-sparse-english-v0 is used for Hindi passages and queries",
+    ref:"backend/app/services/rag.py:42, 115-136",
+    what:"The keyword / sparse half of hybrid search (Task 1.8, a listed requirement) uses an explicitly English model for all languages.",
+    why:"Hindi content produces poor / meaningless sparse vectors, so hybrid search silently collapses to dense-only for Hindi calls. The dense side + multilingual reranker still carry retrieval, so blast radius is limited — but the requirement is effectively unmet for Hindi.",
+    gain:"Hybrid search works for Hindi, or the limitation is at least documented. Fix: gate the sparse side on <code>_base_lang(language) == \"en\"</code>, or adopt a multilingual sparse approach.",
+    note:"" },
+
+  { id:"I15", sev:"imp", area:"tools", title:"A retried / replayed valid payment webhook re-notifies and re-announces",
+    ref:"backend/app/api/payments.py:186",
+    what:"<code>payment_webhook</code> unconditionally calls <code>_forward_to_customer()</code> and pushes to the live-call queue on every request that passes signature verification — no check that <code>session.status</code> actually changed.",
+    why:"Payment providers routinely retry webhooks (slow response, non-2xx, or policy). A retry of an already-processed \"paid\" event re-queues a duplicate <code>payment.received</code> webhook to the customer's own systems, and — if a call is live — can announce \"your payment went through\" to the caller a second time.",
+    gain:"Provider retries become idempotent from the customer's point of view. Fix: only forward / announce when <code>session.status</code> transitions (e.g. <code>if session.status == \"pending\"</code> before recording).",
+    note:"" },
+  { id:"I16", sev:"imp", area:"tools", title:"The dashboard \"Test\" button executes an approval-gated tool's real call, bypassing the gate",
+    ref:"backend/app/api/bot_tools.py:241-254 → services/tool_registry.py:824-839",
+    what:"<code>test_tool()</code> calls <code>call_http_tool()</code> directly, not through <code>_http_handler()</code> where <code>_check_approval_gate</code> lives.",
+    why:"For a tool with <code>approval.enabled=True</code> and a $500 threshold, clicking Test with <code>{\"amount\": 5000}</code> fires the real refund / charge / booking immediately — no <code>PendingApproval</code> record is created. Owner-only, so not a privilege escalation, but it defeats the explicit two-step \"a person must sign off\" safeguard.",
+    gain:"The approval gate holds on every path. Fix: route the test endpoint through the same gate, or make the UI say plainly that Test performs the real action and bypasses approval.",
+    note:"" },
+  { id:"I17", sev:"imp", area:"tools", title:"booking_slots holds have no TTL and no admin recovery path",
+    ref:"backend/app/pipeline/booking.py:210-228",
+    what:"A slot is held by a unique-<code>_id</code> insert into <code>booking_slots</code>, then the appointment is inserted. The exception-guarded path releases the hold on a normal error — but a hard process kill / OOM between the two inserts leaves the hold permanently, with no <code>expireAfterSeconds</code> index anywhere and no endpoint to clear it.",
+    why:"That specific slot is unbookable forever until someone deletes the row by hand in Mongo. This is customer-facing scheduling infrastructure.",
+    gain:"An abandoned hold self-heals. Fix: a TTL index (expire an unconverted hold after ~1 min) or a periodic janitor.",
+    note:"" },
+
+  { id:"I18", sev:"imp", area:"frontend", title:"A single malformed data-channel message unmounts every call control",
+    ref:"frontend/src/context/CallContext.tsx:263-274 · main.tsx:39",
+    what:"<code>dc.onmessage</code> does <code>setSources(msg.sources as RagSource[])</code> with an unchecked cast — the try/catch only guards <code>JSON.parse</code>, not the shape. A non-array crashes <code>sources.map</code> during render.",
+    why:"The only error boundary wraps the entire <code>&lt;App/&gt;</code>, so the crash unmounts <code>CallProvider</code> — but the peer connection and MediaStream aren't React-managed and keep running. The fallback UI has no End button, so the mic stays live until the operator reloads (dropping the caller).",
+    gain:"One bad frame can't take the call controls with it. Fix: validate the shape in <code>onmessage</code>; add a route-level error boundary around <code>&lt;Outlet/&gt;</code> in <code>AppShell</code>, below <code>CallBar</code>, so a page crash keeps the shell and the End button alive.",
+    note:"" },
+  { id:"I19", sev:"imp", area:"frontend", title:"Logout is best-effort, and an in-flight refresh can repopulate the token afterward",
+    ref:"frontend/src/lib/api.ts:15-29, 74-79 · AuthContext.tsx:43-47",
+    what:"<code>refreshInFlight</code> is a module singleton <code>logout()</code> never resets. If a refresh is in flight when the user signs out, it resolves afterward and runs <code>localStorage.setItem('token', …)</code>.",
+    why:"localStorage holds a fresh access token again after sign-out. Because <code>/auth/logout</code> is fire-and-forget with errors swallowed, if that revocation was slow or failed, the refresh cookie is still valid and the next app load silently resumes the \"logged-out\" session — worse on a shared machine.",
+    gain:"Sign out actually signs out. Fix: a <code>loggedOut</code> flag the refresh <code>.then</code> checks before writing; ideally <code>await</code> the logout call, or at least null out <code>refreshInFlight</code>.",
+    note:"" },
+  { id:"I20", sev:"imp", area:"frontend", title:"An expired session shows scattered error banners instead of redirecting to login",
+    ref:"frontend/src/AppShell.tsx:51-55 · ApprovalsPage.tsx:31 · WebhooksPage.tsx:46 · BotToolsPage.tsx:95",
+    what:"Only <code>DashboardPage</code> redirects to <code>/</code> on API failure. Elsewhere the approval poll swallows the 401 (stale badge forever) and Approvals / Webhooks / Settings / Tools show a raw \"Session expired\" banner on a dead page.",
+    why:"The user has no way back to login except editing the URL by hand. <code>request()</code> knows when refresh has definitively failed but has no way to tell the app.",
+    gain:"An expired session bounces cleanly to login from anywhere. Fix: <code>request()</code> dispatches a global \"auth-lost\" event (like <code>APPROVALS_CHANGED</code>); <code>AuthProvider</code> listens and clears the token.",
+    note:"" },
+  { id:"I21", sev:"imp", area:"frontend", title:"has_webhook_secret is smuggled into the tool payload; the Omit type hides it",
+    ref:"frontend/src/pages/BotToolsPage.tsx:123 · lib/api.ts:223-226",
+    what:"<code>BotToolInput.payment</code> is typed <code>Omit&lt;PaymentConfig, 'has_webhook_secret'&gt;</code>, but <code>{ ...t.payment }</code> copies that boolean at runtime and <code>save</code> sends <code>form.payment</code> as-is.",
+    why:"Every tool update POSTs <code>payment.has_webhook_secret</code>. If the backend validates with <code>extra=\"forbid\"</code> this is a confusing save failure on every edit; otherwise it's latent. A classic case of a type hiding runtime reality.",
+    gain:"Tool edits round-trip cleanly. Fix: destructure it out in <code>startEdit</code> — <code>const { has_webhook_secret, ...pay } = t.payment</code>.",
+    note:"" },
+  { id:"I22", sev:"imp", area:"frontend", title:"\"Run test\" tests the saved tool, not what's on screen",
+    ref:"frontend/src/pages/BotToolsPage.tsx:201-211",
+    what:"<code>runTest</code> uses <code>editingId</code> + <code>testArgs</code> and ignores the unsaved <code>form</code>. The button is only disabled for brand-new tools.",
+    why:"Editing an existing tool's URL / headers / auth then clicking \"Run test\" runs the <b>previously saved</b> config against the real system. The help text says \"a wrong URL or key turns up here\" — but it won't, because the wrong URL was never saved.",
+    gain:"Test results match the fields you're looking at. Fix: disable \"Run test\" while the form is dirty (\"Save to test your changes\"), or save-then-test.",
+    note:"" },
+  { id:"I23", sev:"imp", area:"frontend", title:"Editing a builtin (template) tool shows a full HTTP form that does nothing",
+    ref:"frontend/src/pages/BotToolsPage.tsx:110-135",
+    what:"A bot created from a template gets <code>kind: 'builtin'</code> tool rows. On the Tools page they get an \"Edit\" button like any other tool, opening the editor with empty URL / method / params — with no affordance that these fields are inert for a builtin.",
+    why:"A non-developer will reasonably try to \"configure\" <code>book_appointment</code>, fill in fields, save, and be baffled when nothing changes.",
+    gain:"Builtin tools read as what they are. Fix: when <code>form.kind === 'builtin'</code>, render a read-only summary (\"Built-in tool — nothing to configure\") instead of the HTTP form, or hide Edit for builtins.",
+    note:"" },
+  { id:"I24", sev:"imp", area:"frontend", title:"CallContext value recreated every render; \"speaking\" driven at frame rate",
+    ref:"frontend/src/context/CallContext.tsx:241-248, 382-385",
+    what:"<code>tick</code> calls <code>setSpeaking(vol &gt; 10)</code> every animation frame with no hysteresis, and the context value is an inline <code>{{...}}</code> with no <code>useMemo</code>/<code>useCallback</code> anywhere.",
+    why:"Volume hovering near the threshold during speech flips <code>speaking</code> repeatedly — each flip re-renders every <code>useCall()</code> consumer, including the shell header and its SVGs, several times a second for the whole call. On the most animation-heavy screen.",
+    gain:"The shell stops thrashing during calls. Fix: <code>useMemo</code> the context value, <code>useCallback</code> the handlers, add a threshold band to <code>speaking</code>, throttle <code>tick</code> to ~10Hz.",
+    note:"" },
+  { id:"I25", sev:"imp", area:"frontend", title:"Non-transactional bot + tools creation",
+    ref:"frontend/src/pages/BotSettingsPage.tsx:213-243",
+    what:"<code>createBot</code> succeeds, then <code>Promise.all(template.tools.map(createTool))</code>. If any <code>createTool</code> rejects, the error shows, <code>navigate('/dashboard')</code> is skipped, and the user is left on the form with a bot already created.",
+    why:"Re-submitting creates a <b>second</b> bot.",
+    gain:"A partial failure doesn't produce duplicate bots. Fix: navigate regardless after <code>createBot</code> succeeds; use <code>Promise.allSettled</code> and surface which tools failed on the next screen.",
+    note:"" },
+  { id:"I26", sev:"imp", area:"frontend", title:"Icon-only buttons without accessible names",
+    ref:"DashboardPage.tsx:92-109 · BotToolsPage.tsx:332,692 · CallBar.tsx:90-115 · SessionPage.tsx",
+    what:"Settings / delete / mute use <code>title</code> only (not reliably announced by screen readers); the <code>×</code> remove-row buttons have no accessible name of any kind.",
+    why:"The requirement is \"a non-developer can operate the product\" — that should include one using a screen reader.",
+    gain:"The console becomes operable without sight. Fix: <code>aria-label</code> on every icon-only control.",
+    note:"" },
+
+  // ---------------- MINOR ----------------
+  { id:"M1", sev:"min", area:"auth", title:"Login user-enumeration timing oracle",
+    ref:"backend/app/api/auth.py:68",
+    what:"When the email doesn't exist, bcrypt is never run, so \"no such user\" returns markedly faster than \"wrong password\".", why:"An attacker can enumerate which emails have accounts by timing.",
+    gain:"Fix: run a dummy <code>verify_password</code> against a fixed hash when the user is <code>None</code>.", note:"" },
+  { id:"M2", sev:"min", area:"auth", title:"Malformed resource IDs return 500, not 404",
+    ref:"backend/app/core/deps.py:29, 41",
+    what:"<code>Bot.get(bot_id)</code> raises <code>bson.errors.InvalidId</code> on a non-ObjectId path segment; nothing catches it and there's no global handler.",
+    why:"Any junk <code>/bots/xxx</code> yields an unhandled 500 (and a Sentry event once a DSN is set).",
+    gain:"Fix: catch <code>InvalidId</code> and treat as 404 — ideally in a global exception handler.", note:"" },
+  { id:"M3", sev:"min", area:"auth", title:"Dead /test route 500s in production",
+    ref:"backend/main.py:100-103",
+    what:"Reads a <code>test_voice.html</code> that lives at repo root; the Dockerfile copies only <code>backend/</code>, so in the container the path doesn't exist.",
+    why:"Unauthenticated <code>FileNotFoundError</code> → unhandled 500 on every hit.",
+    gain:"Fix: remove it, or gate behind a dev-only setting.", note:"" },
+  { id:"M4", sev:"min", area:"auth", title:"CORS origins are stale hardcoded dev values",
+    ref:"backend/main.py:79",
+    what:"Allows only <code>localhost:5173/8080</code>, not driven by settings.",
+    why:"Harmless in the same-origin production deployment, but misleading and would silently break any future direct browser→backend call.",
+    gain:"Fix: pull from <code>settings</code>.", note:"" },
+  { id:"M5", sev:"min", area:"auth", title:"TURNS (5349/TLS) is opened but not usable",
+    ref:"deploy/turnserver.conf:16",
+    what:"<code>tls-listening-port=5349</code> with no cert / pkey, and nothing provisions a cert for coturn.",
+    why:"Networks that permit only 443/TLS — the exact population Task 2.3 names — still cannot connect.",
+    gain:"Fix: wire a cert into coturn, or document this as a known gap.", note:"" },
+  { id:"M6", sev:"min", area:"auth", title:"CGNAT range not blocked in the SSRF check",
+    ref:"backend/app/core/url_safety.py",
+    what:"<code>_ip_is_public</code> relies on <code>ipaddress.is_private</code>, which on Python 3.11 doesn't include <code>100.64.0.0/10</code>.",
+    why:"A carrier-grade-NAT address slips past the public/private check.",
+    gain:"Fix: add <code>100.64.0.0/10</code> explicitly.", note:"" },
+  { id:"M7", sev:"min", area:"auth", title:"DB connection errors may log host / username",
+    ref:"backend/app/db/mongo.py",
+    what:"A Motor <code>ServerSelectionTimeoutError</code> message contains the cluster host and username (pymongo 4.x redacts the password).",
+    why:"Those land in logs and — once a DSN is set — Sentry.",
+    gain:"Fix: confirm the pinned pymongo version; add a <code>before_send</code> scrubber on Sentry.", note:"" },
+  { id:"M8", sev:"min", area:"auth", title:"No account-disable path",
+    ref:"backend/app/models/user.py",
+    what:"No <code>is_active</code> field. A compromised account can only be throttled by revoking its refresh tokens; issued access tokens stay valid up to 15 minutes.",
+    why:"No break-glass to instantly kill a compromised account.",
+    gain:"Fix: add <code>is_active</code> and check it in <code>get_current_user</code>.", note:"Acceptable given the short access-token TTL — low urgency." },
+
+  { id:"M9", sev:"min", area:"pipeline", title:"VAD confidence: comments contradict the code",
+    ref:"backend/app/pipeline/voice_pipeline.py:591-659",
+    what:"Two long rationale blocks walk through 0.85 → \"0.7 is the value that was in place\" and even show <code>VADParams(confidence=0.6</code> mid-prose; the live value is 0.6 and the test pins it.",
+    why:"A maintainer reading the reasoning would conclude 0.7 — and VAD tuning is a repeated pain point here.",
+    gain:"Fix: reconcile the prose to the actual value.", note:"" },
+  { id:"M10", sev:"min", area:"pipeline", title:"ice_candidate has no ownership check",
+    ref:"backend/app/api/connect.py:348-361",
+    what:"Any authenticated user who supplies a valid <code>pc_id</code> can push ICE candidates into another user's call. <code>_ActiveCall.user_id</code> is available but unused here.",
+    why:"<code>pc_id</code> is an unguessable UUID so impact is low, but the check is one line.",
+    gain:"Fix: <code>if entry.user_id != str(current_user.id): return {\"status\": \"ok\"}</code>.", note:"" },
+  { id:"M11", sev:"min", area:"pipeline", title:"Transcript insert is awaited on the frame path",
+    ref:"backend/app/pipeline/voice_pipeline.py:341, 374-375",
+    what:"<code>_finalize_turn</code> awaits <code>turn.insert()</code>; a slow Mongo insert delays <code>BotStoppedSpeakingFrame</code> propagation and therefore the start of the next turn.",
+    why:"Adds latency to the conversation on a slow DB write. The failure is already swallowed anyway.",
+    gain:"Fix: fire-and-forget via <code>asyncio.create_task</code>.", note:"" },
+  { id:"M12", sev:"min", area:"pipeline", title:"Every call writes a synthetic greeting-only turn",
+    ref:"backend/app/pipeline/voice_pipeline.py:333-350",
+    what:"The greeting <code>TTSSpeakFrame</code> is captured; the first <code>BotStoppedSpeakingFrame</code> inserts a <code>ConversationTurn</code> with empty <code>user_transcript</code>, greeting as the reply, all timings <code>None</code>.",
+    why:"Pollutes latency queries with a fake zero-latency turn on every call.",
+    gain:"Fix: skip finalize when <code>_user_stopped_at is None</code>.", note:"" },
+  { id:"M13", sev:"min", area:"pipeline", title:"call.ended webhook skipped when a call is superseded or hits the lifetime cap",
+    ref:"backend/app/api/connect.py:98 · call_worker.py:299-305",
+    what:"<code>_end_previous_calls_for</code> uses <code>process.terminate()</code> and the max-lifetime path just cancels the task; neither triggers <code>on_client_disconnected</code>.",
+    why:"Task 3.8's <code>call.ended</code> event is lost for those two paths — customers reconciling call logs via webhook miss those calls.",
+    gain:"Fix: emit <code>call.ended</code> explicitly on both paths.", note:"" },
+  { id:"M14", sev:"min", area:"pipeline", title:"_forward_payments dies silently on a malformed queue item",
+    ref:"backend/app/pipeline/voice_pipeline.py:750-772",
+    what:"<code>item.get(...)</code> on a non-dict raises; the bare <code>create_task</code> has no done-callback.",
+    why:"Payment updates then stop reaching the call with no log line.",
+    gain:"Fix: guard the item shape; add a done-callback that logs exceptions.", note:"" },
+  { id:"M15", sev:"min", area:"pipeline", title:"Local Whisper path ignores language",
+    ref:"backend/app/pipeline/providers.py:119-123",
+    what:"<code>WhisperSTTService(model=..., device=\"cpu\")</code> with no language; relies on per-utterance auto-detect.",
+    why:"Auto-detect is unreliable on short turns — inconsistent with the Deepgram fix and with the note claiming Hindi is verified on the local path.",
+    gain:"Fix: pass <code>language</code> through to Whisper.", note:"" },
+  { id:"M16", sev:"min", area:"pipeline", title:"Transcript text logged at INFO in production",
+    ref:"voice_pipeline.py:91-94 · rag_processor.py:226-228",
+    what:"<code>AudioDebugger</code>, <code>[RAG] Query…</code> and <code>[TRANSCRIPT]</code> lines log caller speech verbatim.",
+    why:"Caller speech (potentially card numbers, IDs) reaches the container logs. Known Phase-5 gap (consent / masking).",
+    gain:"Partly fixed on the <code>phase-6</code> branch (AudioDebugger redaction). Remaining lines still need it. Fix: route each through <code>redaction.redact()</code>.", note:"" },
+  { id:"M17", sev:"min", area:"pipeline", title:"No upload size limit",
+    ref:"backend/app/api/documents.py:38",
+    what:"<code>content = await file.read()</code> loads the whole PDF into memory with no cap.",
+    why:"Auth-gated, so low risk, but a large-file upload is an easy way to pressure the API server's memory.",
+    gain:"Fix: cap the request body size.", note:"" },
+
+  { id:"M18", sev:"min", area:"tools", title:"payments.py docstring overstates response uniformity",
+    ref:"backend/app/api/payments.py:166-170",
+    what:"Claims \"the same 400 whether the signature was wrong, the reference unknown, or the tool has no secret\" — but a verified webhook for an unmatched reference returns <code>200 {\"status\": \"ignored\"}</code>.",
+    why:"Not exploitable (reaching that branch needs the real HMAC secret), but the comment misleads a future reader.",
+    gain:"Fix: correct the comment.", note:"" },
+  { id:"M19", sev:"min", area:"tools", title:"Tool URLs aren't validated against the SSRF check at save time",
+    ref:"backend/app/api/bot_tools.py",
+    what:"Unlike <code>webhooks.py</code>'s <code>_validated()</code>, the tools endpoint doesn't call <code>url_safety.rejection_reason()</code> on save.",
+    why:"The runtime check still applies, so not a security gap — just inconsistent UX. A customer configuring a blocked URL only finds out via the Test button or at call time.",
+    gain:"Fix: validate on save for immediate form feedback.", note:"" },
+  { id:"M20", sev:"min", area:"tools", title:"A PendingApproval stuck in \"approving\" has no operator recovery path",
+    ref:"backend/app/api/approvals.py",
+    what:"A mid-execution crash can leave an approval in the <code>\"approving\"</code> state with no admin endpoint or documented runbook step to inspect / resolve it.",
+    why:"Correctly reasoned as the safe default (never auto-retry an ambiguous refund), but on-call has nothing to act on.",
+    gain:"Fix: an admin endpoint or a runbook note for manual resolution.", note:"" },
+  { id:"M21", sev:"min", area:"tools", title:"No test or comment for the DST fall-back (ambiguous hour) case",
+    ref:"backend/app/pipeline/booking.py (_parse_local)",
+    what:"Only the spring-forward gap is discussed. Python's implicit <code>fold=0</code> picks the first occurrence of an ambiguous local time.",
+    why:"A defensible choice, but neither documented nor asserted by a test the way spring-forward is.",
+    gain:"Fix: document the <code>fold=0</code> choice and add a test.", note:"" },
+
+  { id:"M22", sev:"min", area:"frontend", title:"endCall doesn't reset sources / openingDoc / bot",
+    ref:"frontend/src/context/CallContext.tsx:306-320",
+    what:"After a call ends, the citation panel and log stay rendered on <code>SessionPage</code> indefinitely; clicking a citation still fetches a blob that won't be revoked until the next <code>startCall</code>.",
+    why:"A stale panel hours after a call is odd; a stale blob fetch is a minor leak.",
+    gain:"Fix: clear on <code>endCall</code>, or after a timeout.", note:"Documented as intentional for \"whose call just ended\" — worth revisiting." },
+  { id:"M23", sev:"min", area:"frontend", title:"Blob URLs accumulate for the whole call",
+    ref:"frontend/src/context/CallContext.tsx:84, 372-373",
+    what:"20 opened PDFs during a long call = 20 blobs held in memory until the call ends.",
+    why:"Memory grows with document views on a long call.",
+    gain:"Fix: revoke each blob ~60s after <code>window.open</code> (the browser has loaded it by then).", note:"" },
+  { id:"M24", sev:"min", area:"frontend", title:"_blank without noopener on the citation window.open",
+    ref:"frontend/src/context/CallContext.tsx:373",
+    what:"Same-origin blob; modern browsers imply <code>noopener</code>, but it's not explicit.",
+    why:"Minor hardening gap.",
+    gain:"Fix: add <code>'noopener'</code> explicitly.", note:"" },
+  { id:"M25", sev:"min", area:"frontend", title:"Content-Type: application/json sent on every GET / DELETE",
+    ref:"frontend/src/lib/api.ts:34",
+    what:"The header is attached to requests with no body.",
+    why:"Harmless, slightly wrong.",
+    gain:"Fix: only set it when there's a body.", note:"" },
+  { id:"M26", sev:"min", area:"frontend", title:"Log keeps 51 entries, not 50",
+    ref:"frontend/src/context/CallContext.tsx:112",
+    what:"<code>[...prev.slice(-50), msg]</code> is 51 after append.",
+    why:"Cosmetic off-by-one.",
+    gain:"Fix: <code>slice(-49)</code>.", note:"" },
+  { id:"M27", sev:"min", area:"frontend", title:"slot_minutes: Number(e.target.value) with no fallback",
+    ref:"frontend/src/pages/BotSettingsPage.tsx:436",
+    what:"An intermediate empty state yields <code>NaN</code> → serialises to <code>null</code>. <code>required</code> on the input mostly saves it.",
+    why:"An edge-case save with a null slot length.",
+    gain:"Fix: mirror the <code>|| 8</code> pattern used for <code>timeout_seconds</code>.", note:"" },
+  { id:"M28", sev:"min", area:"frontend", title:"approval.threshold / timeout_seconds: Number(x) || 0",
+    ref:"frontend/src/pages/BotToolsPage.tsx:592",
+    what:"A cleared field becomes <code>0</code> — for a threshold, that means \"everything needs approval\". Negatives are possible via paste; <code>min</code> on the input isn't enforced against programmatic values.",
+    why:"A surprising config state from a cleared field.",
+    gain:"Fix: treat empty as \"unset\"; clamp negatives.", note:"" },
+  { id:"M29", sev:"min", area:"frontend", title:"save doesn't drop parameters with empty names",
+    ref:"frontend/src/pages/BotToolsPage.tsx:148-194",
+    what:"The test section filters empty-name rows; the save payload doesn't. An unfilled \"+ Add an input\" row is submitted.",
+    why:"A blank parameter reaches the backend config.",
+    gain:"Fix: filter empty-name rows in <code>save</code> too.", note:"" },
+  { id:"M30", sev:"min", area:"frontend", title:"Switching auth.kind to a credentialed mode without a secret saves silently",
+    ref:"frontend/src/pages/BotToolsPage.tsx:396-406",
+    what:"The tool saves with an auth mode that needs a secret but none entered — it will 401 at call time.",
+    why:"The failure surfaces only on a real call.",
+    gain:"Fix: require the secret when <code>kind</code> changed away from <code>none</code> and no stored secret exists.", note:"" },
+  { id:"M31", sev:"min", area:"frontend", title:"Second AppShell effect has no cancellation guard",
+    ref:"frontend/src/components/AppShell.tsx:72-74",
+    what:"A slow <code>getPendingApprovalCount</code> after unmount sets state on nothing. Harmless in React 19.",
+    why:"Sloppy next to the carefully-guarded first effect.",
+    gain:"Fix: a <code>cancelled</code> flag like the first effect.", note:"" },
+  { id:"M32", sev:"min", area:"frontend", title:"No webkitAudioContext / <input type=time> fallback",
+    ref:"frontend/src/context/CallContext.tsx · BotSettingsPage.tsx",
+    what:"Assumes current Chrome for both.",
+    why:"Fine if that's the only supported browser — worth confirming.",
+    gain:"Fix: add fallbacks, or document the browser support policy.", note:"" },
+  { id:"M33", sev:"min", area:"frontend", title:"A logged-in user visiting / sees the login form",
+    ref:"frontend/src/pages/LoginPage.tsx",
+    what:"<code>LoginPage</code> doesn't redirect when <code>token &amp;&amp; ready</code>.",
+    why:"Minor confusion — an authenticated user lands on a login screen.",
+    gain:"Fix: <code>&lt;Navigate to=\"/dashboard\"&gt;</code> when already authenticated.", note:"" },
+  { id:"M34", sev:"min", area:"frontend", title:"Dead template files",
+    ref:"frontend/src/App.css · src/assets/hero.png · react.svg · vite.svg",
+    what:"Unreferenced Vite scaffold files (<code>App.css</code> is imported nowhere).",
+    why:"Clutter.",
+    gain:"Fix: delete them.", note:"" },
+  { id:"M35", sev:"min", area:"frontend", title:"SessionPage fetches all bots to find one, with no error handling",
+    ref:"frontend/src/pages/SessionPage.tsx:29-31",
+    what:"If <code>listBots</code> throws or the bot isn't in the list, <code>bot</code> stays <code>null</code> and Start is permanently <code>disabled</code> with no message.",
+    why:"A dead call screen with no explanation.",
+    gain:"Fix: fetch the single bot; show an error state if it's missing.", note:"" },
+  { id:"M36", sev:"min", area:"frontend", title:"Sentry breadcrumbs attach request URLs with IDs",
+    ref:"frontend/src/main.tsx",
+    what:"Default fetch/XHR breadcrumbs include request URLs (with document IDs); error-message strings aren't scrubbed.",
+    why:"<code>sendDefaultPii: false</code> covers the main risk, but URLs still leak structure.",
+    gain:"Fix: a <code>beforeBreadcrumb</code> that drops or trims <code>/documents/*</code> URLs.", note:"" },
+];
+
+const KEY = "auris-review-tracker-v1";
+let done = {};
+try { done = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { done = {}; }
+// Items we've fixed on a branch are ticked by default; localStorage can still
+// override (untick) per viewer, but a fresh visitor sees the true state.
+DATA.forEach(d => { if (d.fixed && !(d.id in done)) done[d.id] = true; });
+
+const SEV_NAME = { crit: "Critical", imp: "Important", min: "Minor" };
+const SEV_DESC = {
+  crit: "Live in production. Do these first, on a fresh branch off main.",
+  imp: "Real problems worth fixing. Triage together — fix vs. log-and-defer.",
+  min: "Recorded for completeness. Mostly one-liners to batch later.",
+};
+
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (e) {}
+}
+
+function paint() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  const counts = { crit: [0, 0], imp: [0, 0], min: [0, 0] };
+
+  ["crit", "imp", "min"].forEach(sev => {
+    const items = DATA.filter(d => d.sev === sev);
+    const sec = document.createElement("section");
+    const head = document.createElement("div");
+    head.className = "sec-head";
+    head.innerHTML = '<h2>' + SEV_NAME[sev] + '</h2><span class="pill ' + sev + '" id="secpill-' + sev + '"></span>';
+    sec.appendChild(head);
+    const desc = document.createElement("p");
+    desc.className = "sec-desc";
+    desc.textContent = SEV_DESC[sev];
+    sec.appendChild(desc);
+
+    items.forEach(d => {
+      counts[sev][1]++;
+      if (done[d.id]) counts[sev][0]++;
+      const el = document.createElement("div");
+      el.className = "item" + (done[d.id] ? " done" : "");
+      el.innerHTML =
+        '<div class="item-top">' +
+          '<input type="checkbox" class="cb" ' + (done[d.id] ? "checked" : "") +
+            ' aria-label="Mark ' + d.id + ' resolved">' +
+          '<div class="item-mid">' +
+            '<div class="item-title">' + d.id + ' &nbsp;' + d.title + '</div>' +
+            '<div class="item-meta"><span class="tag">' + d.area + '</span>' +
+              '<span class="ref">' + d.ref + '</span></div>' +
+          '</div>' +
+          '<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>' +
+        '</div>' +
+        '<div class="item-body">' +
+          '<div class="row"><span class="k">What it is</span>' + d.what + '</div>' +
+          '<div class="row"><span class="k">Why it matters</span>' + d.why + '</div>' +
+          '<div class="row gain"><span class="k">What fixing it buys</span>' + d.gain + '</div>' +
+          (d.fixed ? '<div class="row gain"><span class="k">Fixed</span>commit <code>' + d.fixed + '</code></div>' : '') +
+          (d.note ? '<div class="note">' + d.note + '</div>' : '') +
+        '</div>';
+
+      const cb = el.querySelector(".cb");
+      cb.addEventListener("click", e => {
+        e.stopPropagation();
+        done[d.id] = cb.checked;
+        if (!cb.checked) delete done[d.id];
+        el.classList.toggle("done", cb.checked);
+        save();
+        updateDash(recount());
+      });
+      el.querySelector(".item-top").addEventListener("click", e => {
+        if (e.target === cb) return;
+        el.classList.toggle("open");
+      });
+      sec.appendChild(el);
+    });
+    list.appendChild(sec);
+  });
+
+  updateDash(counts);
+}
+
+function recount() {
+  const c = { crit: [0, 0], imp: [0, 0], min: [0, 0] };
+  DATA.forEach(d => { c[d.sev][1]++; if (done[d.id]) c[d.sev][0]++; });
+  return c;
+}
+
+function updateDash(c) {
+  const totalDone = c.crit[0] + c.imp[0] + c.min[0];
+  const total = c.crit[1] + c.imp[1] + c.min[1];
+  document.getElementById("overall").textContent = totalDone + " / " + total + " resolved";
+  document.getElementById("breakdown").textContent =
+    "critical " + c.crit[0] + "/" + c.crit[1] +
+    "  ·  important " + c.imp[0] + "/" + c.imp[1] +
+    "  ·  minor " + c.min[0] + "/" + c.min[1];
+  ["crit", "imp", "min"].forEach(sev => {
+    const pct = c[sev][1] ? (c[sev][0] / c[sev][1] * 100) : 0;
+    document.getElementById("bar-" + sev).style.width = pct + "%";
+    document.getElementById("lbl-" + sev).textContent =
+      SEV_NAME[sev].toLowerCase() + " " + c[sev][0] + "/" + c[sev][1];
+    const p = document.getElementById("secpill-" + sev);
+    if (p) p.textContent = c[sev][0] + " / " + c[sev][1] + " done";
+  });
+}
+
+paint();
+</script>
