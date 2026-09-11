@@ -447,20 +447,43 @@ async def ice_servers(current_user: User = Depends(get_current_user)):
 
 @router.post("/connect")
 async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_user)):
-    # Before anything else, including the database lookup below: this
-    # caller gets exactly one live pipeline. A previous one still running
-    # would otherwise keep hearing them and keep answering over the new one
-    # — see _end_previous_calls_for(). Also frees that call's capacity slot
-    # immediately, ahead of the check below, so a user reconnecting is
-    # never blocked by their own stale call.
+    # Review finding #4 — validate BEFORE tearing anything down.
+    #
+    # This lookup used to come third, after the previous call had already
+    # been ended and a capacity slot claimed. That meant a request naming a
+    # bot_id that does not exist, or belongs to someone else, destroyed the
+    # caller's existing healthy call on its way to failing — a stale browser
+    # tab, a bookmarked id, or a retry against a deleted bot was enough. The
+    # caller was left with no call at all, having had a working one a moment
+    # before.
+    #
+    # Nothing about the one-call-per-user rule below needs to act before the
+    # request is known to be valid, so it doesn't any more.
+    #
+    # Task 2.6: bot_id here comes from the request body, not the URL path, so
+    # this uses fetch_owned_bot directly rather than the get_owned_bot
+    # FastAPI dependency (which resolves bot_id from a path parameter).
+    bot = await fetch_owned_bot(body.bot_id, current_user)
+
+    # Now that the request is known to be legitimate: this caller gets
+    # exactly one live pipeline. A previous one still running would keep
+    # hearing them and keep answering over the new one — see
+    # _end_previous_calls_for(). Still ahead of the capacity check below,
+    # which is the part of the original ordering that genuinely mattered:
+    # it frees that call's slot first, so a user reconnecting is never
+    # refused because of their own stale call.
     await _end_previous_calls_for(str(current_user.id))
 
-    # Task 4.5 — the hard ceiling, checked before the bot lookup on purpose:
-    # a system already at capacity should not spend a database round trip
-    # finding that out. Checked, and its increment made, in one atomic step
-    # (see call_capacity.py) — a check-then-increment done in two separate
-    # steps is exactly how two requests both squeeze through when only one
-    # slot is actually free.
+    # Task 4.5 — the hard ceiling. Checked, and its increment made, in one
+    # atomic step (see call_capacity.py): a check-then-increment done in two
+    # separate steps is exactly how two requests both squeeze through when
+    # only one slot is actually free.
+    #
+    # This now costs one indexed Mongo lookup (the fetch above) before a
+    # caller at capacity is refused, where the previous ordering avoided it
+    # deliberately. That trade is worth stating: being refused at capacity is
+    # transient and harmless, destroying a live conversation is neither, and
+    # an indexed lookup is the ordinary price of validating a request at all.
     slot_token = await try_acquire_call_slot()
     if slot_token is None:
         current = await active_call_count()
@@ -472,18 +495,6 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
             status_code=503,
             detail="This system is at capacity right now. Please try again in a moment.",
         )
-
-    try:
-        # Task 2.6: bot_id here comes from the request body, not the URL
-        # path, so it uses fetch_owned_bot directly rather than the
-        # get_owned_bot FastAPI dependency (which resolves bot_id from a
-        # path parameter).
-        bot = await fetch_owned_bot(body.bot_id, current_user)
-    except BaseException:
-        # The slot was claimed above; an unknown/unowned bot_id must not
-        # hold it forever.
-        await release_call_slot(slot_token)
-        raise
 
     # Task 2.4 — plain picklable data passed across the process boundary as
     # multiprocessing.Process args, not the ORM object itself.

@@ -117,19 +117,30 @@ async def test_connect_refuses_with_a_clean_response_when_full(monkeypatch):
     for _ in range(3):
         await try_acquire_call_slot()
 
+    # The bot lookup now runs BEFORE the capacity check (review finding #4 —
+    # an invalid bot_id used to destroy the caller's live call on its way to
+    # being rejected), so this is a valid bot that resolves normally. What is
+    # under test is the refusal, not the ordering; the ordering has its own
+    # test below.
+    class _Bot:
+        id = "bot-1"
+        name = "Test"
+        system_prompt = "p"
+        voice_id = "v"
+        llm_model = "m"
+        language = "en"
+        user_id = "user-x"
+
     async def _fake_owned_bot(*a, **k):
-        raise AssertionError("should never get this far once the cap is hit")
+        return _Bot()
 
     monkeypatch.setattr(connect_module, "fetch_owned_bot", _fake_owned_bot)
+    monkeypatch.setattr(connect_module, "_end_previous_calls_for", _noop_async)
 
     class _FakeUser:
         id = "user-x"
 
     with pytest.raises(HTTPException) as excinfo:
-        # fetch_owned_bot is patched to blow up if reached; the capacity
-        # check in the real connect() runs before it, so this call must
-        # never reach that line at all — reordering connect() would surface
-        # here as the AssertionError instead of the 503 below.
         body = connect_module.WebRTCOffer(bot_id="bot-1", sdp="x", type="offer")
         await connect_module.connect(body, current_user=_FakeUser())
 
@@ -156,28 +167,62 @@ async def test_connect_checks_capacity_after_freeing_the_callers_own_stale_call(
     )
 
 
-async def test_capacity_is_checked_before_the_database_lookup():
-    """A system already full should not spend a database round trip
-    discovering that — the cap is meant to fail fast."""
+async def test_the_request_is_validated_before_anything_is_torn_down():
+    """REVERSED by review finding #4 (2026-09-11).
+
+    This used to assert the opposite — that capacity was checked BEFORE the
+    bot lookup, so a full system would not spend a database round trip
+    discovering it was full. That reasoning is fine as far as it goes, and
+    the cost it avoids is real but small: one indexed lookup, on requests
+    that are about to be refused anyway.
+
+    What it bought was much worse than what it saved. With the lookup last,
+    the first thing connect() did was end the caller's existing call — so a
+    request naming a bot_id that does not exist, or belongs to someone else,
+    destroyed a live healthy conversation and only then returned 404. A stale
+    browser tab, a bookmarked id, or a retry against a deleted bot was
+    enough.
+
+    The three constraints cannot all hold at once: validate-before-teardown,
+    end-previous-before-capacity (so a caller is never refused by their own
+    stale slot), and capacity-before-lookup. Something has to give, and
+    "don't pay an indexed lookup when full" is by far the cheapest of the
+    three to give up. Being refused at capacity is transient and harmless;
+    destroying a live conversation is neither.
+    """
     import inspect
 
     from app.api import connect as connect_module
 
     source = inspect.getsource(connect_module.connect)
-    checked_at = source.find("try_acquire_call_slot")
     fetched_at = source.find("fetch_owned_bot")
+    ended_at = source.find("_end_previous_calls_for")
+    checked_at = source.find("try_acquire_call_slot")
 
-    assert checked_at != -1 and fetched_at != -1
-    assert checked_at < fetched_at, (
-        "connect() looks up the bot before checking capacity — a full "
-        "system now pays a database round trip on every refused call"
+    assert fetched_at != -1 and ended_at != -1 and checked_at != -1
+    assert fetched_at < ended_at, (
+        "connect() ends the caller's previous call before validating the "
+        "request, so an invalid bot_id destroys a working call"
+    )
+    assert ended_at < checked_at, (
+        "connect() checks capacity before releasing the caller's own stale "
+        "call, so reconnecting could be refused by a slot the caller "
+        "themselves is about to free"
     )
 
 
-async def test_an_unowned_bot_id_releases_the_slot_it_acquired(monkeypatch):
-    """The slot is claimed before the bot lookup (to fail fast on capacity),
-    which means a bad bot_id after that point must give it back — otherwise
-    every mistyped or unauthorized bot_id would leak a slot."""
+async def test_an_unowned_bot_id_does_not_consume_a_slot(monkeypatch):
+    """The invariant this protects is unchanged — a mistyped or unauthorized
+    bot_id must never cost a capacity slot — but the reason it holds is now
+    different, and worth keeping honest.
+
+    It used to hold because the slot was claimed BEFORE the bot lookup and
+    explicitly released on the way out. Since review finding #4 the lookup
+    comes first, so no slot is ever claimed for a request that fails
+    validation. Kept as a regression guard on the outcome rather than the
+    mechanism: if the ordering is ever changed back, the release path has to
+    come back with it.
+    """
     from app.api import connect as connect_module
 
     monkeypatch.setattr(connect_module, "_end_previous_calls_for", _noop_async)
