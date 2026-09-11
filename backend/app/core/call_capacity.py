@@ -74,9 +74,16 @@ NODE_ID = uuid.uuid4().hex[:12]
 _LUA_TRY_ACQUIRE = """
 local cutoff = tonumber(ARGV[2]) - tonumber(ARGV[3])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', cutoff)
-local current = redis.call('ZCARD', KEYS[1])
-if current >= tonumber(ARGV[1]) then
-    return 0
+local limit = tonumber(ARGV[1])
+-- Review finding #2: limit <= 0 is "no cap", which means never REFUSE a
+-- call. It does not mean stop counting them -- the slot is still recorded
+-- below, because /health, /metrics and (the one that matters) the
+-- watchdog's defer-while-calls-are-live check all read that count.
+if limit > 0 then
+    local current = redis.call('ZCARD', KEYS[1])
+    if current >= limit then
+        return 0
+    end
 end
 redis.call('ZADD', KEYS[1], ARGV[2], ARGV[4])
 return 1
@@ -104,10 +111,18 @@ class _InProcessCapacity:
 
     async def try_acquire(self, limit: int) -> str | None:
         token = _new_token()
-        if limit <= 0:
-            return token  # 0 means "no cap", per config.py's own doc
         async with self._lock:
-            if len(self._held) >= limit:
+            # Review finding #2 — the limit check is conditional, the
+            # bookkeeping is not. "No cap" (limit <= 0, per config.py's own
+            # doc) is a decision about REFUSING calls, not about counting
+            # them. Returning an unrecorded token used to make
+            # active_call_count() report 0 however many calls were running,
+            # and the watchdog reads that number to decide whether to defer
+            # a restart — so an uncapped server with an unreachable database
+            # hung up on every live caller instead of waiting for them to
+            # finish, which is the exact opposite of what that deferral is
+            # for.
+            if limit > 0 and len(self._held) >= limit:
                 return None
             self._held.add(token)
             return token
@@ -146,9 +161,11 @@ class _RedisCapacity:
         return float(seconds) + float(microseconds) / 1_000_000
 
     async def try_acquire(self, limit: int) -> str | None:
+        # Review finding #2 — no early return for the uncapped case. The
+        # script itself skips only the ceiling CHECK when limit <= 0 and
+        # records the slot either way, so the count stays truthful whether
+        # or not a cap is configured. See the comment in _LUA_TRY_ACQUIRE.
         token = _new_token()
-        if limit <= 0:
-            return token
         now = await self._now()
         granted = await self._script(
             keys=[_KEY], args=[limit, now, SLOT_TTL_SECONDS, token]
