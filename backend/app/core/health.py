@@ -129,6 +129,17 @@ async def report() -> dict:
         # entries repeated with their backup readiness — the tool ones have
         # no backup concept, so they only ever appear in the first dict.
         "circuit_breakers": _safe(breaker.snapshot, {}, "circuit breakers"),
+        # Review finding #1 — without this, an empty circuit_breakers dict is
+        # ambiguous in the worst way: "nothing has tripped" and "the store is
+        # unreadable, so every call is going through unchecked" look
+        # identical. Not part of `healthy`: calls still work with the
+        # breaker off, so this is degraded protection, not an outage — and
+        # letting it restart the process (see Watchdog) would be a bad trade.
+        "breaker_store": _safe(
+            lambda: {"ok": breaker.storage_error() is None, "detail": breaker.storage_error() or "ok"},
+            {"ok": None, "detail": "could not be read"},
+            "breaker store health",
+        ),
         "providers": _safe(provider_health.health, {}, "provider fallbacks"),
     }
 

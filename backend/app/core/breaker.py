@@ -105,6 +105,117 @@ def configure(name: str, config: BreakerConfig) -> None:
     _configs[name] = config
 
 
+# ── When the store itself fails ───────────────────────────────────────────────
+#
+# Review finding #1 (2026-09-11). Everything below this line talks to SQLite,
+# and until this was added, none of it caught anything.
+#
+# Where that bites is not obvious from this file. `allows()` is reached from
+# providers.get_stt_service / get_llm_service / get_tts_service, via
+# provider_health.fallback_for, on EVERY call with the default configuration —
+# and that runs after the WebRTC SDP answer has already gone back to the
+# caller's browser. A storage error (disk full, a permission problem, a WAL
+# lock timeout, a corrupted file) raised out of `allows()`, unwound through
+# the whole pipeline construction, and was swallowed by the pipeline task's
+# own bare `except Exception`. The caller got a browser showing a connected
+# call with no STT, no LLM and no TTS behind it: silence, and nothing on
+# /health pointing at why, because a failure on this path never manages to
+# write a breaker row either.
+#
+# So: the breaker is ADVISORY, never load-bearing. It may refuse a call it
+# believes is doomed, but a breaker that cannot read its own state has to get
+# out of the way rather than take the call down with it. Failing OPEN is the
+# only safe direction — the pre-Phase-4 behaviour was no breaker at all, and
+# degrading to that is strictly better than dead air.
+#
+# Failing open silently would be its own bug, though: it trades visible
+# breakage for an invisible loss of protection. Hence `storage_error()`,
+# which the health endpoint reports.
+
+_storage_error: str | None = None
+_storage_error_logged = False
+
+
+def storage_error() -> str | None:
+    """The last storage failure, or None if the store is working.
+
+    Cleared by the next operation that succeeds, so this reports the CURRENT
+    state rather than "something went wrong once, hours ago".
+    """
+    return _storage_error
+
+
+def forget_storage_error() -> None:
+    """Reset the recorded failure. For tests and for an operator who has
+    fixed the underlying problem and wants a clean reading."""
+    global _storage_error, _storage_error_logged
+    _storage_error = None
+    _storage_error_logged = False
+
+
+def _note_storage_failure(operation: str, exc: Exception) -> None:
+    global _storage_error, _storage_error_logged
+    _storage_error = f"{type(exc).__name__}: {exc}"
+
+    # Logged once per distinct outage, not once per call. Whatever breaks the
+    # store breaks it for every call on the machine at once, and a line per
+    # tool call per process would bury the thing an operator needs to read.
+    if not _storage_error_logged:
+        _storage_error_logged = True
+        logger.error(
+            f"[BREAKER] the breaker store is not usable ({operation}: {_storage_error}). "
+            f"Calls are being ALLOWED through unchecked until it recovers — the "
+            f"protection is off, but no call will be broken by this. Store: {DB_PATH}"
+        )
+
+    _discard_connection()
+
+
+def _discard_connection() -> None:
+    """Drop this thread's cached connection.
+
+    Load-bearing, not tidiness. A failure part-way through a transaction can
+    leave the connection inside an open BEGIN IMMEDIATE; reusing it would
+    fail every later call on this thread, turning one transient error into a
+    permanent one for the life of the process.
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        return
+    _local.conn = None
+    try:
+        conn.close()
+    except Exception:
+        pass  # already broken; there is nothing further to do about it
+
+
+def _succeeded() -> None:
+    """Called after any operation that completed, so a transient failure
+    does not latch off for the life of the process."""
+    if _storage_error is not None:
+        logger.info("[BREAKER] the breaker store is readable again — protection is back on")
+        forget_storage_error()
+
+
+def _end_transaction(conn: sqlite3.Connection) -> None:
+    """COMMIT, in a `finally`, without masking whatever sent us there.
+
+    A plain `conn.execute("COMMIT")` in a finally block is a trap: if the
+    body raised, the COMMIT very often raises too (the connection is exactly
+    as broken as it was a moment ago), and Python then discards the original
+    exception in favour of this second one. The real cause — the thing an
+    operator needs — is lost and replaced with a confusing "cannot commit"
+    from a line that is not where anything went wrong.
+    """
+    try:
+        conn.execute("COMMIT")
+    except Exception:
+        # Leave the original exception, if any, to propagate untouched. The
+        # connection is discarded by _note_storage_failure either way, so a
+        # transaction left open cannot poison the next call.
+        pass
+
+
 def config_for(name: str) -> BreakerConfig:
     return _configs.get(name, _DEFAULT)
 
@@ -174,7 +285,22 @@ def _row(conn: sqlite3.Connection, name: str) -> tuple[list[float], float | None
 def state(name: str) -> str:
     """'closed', 'open' or 'half_open' — without consuming the half-open
     trial. Use this for reporting (the health endpoint); use allows() to
-    actually decide whether to make a request."""
+    actually decide whether to make a request.
+
+    Returns 'unknown' if the store cannot be read: a reporting path must not
+    turn an incident into a 500 on the page an operator opened to diagnose
+    it. See storage_error() for what actually went wrong.
+    """
+    try:
+        result = _state(name)
+    except Exception as e:
+        _note_storage_failure("state", e)
+        return "unknown"
+    _succeeded()
+    return result
+
+
+def _state(name: str) -> str:
     conn = _connect()
     _, opened_at, _, _, _ = _row(conn, name)
     if opened_at is None:
@@ -192,7 +318,22 @@ def allows(name: str) -> bool:
     everyone else gets False until that trial reports back, which is the
     whole point of half-open: a provider recovering from an outage should
     be probed by one call, not stampeded by all of them.
+
+    Returns True if the store cannot be read at all. That is the deliberate
+    direction to fail in — see the note above storage_error(). This sits on
+    the critical path of a live call, and a breaker that cannot answer must
+    get out of the way rather than take the call down with it.
     """
+    try:
+        result = _allows(name)
+    except Exception as e:
+        _note_storage_failure("allows", e)
+        return True  # fail OPEN: allow the call
+    _succeeded()
+    return result
+
+
+def _allows(name: str) -> bool:
     conn = _connect()
     cfg = config_for(name)
     now = time.time()
@@ -240,12 +381,26 @@ def allows(name: str) -> bool:
         logger.info(f"[BREAKER] {name}: cooldown elapsed, letting one trial call through")
         return True
     finally:
-        conn.execute("COMMIT")
+        _end_transaction(conn)
 
 
 def record_success(name: str) -> None:
     """Report that a call worked. Closes a half-open breaker and clears the
-    failure history."""
+    failure history.
+
+    Never raises: this is called from inside a live call's frame handling,
+    and there is nothing useful a caller could do about a storage failure
+    anyway. See the note above storage_error().
+    """
+    try:
+        _record_success(name)
+    except Exception as e:
+        _note_storage_failure("record_success", e)
+        return
+    _succeeded()
+
+
+def _record_success(name: str) -> None:
     conn = _connect()
 
     # Checked by reading first, for the same reason as allows(): this runs
@@ -272,7 +427,7 @@ def record_success(name: str) -> None:
             (name, trips),
         )
     finally:
-        conn.execute("COMMIT")
+        _end_transaction(conn)
 
 
 def record_failure(name: str, reason: str = "") -> None:
@@ -282,7 +437,18 @@ def record_failure(name: str, reason: str = "") -> None:
     A failure during a half-open trial re-opens immediately, whatever the
     count says. That is the point of the trial: the provider was asked
     whether it had recovered and the answer was no.
+
+    Never raises, for the same reason record_success() does not.
     """
+    try:
+        _record_failure(name, reason)
+    except Exception as e:
+        _note_storage_failure("record_failure", e)
+        return
+    _succeeded()
+
+
+def _record_failure(name: str, reason: str = "") -> None:
     conn = _connect()
     cfg = config_for(name)
     now = time.time()
@@ -379,12 +545,27 @@ def record_failure(name: str, reason: str = "") -> None:
                 (name, json.dumps(stamps), reason[:500], trips),
             )
     finally:
-        conn.execute("COMMIT")
+        _end_transaction(conn)
 
 
 def snapshot() -> dict[str, dict]:
     """Every breaker this node knows about, for the health endpoint and the
-    metrics export. Reports state without consuming a half-open trial."""
+    metrics export. Reports state without consuming a half-open trial.
+
+    Returns {} if the store cannot be read — pair it with storage_error() to
+    tell "no breakers have tripped" apart from "the store is broken", which
+    look identical otherwise.
+    """
+    try:
+        result = _snapshot()
+    except Exception as e:
+        _note_storage_failure("snapshot", e)
+        return {}
+    _succeeded()
+    return result
+
+
+def _snapshot() -> dict[str, dict]:
     conn = _connect()
     out: dict[str, dict] = {}
     # fetchall before the loop: state() runs its own query on this same
@@ -399,7 +580,11 @@ def snapshot() -> dict[str, dict]:
         except (ValueError, TypeError):
             stamps = []
         out[name] = {
-            "state": state(name),
+            # _state, not state: a failure part-way through this loop should
+            # reach snapshot()'s own handler and be reported as one broken
+            # store, rather than quietly producing a dict where some rows
+            # say "unknown" and the caller cannot tell why.
+            "state": _state(name),
             "recent_failures": len(stamps),
             "opened_at": opened_at,
             "last_reason": reason,
