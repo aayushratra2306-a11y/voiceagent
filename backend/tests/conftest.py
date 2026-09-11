@@ -110,7 +110,11 @@ async def client():
         yield ac
 
 
-async def _register_and_login(client: AsyncClient, email: str, password: str = "testpass123") -> str:
+# Review finding I6 (2026-09-10) raised the registration floor to 12
+# characters, and this default was 11 ("testpass123") — every fixture
+# built on it would have started failing validation rather than testing
+# what it is about.
+async def _register_and_login(client: AsyncClient, email: str, password: str = "testpass12345") -> str:
     await client.post("/auth/register", json={"email": email, "password": password})
     resp = await client.post("/auth/login", json={"email": email, "password": password})
     return resp.json()["access_token"]

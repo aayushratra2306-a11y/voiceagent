@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from pydantic import BaseModel, EmailStr
+from loguru import logger
+from pydantic import BaseModel, EmailStr, Field
 from pymongo.errors import DuplicateKeyError
 
 from app.core.auth import (
@@ -10,7 +11,7 @@ from app.core.auth import (
     verify_refresh_token,
 )
 from app.core.rate_limit import limiter
-from app.core.security import hash_password, verify_password
+from app.core.security import hash_password, needs_rehash, verify_password
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -18,7 +19,17 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
+    # Review finding I6 (2026-09-10) — there was no validator here at all,
+    # so "" and "a" were both acceptable passwords for a system holding
+    # payment-adjacent customer data.
+    #
+    # A length floor and nothing else, deliberately. Composition rules
+    # ("one uppercase, one digit, one symbol") mostly push people toward
+    # Password1! and are no longer recommended by NIST; length is what
+    # actually costs an attacker. 12 is the floor, with no maximum beyond
+    # what the hash accepts — see core/security.py on why a long password
+    # is now safe to accept, which it genuinely was not before.
+    password: str = Field(min_length=12)
 
 
 class LoginRequest(BaseModel):
@@ -81,6 +92,24 @@ async def login(request: Request, body: LoginRequest, response: Response):
     user = await User.find_one(User.email == body.email)
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Review finding I6 (2026-09-10) — drain the old bcrypt hashes.
+    #
+    # Every password stored before that change used plain bcrypt, which
+    # silently ignores everything past the 72nd byte (see core/security.py).
+    # Those hashes still verify, so nobody is locked out, but they keep the
+    # weakness until they are rewritten — and this is the only moment the
+    # plaintext exists to rewrite them from.
+    #
+    # Best-effort on purpose: a failed write here must not turn a correct
+    # password into a failed login. The user keeps their old hash and the
+    # next sign-in tries again.
+    if needs_rehash(user.password_hash):
+        try:
+            user.password_hash = hash_password(body.password)
+            await user.save()
+        except Exception as e:
+            logger.warning(f"[AUTH] Could not upgrade password hash: {type(e).__name__}: {e}")
 
     access_token = create_access_token({"sub": user.email})
     refresh_token, _jti, expires_at = create_refresh_token({"sub": user.email})
