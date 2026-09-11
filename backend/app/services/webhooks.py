@@ -35,7 +35,7 @@ from beanie import PydanticObjectId
 from loguru import logger
 
 from app.core.crypto import decrypt_secret
-from app.core.url_safety import rejection_reason
+from app.core.url_safety import BlockedAddress, rejection_reason, safe_transport
 from app.models.webhook import (
     EVENT_TYPES,
     WebhookDelivery,
@@ -150,7 +150,15 @@ async def deliver_now(sub: WebhookSubscription, event: str, payload: dict) -> di
     signature = _sign(secret, body)
 
     try:
-        async with httpx.AsyncClient(timeout=DELIVERY_TIMEOUT_SECONDS) as client:
+        # Review finding I4 — `transport=safe_transport()`. The check above
+        # runs before the request; this one runs AT the request, resolving
+        # the host once and connecting to that exact address. Two separate
+        # lookups mean only the first is ever examined, and the customer
+        # (or whoever took their account) owns the nameserver that answers
+        # both.
+        async with httpx.AsyncClient(
+            timeout=DELIVERY_TIMEOUT_SECONDS, transport=safe_transport()
+        ) as client:
             response = await client.post(
                 sub.url, content=body,
                 headers={
@@ -161,6 +169,12 @@ async def deliver_now(sub: WebhookSubscription, event: str, payload: dict) -> di
             )
         ok = response.status_code < 400
         return {"ok": ok, "status_code": response.status_code, "error": "" if ok else f"HTTP {response.status_code}"}
+    except BlockedAddress as e:
+        # Recorded as "blocked", not as a transport error, so the delivery
+        # log tells a customer chasing missing events the real reason
+        # rather than something that reads like a network blip.
+        logger.warning(f"[WEBHOOK] Refused at connect time for subscription {sub.id} — {e}")
+        return {"ok": False, "status_code": None, "error": f"blocked: {e}"}
     except Exception as e:
         return {"ok": False, "status_code": None, "error": f"{type(e).__name__}: {e}"}
 

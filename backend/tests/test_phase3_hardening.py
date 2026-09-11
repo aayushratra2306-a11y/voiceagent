@@ -457,13 +457,22 @@ def test_a_public_address_is_allowed():
     assert rejection_reason("https://8.8.8.8/hook") is None
 
 
-def test_a_name_that_does_not_resolve_is_allowed_through():
-    """Fails open on DNS: an unresolvable name is not a route into
-    anything, and treating a resolver blip as an attack would turn it into
-    a delivery outage for nothing."""
+def test_a_name_that_does_not_resolve_is_refused():
+    """REVERSED by review finding I4 (2026-09-10). This used to assert the
+    opposite, and the reasoning behind it read perfectly well: an
+    unresolvable name is not a route into anything, so treating a resolver
+    blip as an attack would be a delivery outage for nothing.
+
+    What it missed is that the name belongs to whoever supplied the URL,
+    and so does the nameserver that answers for it. Making the lookup fail
+    is free for that person, and the URL then sailed past unexamined — so
+    the way in was never "point it at 127.0.0.1" (that was caught), it was
+    "stop the check from being able to run". See app/core/url_safety.py;
+    the fail-closed behaviour is covered in depth in test_ssrf_pinning.py.
+    """
     from app.core.url_safety import rejection_reason
 
-    assert rejection_reason("https://nx-does-not-exist.invalid/hook") is None
+    assert rejection_reason("https://nx-does-not-exist.invalid/hook") is not None
 
 
 async def test_a_webhook_subscription_cannot_be_pointed_at_the_metadata_service(
