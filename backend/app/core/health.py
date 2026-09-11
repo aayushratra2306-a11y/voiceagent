@@ -72,10 +72,28 @@ def check_worker_pool() -> tuple[bool, str]:
     from app.api import connect as connect_module
 
     size = len(connect_module._idle_pool)
-    target = connect_module.settings.call_worker_pool_min
-    if target == 0:
+    pool_min = connect_module.settings.call_worker_pool_min
+    pool_max = connect_module.settings.call_worker_pool_max
+
+    # Review finding #7 — pool_min == 0 is NOT "pooling disabled".
+    #
+    # This used to key on the floor alone, but per next_pool_target(),
+    # pool_min=0 with pool_max>0 is a legitimate, fully working
+    # configuration: the pool drains to nothing while idle and grows again
+    # the moment a cold-spawn signals demand. An operator who chose that
+    # deliberately — to give an idle server its memory back — was told their
+    # working autoscaler was switched off, on the very page they would open
+    # to check it.
+    #
+    # Pooling is only genuinely off when there is no room to grow either;
+    # then next_pool_target() can never return anything but zero.
+    if pool_max == 0:
         return True, "pooling disabled"
     if size == 0:
+        if pool_min == 0:
+            # Correct and expected here, not a warning: an idle
+            # autoscale-to-zero pool is supposed to be empty.
+            return True, f"idle — autoscaling 0 to {pool_max} on demand"
         return True, "pool is empty — calls are falling back to cold-spawn"
     return True, f"{size} warm worker(s)"
 
