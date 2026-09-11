@@ -52,6 +52,33 @@ async def _owned_approval(approval_id: str, user_id: str) -> PendingApproval:
     return approval
 
 
+@router.get("/pending-count")
+async def pending_approval_count(current_user: User = Depends(get_current_user)):
+    """How many approvals are waiting on this account, and nothing else.
+
+    Its own endpoint rather than `len(list_approvals())` because the header
+    polls this on every page: the list endpoint returns up to 100 full
+    records — arguments, amounts, timestamps — and the badge needs one
+    integer. Counting server-side keeps a background poll from moving
+    kilobytes of JSON every few seconds to render a single digit.
+
+    Only "pending" counts. "approving" is the brief window where somebody
+    has already clicked and the atomic claim is in flight (see
+    _claim_for_decision) — that request is no longer waiting for a person,
+    so counting it would keep the badge lit against a decision already
+    made.
+
+    Declared BEFORE any "/{approval_id}" route: FastAPI matches in
+    definition order, so a later path parameter would otherwise swallow
+    "pending-count" and try to look it up as an id.
+    """
+    count = await PendingApproval.find(
+        PendingApproval.user_id == str(current_user.id),
+        PendingApproval.status == "pending",
+    ).count()
+    return {"count": count}
+
+
 @router.get("/")
 async def list_approvals(
     status: str | None = None,

@@ -42,8 +42,15 @@ there here morning afternoon evening night doing everyone mate buddy dear
 # gets a correct answer, which is the right way round to be wrong.
 
 # Guard against a short utterance that IS a real question — "why?", "page 4",
-# "the invoice" — by never skipping when a digit or a question mark is present.
-_MEANINGFUL = re.compile(r"[0-9?]")
+# "the invoice" — by never skipping when a digit or a question mark is
+# present. Devanagari digits (०-९) count too, so a Hindi caller
+# saying a bare page number gets the same treatment as an English one.
+_MEANINGFUL = re.compile(r"[0-9?०-९]")
+
+# Peeled off the ends of a token before it's matched against the filler
+# list. The danda (।) and double danda (॥) are Hindi sentence
+# terminators; the rest is ordinary typed and spoken punctuation.
+_EDGE_PUNCT = ".,!?;:'\"()[]{}…–—-।॥"
 
 # How long retrieval may hold an LLMContextFrame before we give up and let
 # the reply through uncited.
@@ -75,10 +82,26 @@ AGGREGATOR_TURN_STOP_TIMEOUT = 5.0  # pipecat LLMUserAggregatorParams default
 
 
 def needs_retrieval(text: str) -> bool:
-    """False only when every word is conversational filler."""
+    """False only when every word is recognised conversational filler.
+
+    The filler list is English and romanized only, so a word in any other
+    script is by definition unrecognised and falls through to retrieval —
+    the safe direction. A wasted 2s lookup on a Hindi greeting is
+    acceptable; skipping a real Hindi document question is not.
+
+    Found 2026-09-10 in review: the word match was `[a-z']+`, so a
+    pure-Devanagari turn produced NO words at all and hit the `not words`
+    branch, skipping retrieval entirely. Deepgram rarely emits `?` for
+    Devanagari (it uses `।`), so a Hindi document question — no ASCII
+    letters, no digit, no `?` — was answered from general knowledge on
+    every turn, with nothing shown to the caller. This project has real
+    Hindi call volume. Splitting on whitespace instead makes the check
+    script-agnostic while leaving English behaviour identical.
+    """
     if _MEANINGFUL.search(text):
         return True
-    words = re.findall(r"[a-z']+", text.lower())
+    words = [w.strip(_EDGE_PUNCT) for w in text.lower().split()]
+    words = [w for w in words if w]
     if not words:
         return False
     return not all(w in _FILLER_WORDS for w in words)

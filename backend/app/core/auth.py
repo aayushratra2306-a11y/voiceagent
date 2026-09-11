@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from pymongo.errors import DuplicateKeyError
 
 from app.core.config import settings
 from app.models.revoked_token import RevokedRefreshToken
@@ -69,21 +70,51 @@ async def verify_refresh_token(token: str) -> tuple[str, str, datetime]:
     return email, jti, datetime.fromtimestamp(exp, tz=UTC)
 
 
-async def revoke_refresh_token(token: str) -> None:
+async def revoke_refresh_token(token: str) -> bool:
     """Task 2.5 — this is what makes logout actually mean something server-
     side, not just "the browser forgot the token": the token's jti is
     recorded so verify_refresh_token rejects it even if someone captured a
     copy of it before logout. A token that's already invalid/expired/
     malformed has nothing to revoke — silently no-ops rather than raising,
-    since logout should never itself fail."""
+    since logout should never itself fail.
+
+    Review finding I2 (2026-09-10) — returns whether THIS call was the one
+    that revoked the token, and that answer is the point.
+
+    Rotation is the entire reason refresh tokens are worth having: a
+    stolen copy and the legitimate copy cannot both keep working, so
+    whichever is used next invalidates the other and the collision itself
+    is the theft signal. That only holds if revoking is a claim exactly one
+    caller can win. It was not. `verify_refresh_token` read the revocation
+    list and this function wrote to it, two separate statements, with
+    nothing between them stopping a second request from doing the same
+    read first — so two refreshes presenting one cookie together both
+    verified, both revoked, and both walked away with a fresh lineage. The
+    guarantee was gone precisely in the case it exists for.
+
+    The unique index on jti (see models/revoked_token.py) is what makes
+    the insert a claim: MongoDB applies it to whichever write lands second
+    no matter how close the two are, and that one loses. This is the same
+    shape as the approvals code's `_claim_for_decision` and the webhook
+    outbox's `_claim` — a conditional write, not a read followed by a
+    write.
+
+    False means "somebody else already revoked this" — for /auth/refresh
+    that is token reuse and must be refused; for logout it just means the
+    session was already over, which is fine.
+    """
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     except JWTError:
-        return
+        return False
     jti, exp = payload.get("jti"), payload.get("exp")
     if not jti or not exp:
-        return
-    await RevokedRefreshToken(jti=jti, expires_at=datetime.fromtimestamp(exp, tz=UTC)).insert()
+        return False
+    try:
+        await RevokedRefreshToken(jti=jti, expires_at=datetime.fromtimestamp(exp, tz=UTC)).insert()
+    except DuplicateKeyError:
+        return False
+    return True
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> User:

@@ -51,7 +51,7 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 
 from app.core import breaker
 from app.core.crypto import decrypt_secret
-from app.core.url_safety import rejection_reason
+from app.core.url_safety import BlockedAddress, rejection_reason, safe_transport
 from app.models.bot_tool import BotTool
 from app.pipeline import call_context
 
@@ -519,7 +519,15 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
 
     logger.info(f"[TOOL] {tool.name} -> {tool.method} {url}")
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        # Review finding I4 — `transport=safe_transport()`. The
+        # rejection_reason check above happens before the request; this
+        # happens AT the request, resolving the host once and dialling that
+        # exact address. Without it the two are separate lookups and only
+        # the first is examined, so a nameserver answering differently the
+        # second time passes the check and reaches the metadata service
+        # anyway. Every redirect hop goes through the same client, so it is
+        # judged here too.
+        async with httpx.AsyncClient(timeout=timeout, transport=safe_transport()) as client:
             response = await client.request(
                 tool.method, url, headers=headers, params=params,
                 json=body if body else None,
@@ -527,6 +535,17 @@ async def call_http_tool(tool: BotTool, args: dict[str, Any]) -> dict[str, Any]:
             response = await _follow_redirects(client, tool, response, url, headers, plain_headers)
             if isinstance(response, dict):     # refused mid-chain
                 return response
+    except BlockedAddress as e:
+        # Deliberately not folded into the generic handler below: "we
+        # refused to send this" and "their server is unreachable" are
+        # different facts, and whoever reads these logs after an incident
+        # needs them kept apart.
+        logger.warning(f"[TOOL] {tool.name}: refused at connect time — {e}")
+        return {
+            "ok": False,
+            "error": "blocked_url",
+            "message": "That system could not be reached. Tell the caller plainly rather than guessing an answer.",
+        }
     except httpx.TimeoutException:
         logger.warning(f"[TOOL] {tool.name}: timed out after {timeout}s")
         breaker.record_failure(circuit, f"timed out after {timeout}s")

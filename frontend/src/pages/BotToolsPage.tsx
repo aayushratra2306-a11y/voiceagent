@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import {
   listTools, createTool, updateTool, deleteTool, testTool,
 } from '../lib/api'
+import { usePageChrome } from '../context/ChromeContext'
+import PageLoader from '../components/PageLoader'
 import type { BotTool, BotToolInput, ToolParameter } from '../lib/api'
 
 // Task 3.1 — the form that makes a tool configuration rather than code.
@@ -54,7 +56,8 @@ const smallField = 'flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg 
 
 export default function BotToolsPage() {
   const { id } = useParams()
-  const navigate = useNavigate()
+
+  usePageChrome('Tools', `/bots/${id}`)
 
   const [tools, setTools] = useState<BotTool[]>([])
   const [loading, setLoading] = useState(true)
@@ -68,6 +71,16 @@ export default function BotToolsPage() {
   const [undoHeaderRows, setUndoHeaderRows] = useState<Pair[]>([])
   const [secretTouched, setSecretTouched] = useState(false)
   const [paymentSecretTouched, setPaymentSecretTouched] = useState(false)
+  // The request body is edited as raw JSON text, not as key/value rows like
+  // headers and query are. Those are flat maps of strings; a real request
+  // body is neither — Razorpay's payment-link call alone needs a nested
+  // object (`customer: {name, contact}`) and real booleans
+  // (`accept_partial: false`), and rows cannot express either. Kept as TEXT
+  // in its own state rather than parsed on every keystroke so a
+  // half-finished edit doesn't get thrown away mid-typing.
+  const [bodyText, setBodyText] = useState('')
+  const [bodyError, setBodyError] = useState('')
+  const [copiedWebhook, setCopiedWebhook] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const [testArgs, setTestArgs] = useState<Record<string, string>>({})
@@ -90,6 +103,7 @@ export default function BotToolsPage() {
     setEditingId('new'); setForm(BLANK)
     setHeaderRows([]); setQueryRows([]); setFieldMapRows([]); setUndoHeaderRows([])
     setSecretTouched(false); setPaymentSecretTouched(false)
+    setBodyText(''); setBodyError('')
     setTestArgs({}); setTestResult('')
   }
 
@@ -113,6 +127,10 @@ export default function BotToolsPage() {
     setHeaderRows(toPairs(t.headers)); setQueryRows(toPairs(t.query))
     setFieldMapRows(toPairs(t.field_map)); setUndoHeaderRows(toPairs(t.undo.headers))
     setSecretTouched(false); setPaymentSecretTouched(false)
+    // Pretty-printed rather than compact: this is the one field a customer
+    // reads back to check, and a one-line blob of JSON is unreadable.
+    setBodyText(t.body && Object.keys(t.body).length ? JSON.stringify(t.body, null, 2) : '')
+    setBodyError('')
     setTestArgs({}); setTestResult('')
   }
 
@@ -128,9 +146,30 @@ export default function BotToolsPage() {
   }
 
   async function save() {
+    // Parsed HERE rather than on every keystroke, and a failure stops the
+    // save outright. Saving anyway would silently store an empty body while
+    // the textarea still shows the customer's JSON — they would then watch a
+    // POST go out with nothing in it and have no way to tell why.
+    let parsedBody: Record<string, unknown> = {}
+    if (bodyText.trim()) {
+      try {
+        const parsed = JSON.parse(bodyText)
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          setBodyError('The body must be a JSON object — it starts with { and ends with }.')
+          return
+        }
+        parsedBody = parsed
+      } catch (e: any) {
+        setBodyError(`That is not valid JSON: ${e.message}`)
+        return
+      }
+    }
+    setBodyError('')
+
     setSaving(true); setError('')
     const payload: BotToolInput = {
       ...form,
+      body: parsedBody,
       headers: fromPairs(headerRows),
       query: fromPairs(queryRows),
       field_map: fromPairs(fieldMapRows),
@@ -171,25 +210,9 @@ export default function BotToolsPage() {
     }
   }
 
-  if (loading) return (
-    <div className="min-h-screen bg-[#070711] flex items-center justify-center">
-      <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
+  if (loading) return <PageLoader />
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center gap-3 backdrop-blur-sm">
-        <button onClick={() => navigate(`/bots/${id}`)} className="p-1.5 text-slate-500 hover:text-white hover:bg-white/8 rounded-lg transition-all">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
-          </svg>
-        </button>
-        <h1 className="font-bold">Tools</h1>
-      </header>
-
       <main className="relative z-10 max-w-3xl mx-auto px-6 py-10 space-y-5">
         {error && (
           <div className="bg-red-500/10 text-red-400 border border-red-500/20 text-sm rounded-xl px-4 py-3">{error}</div>
@@ -255,7 +278,7 @@ export default function BotToolsPage() {
 
             <div>
               <label className={label}>Name the AI will use</label>
-              <input value={form.name} onChange={e => set('name', e.target.value)}
+              <input autoComplete="off" value={form.name} onChange={e => set('name', e.target.value)}
                 placeholder="check_stock" className={`${field} font-mono`} />
               <p className="text-xs text-slate-500 mt-1.5">Letters, numbers and underscores — it becomes a function name.</p>
             </div>
@@ -278,7 +301,7 @@ export default function BotToolsPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <label className={label}>URL</label>
-                <input value={form.url} onChange={e => set('url', e.target.value)}
+                <input autoComplete="off" value={form.url} onChange={e => set('url', e.target.value)}
                   placeholder="https://api.yourshop.com/stock/{sku}" className={`${field} font-mono text-xs`} />
               </div>
             </div>
@@ -293,16 +316,16 @@ export default function BotToolsPage() {
               <div className="space-y-2">
                 {form.parameters.map((p, i) => (
                   <div key={i} className="flex gap-2 items-start">
-                    <input value={p.name} onChange={e => setParam(i, { name: e.target.value })}
+                    <input autoComplete="off" value={p.name} onChange={e => setParam(i, { name: e.target.value })}
                       placeholder="sku" className={`${smallField} font-mono max-w-[130px]`} />
                     <select value={p.type} onChange={e => setParam(i, { type: e.target.value as ToolParameter['type'] })}
                       className={`${smallField} max-w-[110px]`}>
                       {PARAM_TYPES.map(t => <option key={t} value={t} className="bg-neutral-900">{t}</option>)}
                     </select>
-                    <input value={p.description} onChange={e => setParam(i, { description: e.target.value })}
+                    <input autoComplete="off" value={p.description} onChange={e => setParam(i, { description: e.target.value })}
                       placeholder="The item's SKU code" className={smallField} />
                     <label className="flex items-center gap-1.5 text-xs text-slate-400 py-2 shrink-0">
-                      <input type="checkbox" checked={p.required} onChange={e => setParam(i, { required: e.target.checked })}
+                      <input autoComplete="off" type="checkbox" checked={p.required} onChange={e => setParam(i, { required: e.target.checked })}
                         className="accent-violet-500" />
                       required
                     </label>
@@ -319,6 +342,38 @@ export default function BotToolsPage() {
             <PairEditor title="Headers" rows={headerRows} onChange={setHeaderRows} placeholderKey="Content-Type" placeholderValue="application/json" />
             <PairEditor title="Query parameters" rows={queryRows} onChange={setQueryRows} placeholderKey="format" placeholderValue="json" />
 
+            {/* Request body. Only for methods that actually carry one — a GET
+                with a body is meaningless here (the server sends it as
+                `json=` only when non-empty) and showing the field would
+                invite someone to fill it in and wonder why nothing happened. */}
+            {['POST', 'PUT', 'PATCH'].includes(form.method) && (
+              <div>
+                <label className={label}>Body (JSON)</label>
+                <p className="text-xs text-slate-500 mb-2">
+                  Sent as the request body. Use <code className="text-slate-400">{'{name}'}</code> to
+                  drop in one of the inputs above — it works anywhere in here, including inside
+                  nested objects.
+                </p>
+                <textarea
+                  rows={10}
+                  spellCheck={false}
+                  value={bodyText}
+                  onChange={e => { setBodyText(e.target.value); if (bodyError) setBodyError('') }}
+                  placeholder={'{\n  "amount": "{amount}",\n  "currency": "INR"\n}'}
+                  className={`${field} font-mono text-xs leading-relaxed resize-y ${
+                    bodyError ? 'border-red-500/60 focus:border-red-500/60' : ''
+                  }`}
+                />
+                {bodyError && (
+                  <p className="text-xs text-red-400 mt-1.5">{bodyError}</p>
+                )}
+                <p className="text-xs text-slate-600 mt-1.5">
+                  Leave empty to send no body. Numbers and true/false stay as they are — only
+                  text in quotes has placeholders filled in.
+                </p>
+              </div>
+            )}
+
             {/* Auth */}
             <div>
               <label className={label}>Authentication</label>
@@ -332,7 +387,7 @@ export default function BotToolsPage() {
               </p>
 
               {(form.auth.kind === 'header' || form.auth.kind === 'query') && (
-                <input value={form.auth.name}
+                <input autoComplete="off" value={form.auth.name}
                   onChange={e => set('auth', { ...form.auth, name: e.target.value })}
                   placeholder={form.auth.kind === 'header' ? 'X-Api-Key' : 'api_key'}
                   className={`${field} font-mono mt-2`} />
@@ -340,7 +395,7 @@ export default function BotToolsPage() {
 
               {form.auth.kind !== 'none' && (
                 <>
-                  <input type="password" value={form.auth.secret ?? ''}
+                  <input autoComplete="off" type="password" value={form.auth.secret ?? ''}
                     onChange={e => { setSecretTouched(true); set('auth', { ...form.auth, secret: e.target.value }) }}
                     placeholder={editingId === 'new' ? 'Your API key' : 'Leave blank to keep the saved key'}
                     className={`${field} font-mono mt-2`} />
@@ -366,7 +421,7 @@ export default function BotToolsPage() {
 
             <div>
               <label className={label}>Give up after (seconds)</label>
-              <input type="number" min={1} max={30} step={0.5}
+              <input autoComplete="off" type="number" min={1} max={30} step={0.5}
                 value={form.timeout_seconds}
                 onChange={e => set('timeout_seconds', Number(e.target.value) || 8)}
                 className={`${field} max-w-[140px]`} />
@@ -380,7 +435,7 @@ export default function BotToolsPage() {
             {/* Task 3.7 — the payment link tool */}
             <div className="border border-white/8 rounded-xl p-4">
               <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={form.payment.enabled}
+                <input autoComplete="off" type="checkbox" checked={form.payment.enabled}
                   onChange={e => set('payment', { ...form.payment, enabled: e.target.checked })}
                   className="accent-violet-500" />
                 This tool creates a payment link
@@ -402,7 +457,7 @@ export default function BotToolsPage() {
                   ] as const).map(([key, labelText, ph]) => (
                     <div key={key} className="flex gap-2 items-center">
                       <span className="text-xs text-slate-500 w-40 shrink-0">{labelText}</span>
-                      <input value={form.payment[key]} placeholder={ph}
+                      <input autoComplete="off" value={form.payment[key]} placeholder={ph}
                         onChange={e => set('payment', { ...form.payment, [key]: e.target.value })}
                         className={`${smallField} font-mono`} />
                     </div>
@@ -419,7 +474,7 @@ export default function BotToolsPage() {
                   ] as const).map(([key, labelText, ph]) => (
                     <div key={key} className="flex gap-2 items-center">
                       <span className="text-xs text-slate-500 w-40 shrink-0">{labelText}</span>
-                      <input value={form.payment[key]} placeholder={ph}
+                      <input autoComplete="off" value={form.payment[key]} placeholder={ph}
                         onChange={e => set('payment', { ...form.payment, [key]: e.target.value })}
                         className={`${smallField} font-mono`} />
                     </div>
@@ -427,7 +482,7 @@ export default function BotToolsPage() {
 
                   <div className="flex gap-2 items-center">
                     <span className="text-xs text-slate-500 w-40 shrink-0">Webhook secret</span>
-                    <input type="password" value={form.payment.webhook_secret ?? ''}
+                    <input autoComplete="off" type="password" value={form.payment.webhook_secret ?? ''}
                       onChange={e => {
                         setPaymentSecretTouched(true)
                         set('payment', { ...form.payment, webhook_secret: e.target.value })
@@ -437,9 +492,40 @@ export default function BotToolsPage() {
                   </div>
                   <p className="text-xs text-slate-500">
                     Without a matching secret every callback is rejected — that is what stops
-                    anyone else claiming a payment succeeded. Point your provider's webhook at{' '}
-                    <code className="font-mono text-slate-400">/payments/webhook/{editingId !== 'new' ? editingId : '<save first>'}</code>
+                    anyone else claiming a payment succeeded.
                   </p>
+
+                  {/* The full absolute URL, not just the path. This gets pasted
+                      into somebody else's dashboard, where a relative path is
+                      useless — and reconstructing the origin by hand is exactly
+                      the kind of step that gets one character wrong and then
+                      fails as a webhook that silently never arrives. */}
+                  <div className="mt-1">
+                    <span className="text-xs text-slate-500">Point your provider's webhook at</span>
+                    {editingId === 'new' ? (
+                      <p className="text-xs text-slate-600 mt-1">
+                        Save the tool first — the address includes its ID, which does not exist yet.
+                      </p>
+                    ) : (
+                      <div className="flex gap-2 items-center mt-1">
+                        <code className="flex-1 min-w-0 truncate bg-black/30 border border-white/10 rounded-lg px-2.5 py-2 font-mono text-xs text-slate-300">
+                          {`${window.location.origin}/payments/webhook/${editingId}`}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard
+                              ?.writeText(`${window.location.origin}/payments/webhook/${editingId}`)
+                              .then(() => { setCopiedWebhook(true); setTimeout(() => setCopiedWebhook(false), 1800) })
+                              .catch(() => {})
+                          }}
+                          className="shrink-0 text-xs px-2.5 py-2 rounded-lg border border-white/10 text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+                        >
+                          {copiedWebhook ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -459,7 +545,7 @@ export default function BotToolsPage() {
                   className={`${field} max-w-[120px]`}>
                   {METHODS.map(m => <option key={m} value={m} className="bg-[#12121f]">{m}</option>)}
                 </select>
-                <input value={form.undo.url}
+                <input autoComplete="off" value={form.undo.url}
                   onChange={e => set('undo', { ...form.undo, url: e.target.value })}
                   placeholder="https://your-system.com/bookings/{booking_id}" className={`${field} font-mono`} />
               </div>
@@ -482,7 +568,7 @@ export default function BotToolsPage() {
             {/* Task 3.10 — human approval for big actions */}
             <div className="border border-white/8 rounded-xl p-4">
               <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={form.approval.enabled}
+                <input autoComplete="off" type="checkbox" checked={form.approval.enabled}
                   onChange={e => set('approval', { ...form.approval, enabled: e.target.checked })}
                   className="accent-violet-500" />
                 Require a person's approval above a value
@@ -496,13 +582,13 @@ export default function BotToolsPage() {
                 <div className="mt-4 space-y-3 ml-6">
                   <div className="flex gap-2 items-center">
                     <span className="text-xs text-slate-500 w-32 shrink-0">Amount is in input</span>
-                    <input value={form.approval.amount_parameter}
+                    <input autoComplete="off" value={form.approval.amount_parameter}
                       onChange={e => set('approval', { ...form.approval, amount_parameter: e.target.value })}
                       placeholder="amount" className={`${smallField} font-mono`} />
                   </div>
                   <div className="flex gap-2 items-center">
                     <span className="text-xs text-slate-500 w-32 shrink-0">Approve automatically up to</span>
-                    <input type="number" min={0} step="any" value={form.approval.threshold}
+                    <input autoComplete="off" type="number" min={0} step="any" value={form.approval.threshold}
                       onChange={e => set('approval', { ...form.approval, threshold: Number(e.target.value) || 0 })}
                       className={`${smallField} font-mono max-w-[140px]`} />
                   </div>
@@ -517,7 +603,7 @@ export default function BotToolsPage() {
 
             <div className="space-y-3">
               <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={form.enabled}
+                <input autoComplete="off" type="checkbox" checked={form.enabled}
                   onChange={e => set('enabled', e.target.checked)} className="accent-violet-500" />
                 Available to the bot
               </label>
@@ -525,7 +611,7 @@ export default function BotToolsPage() {
               {/* Task 3.3 */}
               <div>
                 <label className="flex items-center gap-2.5 text-sm text-slate-300">
-                  <input type="checkbox" checked={form.long_running}
+                  <input autoComplete="off" type="checkbox" checked={form.long_running}
                     onChange={e => set('long_running', e.target.checked)} className="accent-violet-500" />
                   This one is slow
                 </label>
@@ -549,7 +635,7 @@ export default function BotToolsPage() {
                   {form.parameters.filter(p => p.name).map(p => (
                     <div key={p.name} className="flex gap-2 items-center">
                       <span className="font-mono text-xs text-slate-500 w-28 shrink-0 truncate">{p.name}</span>
-                      <input value={testArgs[p.name] ?? ''}
+                      <input autoComplete="off" value={testArgs[p.name] ?? ''}
                         onChange={e => setTestArgs({ ...testArgs, [p.name]: e.target.value })}
                         placeholder="a real value to try" className={smallField} />
                     </div>
@@ -580,7 +666,6 @@ export default function BotToolsPage() {
           </div>
         )}
       </main>
-    </div>
   )
 }
 
@@ -600,9 +685,9 @@ function PairEditor({ title, rows, onChange, placeholderKey, placeholderValue }:
       <div className="space-y-2">
         {rows.map((r, i) => (
           <div key={i} className="flex gap-2">
-            <input value={r.k} placeholder={placeholderKey} className={`${smallField} font-mono max-w-[190px]`}
+            <input autoComplete="off" value={r.k} placeholder={placeholderKey} className={`${smallField} font-mono max-w-[190px]`}
               onChange={e => onChange(rows.map((x, n) => (n === i ? { ...x, k: e.target.value } : x)))} />
-            <input value={r.v} placeholder={placeholderValue} className={`${smallField} font-mono`}
+            <input autoComplete="off" value={r.v} placeholder={placeholderValue} className={`${smallField} font-mono`}
               onChange={e => onChange(rows.map((x, n) => (n === i ? { ...x, v: e.target.value } : x)))} />
             <button onClick={() => onChange(rows.filter((_, n) => n !== i))}
               className="text-slate-600 hover:text-red-400 px-1 shrink-0">×</button>

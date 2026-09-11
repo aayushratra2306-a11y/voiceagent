@@ -353,3 +353,87 @@ async def _user_id(client, token: str) -> str:
     payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     user = await User.find_one(User.email == payload["sub"])
     return str(user.id)
+
+# --- the header badge's count endpoint --------------------------------------
+#
+# Added 2026-09-07 after live-testing 3.10. An approval is raised mid-call and
+# a person is meant to act on it while the caller is still on the line, so the
+# count has to be visible without opening the page.
+#
+# Asserted as a DELTA rather than an absolute. Earlier tests in this file
+# insert approvals for the same user and do not clean them up, so an absolute
+# count here would pass alone and fail in a full run — which is exactly what
+# it did the first time this was written.
+
+
+async def _pending_count(client, token) -> int:
+    resp = await client.get("/approvals/pending-count", headers=auth_headers(token))
+    assert resp.status_code == 200, resp.text
+    return resp.json()["count"]
+
+
+async def test_a_waiting_approval_raises_the_count(client, user_a_token):
+    uid = str(await _user_id(client, user_a_token))
+    before = await _pending_count(client, user_a_token)
+
+    for amount in (5000, 7000):
+        await PendingApproval(
+            tool_id="t1", tool_name="issue_refund", bot_id="bot-count-1",
+            user_id=uid, arguments={"amount": amount}, amount=amount, threshold=1000,
+        ).insert()
+
+    assert await _pending_count(client, user_a_token) == before + 2
+
+
+async def test_a_decided_approval_is_not_counted(client, user_a_token):
+    """The badge must clear once the decision is made — a count that keeps a
+    handled request lit is worse than no badge, because it trains people to
+    ignore it."""
+    uid = str(await _user_id(client, user_a_token))
+    before = await _pending_count(client, user_a_token)
+
+    for status in ("denied", "approved"):
+        await PendingApproval(
+            tool_id="t1", tool_name="issue_refund", bot_id="bot-count-2", user_id=uid,
+            arguments={"amount": 5000}, amount=5000, threshold=1000, status=status,
+        ).insert()
+
+    assert await _pending_count(client, user_a_token) == before
+
+
+async def test_an_in_flight_decision_is_not_counted_as_waiting(client, user_a_token):
+    """"approving" is the brief atomic-claim window after somebody clicks — it
+    is no longer waiting on a person."""
+    uid = str(await _user_id(client, user_a_token))
+    before = await _pending_count(client, user_a_token)
+
+    await PendingApproval(
+        tool_id="t1", tool_name="issue_refund", bot_id="bot-count-3", user_id=uid,
+        arguments={"amount": 5000}, amount=5000, threshold=1000, status="approving",
+    ).insert()
+
+    assert await _pending_count(client, user_a_token) == before
+
+
+async def test_the_count_never_leaks_another_users_approvals(client, user_a_token, user_b_token):
+    """Same scoping the list endpoint already enforces — a badge is a much
+    quieter place for a tenancy leak to hide."""
+    uid_b = str(await _user_id(client, user_b_token))
+    before = await _pending_count(client, user_a_token)
+
+    await PendingApproval(
+        tool_id="t1", tool_name="issue_refund", bot_id="bot-count-4", user_id=uid_b,
+        arguments={"amount": 5000}, amount=5000, threshold=1000,
+    ).insert()
+
+    assert await _pending_count(client, user_a_token) == before
+
+
+async def test_the_count_endpoint_is_not_swallowed_by_the_id_routes(client, user_a_token):
+    """FastAPI matches in definition order. If a "/{approval_id}" GET route is
+    ever added above this one, "pending-count" would be read as an id and this
+    returns 404 or 422 instead of a count."""
+    resp = await client.get("/approvals/pending-count", headers=auth_headers(user_a_token))
+
+    assert resp.status_code == 200
+    assert "count" in resp.json()

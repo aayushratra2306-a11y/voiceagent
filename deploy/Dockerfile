@@ -53,4 +53,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 # single API process (a second worker wouldn't find another worker's
 # calls when routing ICE candidates). Scale calls, not API workers, until
 # that registry moves to Redis.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+#
+# --forwarded-allow-ips="*" is load-bearing for rate limiting, not a
+# convenience. Task 2.5's key function falls back to the client IP for
+# every unauthenticated request (/auth/login, /refresh, /register), and
+# slowapi reads that from request.client.host. Without this flag uvicorn
+# only rewrites request.client from X-Forwarded-For when the immediate
+# peer is 127.0.0.1 — but the only thing that ever connects here is Caddy,
+# from its container address on the compose bridge, which is not
+# loopback. So every unauthenticated caller collapsed to Caddy's one IP
+# and shared a single global rate-limit bucket: five failed logins a
+# minute from anyone locked out login for everyone. "*" is safe
+# specifically because port 8080 is EXPOSE-only, never published to the
+# host (see docker-compose.yml) — Caddy is the only possible client, and
+# Caddy is trusted to set X-Forwarded-For correctly.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--forwarded-allow-ips", "*"]

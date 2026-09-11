@@ -145,6 +145,34 @@ def _parse_local(date: str, time: str, config: BookingConfig) -> datetime | None
     return naive.replace(tzinfo=config.zone)
 
 
+def _within_business_hours(local_dt: datetime, config: BookingConfig) -> bool:
+    """Whether this LOCAL wall-clock time falls inside the bot's own
+    open/close hours — the one check `book_appointment` and
+    `reschedule_appointment` were missing until a live call on 2026-09-07
+    found it.
+
+    `check_availability` and `_next_free` already build every offered time
+    from `config.open_time`/`close_time`, so a model that only ever books a
+    time IT offered never hits this. Nothing forced that, though — a caller
+    pushing past the model's own offer ("book it anyway, 11pm, I don't
+    care") could reach `book_appointment` directly with a time neither
+    function ever proposed, and there was no check here to catch it. This is
+    the same shape of gap as the timezone bug the same call surfaced: a rule
+    that held only because of an assumption about the CALLER, not because
+    the server enforced it.
+
+    Compares wall-clock minutes-of-day, not instants — open_time and
+    close_time are configured as local clock times ("09:00"), so the
+    comparison has to happen in the same terms, not after converting either
+    side to UTC.
+    """
+    open_local = _parse_local(local_dt.strftime("%Y-%m-%d"), config.open_time, config)
+    close_local = _parse_local(local_dt.strftime("%Y-%m-%d"), config.close_time, config)
+    if open_local is None or close_local is None:
+        return True  # an unparseable configured clock must not silently lock out every booking
+    return open_local <= local_dt < close_local
+
+
 def _spoken(local_dt: datetime, config: BookingConfig) -> str:
     """How the model should say this time, zone included.
 
@@ -359,6 +387,25 @@ async def book_appointment(params: FunctionCallParams, date: str, time: str, pur
         })
         return
 
+    # Server-side enforcement of this bot's own hours — see
+    # _within_business_hours's own docstring for why this cannot be left to
+    # the model's own good behaviour alone.
+    if not _within_business_hours(local, config):
+        alternatives = await _next_free(local, config, ctx.bot_id or "", limit=3)
+        await params.result_callback({
+            "booked": False,
+            "reason": "outside_business_hours",
+            "open_time": config.open_time,
+            "close_time": config.close_time,
+            "spoken_hours": f"{config.open_time} to {config.close_time}, {config.spoken_zone}",
+            "alternatives": alternatives,
+            "message": (
+                "That time is outside this business's hours. Tell the caller plainly "
+                "and offer one of the alternative times — say the time zone with each."
+            ),
+        })
+        return
+
     key = _slot_key(ctx.bot_id or "", starts_utc)
     if not await _hold_slot(key, purpose):
         # The manual's fourth step. Losing the race is not an error — it is
@@ -547,6 +594,26 @@ async def reschedule_appointment(params: FunctionCallParams, reference: str, dat
         await params.result_callback({
             "rescheduled": False,
             "message": "That time has already passed. Ask for a later one. The original booking still stands.",
+        })
+        return
+
+    # Same enforcement as book_appointment: a reschedule is just as capable
+    # of putting an appointment at 11pm as a fresh booking is, and it was
+    # missing the check for the same reason.
+    if not _within_business_hours(local, config):
+        alternatives = await _next_free(local, config, ctx.bot_id or "", limit=3)
+        await params.result_callback({
+            "rescheduled": False,
+            "reason": "outside_business_hours",
+            "open_time": config.open_time,
+            "close_time": config.close_time,
+            "spoken_hours": f"{config.open_time} to {config.close_time}, {config.spoken_zone}",
+            "alternatives": alternatives,
+            "message": (
+                "That time is outside this business's hours. The original booking is "
+                "UNCHANGED and still stands — say that clearly, then offer one of the "
+                "alternatives."
+            ),
         })
         return
 

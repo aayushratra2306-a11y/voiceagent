@@ -366,3 +366,96 @@ def test_the_pipeline_tells_the_tools_which_call_they_are_on():
 
     source = inspect.getsource(voice_pipeline.run_voice_pipeline)
     assert "call_context.set_call(" in source
+
+
+# --- business hours are enforced by the SERVER, not by the model ------------
+#
+# Found on a live call 2026-09-07. Asked to book 11pm, the model behaved
+# correctly: check_availability only ever returns in-hours slots, so it
+# offered real morning times instead and never attempted the booking. But
+# nothing FORCED that. check_availability and _next_free were the only two
+# functions that consulted open_time/close_time; book_appointment and
+# reschedule_appointment never did. A caller pushing past the model's own
+# offer ("book it anyway, 11pm, I don't care") could reach book_appointment
+# directly with a time neither function ever proposed, and it would be
+# booked. Same shape as the timezone bug the same call surfaced: a rule that
+# held only because of an assumption about the caller.
+
+
+async def test_booking_after_closing_time_is_refused(_a_bot_on_a_call):  # noqa: ARG001
+    """The exact scenario from the call — the bot closes at 17:00."""
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).strftime("%Y-%m-%d")
+    result = await _call(booking.book_appointment, date=tomorrow, time="23:00", purpose="haircut")
+
+    assert result["booked"] is False
+    assert result["reason"] == "outside_business_hours"
+
+
+async def test_booking_before_opening_time_is_refused(_a_bot_on_a_call):  # noqa: ARG001
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).strftime("%Y-%m-%d")
+    result = await _call(booking.book_appointment, date=tomorrow, time="06:00", purpose="haircut")
+
+    assert result["booked"] is False
+    assert result["reason"] == "outside_business_hours"
+
+
+async def test_the_closing_time_itself_is_not_bookable(_a_bot_on_a_call):  # noqa: ARG001
+    """17:00 is when the business CLOSES, so a 17:00 slot would run past it.
+    check_availability agrees — its last offered slot is 16:30."""
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).strftime("%Y-%m-%d")
+    result = await _call(booking.book_appointment, date=tomorrow, time="17:00", purpose="haircut")
+
+    assert result["booked"] is False
+    assert result["reason"] == "outside_business_hours"
+
+
+async def test_the_opening_time_itself_IS_bookable(_a_bot_on_a_call):  # noqa: ARG001
+    """The boundary must not be closed at both ends — 09:00 is a real slot,
+    and check_availability offers it."""
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).strftime("%Y-%m-%d")
+    result = await _call(booking.book_appointment, date=tomorrow, time="09:00", purpose="haircut")
+
+    assert result["booked"] is True
+
+
+async def test_an_out_of_hours_refusal_offers_real_alternatives(_a_bot_on_a_call):  # noqa: ARG001
+    """Refusing without offering anything leaves the caller stuck — the same
+    reasoning the slot_taken path already follows."""
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).strftime("%Y-%m-%d")
+    result = await _call(booking.book_appointment, date=tomorrow, time="23:00", purpose="haircut")
+
+    assert result["alternatives"], "refused with nothing to offer instead"
+    for slot in result["alternatives"]:
+        assert "09:00" <= slot["time"] < "17:00"
+
+
+async def test_rescheduling_to_an_out_of_hours_time_is_refused(_a_bot_on_a_call):  # noqa: ARG001
+    """A reschedule can put an appointment at 11pm just as easily as a fresh
+    booking can, and was missing the check for the same reason."""
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).strftime("%Y-%m-%d")
+    booked = await _call(booking.book_appointment, date=tomorrow, time="10:00", purpose="haircut")
+    assert booked["booked"] is True
+
+    result = await _call(
+        booking.reschedule_appointment, reference=booked["reference"],
+        date=tomorrow, time="23:00",
+    )
+
+    assert result["rescheduled"] is False
+    assert result["reason"] == "outside_business_hours"
+
+
+async def test_a_refused_reschedule_leaves_the_original_booking_intact(_a_bot_on_a_call):  # noqa: ARG001
+    """The caller must not lose the slot they already had."""
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).strftime("%Y-%m-%d")
+    booked = await _call(booking.book_appointment, date=tomorrow, time="10:00", purpose="haircut")
+
+    await _call(
+        booking.reschedule_appointment, reference=booked["reference"],
+        date=tomorrow, time="23:00",
+    )
+
+    still_there = await Appointment.find_one(Appointment.reference == booked["reference"])
+    assert still_there is not None
+    assert still_there.time == "10:00"
+    assert still_there.status == "booked"

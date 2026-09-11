@@ -678,13 +678,221 @@ footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
 
 <section>
   <div class="sec-head">
-    <span class="eyebrow">Part four · in progress</span>
+    <span class="eyebrow">Part four · complete</span>
     <h2>Phase 3 — Tasks and Multi-Tasking</h2>
-    <p class="sec-desc">Nine tasks turning the bot from something that talks into something that does work. This section fills in as each task is built and tested.</p>
+    <p class="sec-desc">Ten tasks turning the bot from something that talks into something that does work. Every one below was built <em>and</em> verified on a real call &mdash; which is where six of the corrections noted here came from.</p>
   </div>
-  <div class="pending">
-    Task 3.1 — Build the tool plug-in system — is next.<br>
-    Each task will be added here once it is built <em>and</em> verified working, not when the code is written.
+  <div class="tasks">
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.1</span><h3>Build the tool plug-in system</h3><span class="hrs">5h</span></div>
+      <div class="t-body">
+        <p>A bot&rsquo;s tools stopped being written in code and became rows in the database, so adding one for a customer is filling in a form rather than shipping a release.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">MongoDB</span><span class="chip">Pydantic</span>
+            <span class="chip">JSON Schema</span><span class="chip">Plugin registry</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">MongoDB (BotTool)</span><span class="chip used">Pydantic</span>
+            <span class="chip used">Pipecat FunctionSchema</span><span class="chip used">Runtime handler closures</span>
+            <span class="chip used">Generic HTTP tool</span><span class="chip used">Four authentication modes</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>FunctionSchema</dt><dd>The shape Pipecat hands the language model to describe a tool. Normally it is read off a real Python function; here it is built while the call is starting, from a database row, with the code to run attached to it.</dd></div>
+          <div class="row"><dt>Generic HTTP tool</dt><dd>One piece of code that can call almost any web API &mdash; any method, with the values the model supplied dropped into the address, the headers, the query and the body.</dd></div>
+          <div class="row"><dt>Four authentication modes</dt><dd>Bearer token, custom header, query parameter, and username/password. Between them they cover how most small-business APIs expect to be identified.</dd></div>
+        </dl>
+        <div class="note"><span><b>Extended:</b> the plan called for a plug-in registry; what makes the difference in practice is the generic HTTP tool sitting inside it, because that is what decides whether a new customer integration is a form or a development project. A bot with nothing configured falls back to every built-in tool &mdash; right for a bot nobody has thought about yet.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.2</span><h3>Run several tools at the same time</h3><span class="hrs">4h</span></div>
+      <div class="t-body">
+        <p>When the bot decides to do two things at once, they happen at once &mdash; and you can now see how long each one took.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">asyncio.gather</span><span class="chip">Parallel tool calls</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Pipecat&rsquo;s own concurrency</span><span class="chip used">Per-tool timing</span>
+            <span class="chip used">Structured tool telemetry</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>asyncio.gather</dt><dd>Python&rsquo;s way of starting several jobs together and waiting for all of them.</dd></div>
+          <div class="row"><dt>Per-tool timing</dt><dd>A log line for every tool call with how long it took, so a slow call has a name attached rather than being &ldquo;the bot felt slow&rdquo;.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> no <span class="m">asyncio.gather</span> was written. Pipecat already runs a turn&rsquo;s tool calls concurrently, so adding one would have been a second scheduler stacked on the first &mdash; more code, same behaviour, new failure modes. What was genuinely missing was being able to see it happen, so the hours went into per-tool timing instead.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.3</span><h3>Run slow jobs in the background</h3><span class="hrs">4h</span></div>
+      <div class="t-body">
+        <p>A tool that takes ten seconds no longer leaves the caller listening to silence. The bot says it is working on it, keeps talking, and tells them the moment the answer lands.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">asyncio.create_task</span><span class="chip">Callback frames</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">asyncio.create_task</span><span class="chip used">LLMMessagesAppendFrame</span>
+            <span class="chip used">long_running flag per tool</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>LLMMessagesAppendFrame</dt><dd>Drops the finished result into the conversation and asks the model to respond, so the bot phrases the news itself instead of reading out a canned sentence.</dd></div>
+          <div class="row"><dt>long_running flag</dt><dd>A checkbox on the tool. Only tools marked this way get the background treatment; everything else still answers inline.</dd></div>
+        </dl>
+        <div class="note"><span><b>Extended:</b> a job already in flight is deliberately <em>not</em> cancelled when the caller hangs up. Cancelling a request that may already have booked something makes the other system&rsquo;s state genuinely unknowable &mdash; so it is allowed to finish, and the outcome is logged loudly, because that log line is the only record anybody has that it happened.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.4</span><h3>Undo earlier steps when a later one fails</h3><span class="hrs">4h</span></div>
+      <div class="t-body">
+        <p>&ldquo;Book the cab and text me the receipt&rdquo; is one request. If the receipt fails, the cab gets cancelled &mdash; the caller is not left paying for half a job.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Saga pattern</span><span class="chip">Compensating transactions</span>
+            <span class="chip">Transaction log</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Saga pattern</span><span class="chip used">Per-tool declared undo</span>
+            <span class="chip used">Scoped to one caller request</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Saga</dt><dd>A sequence of steps that each know how to undo themselves, used where a real database transaction is impossible &mdash; you cannot roll back somebody else&rsquo;s API.</dd></div>
+          <div class="row"><dt>Declared undo</dt><dd>Only a tool that states how to undo itself is ever undone. A lookup declares nothing, so nothing is rolled back; a booking declares a cancel address, so it is.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed after live testing:</b> the unit of work was originally one batch of tool calls issued together &mdash; and on 5 September a real call proved the model never issues them that way. Asked to book a slot and send a receipt in one breath, Groq&rsquo;s model called <span class="m">book_slot</span>, read the answer, then called <span class="m">send_receipt</span> 1.5 seconds later. Two batches of one, so the rollback covered nothing. Rescoped to everything the tools did between one thing the caller said and the next.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.5</span><h3>Build the booking tool template</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>Check availability, book, reschedule, cancel &mdash; configured by filling in a time zone, opening hours and a slot length, not by writing code.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Google Calendar API</span><span class="chip">Cal.com</span><span class="chip">CalDAV</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">MongoDB booking_slots</span><span class="chip used">Unique _id as the lock</span>
+            <span class="chip used">UTC storage + zoneinfo</span><span class="chip used">Spoken zone names</span>
+            <span class="chip used">Business-hours check</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Unique _id as the lock</dt><dd>The slot itself is the document&rsquo;s identifier, and MongoDB refuses two documents with the same one. Two callers told 3&nbsp;PM is free both try to book it; exactly one insert succeeds. Checking availability first only makes the gap smaller &mdash; this closes it.</dd></div>
+          <div class="row"><dt>Spoken zone names</dt><dd>Every answer says &ldquo;three PM India time&rdquo;, never just &ldquo;three PM&rdquo;. Ambiguity about the zone is how people miss appointments.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed, and twice corrected by live calls:</b> no external calendar &mdash; the hard part of booking is not storing an event, it is two callers taking the same slot at the same moment. Live testing then found the settings existed in the database but no screen could set them, and that opening hours were offered but never checked, so a bot happily booked 2&nbsp;AM. Both are fixed.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.6</span><h3>Build the lookup tool template</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>&ldquo;Where is my order?&rdquo; &mdash; answered against whatever shape the customer&rsquo;s own API happens to have, configured rather than coded.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Generic HTTP tool</span><span class="chip">Field mapping config</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Task 3.1&rsquo;s generic HTTP tool</span><span class="chip used">Dotted-path field mapping</span>
+            <span class="chip used">Call-scoped cache</span><span class="chip used">Checked redirect handling</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Dotted-path field mapping</dt><dd>Tells the tool where to find the answer inside somebody else&rsquo;s JSON &mdash; <span class="m">data.order.status</span> rather than assuming a fixed shape.</dd></div>
+          <div class="row"><dt>Call-scoped cache</dt><dd>Asking the same thing twice in one call does not make the same request twice. The cache lives and dies with the call, so it can never serve a stale answer to the next one.</dd></div>
+        </dl>
+        <div class="note"><span><b>Extended, then corrected by live calls:</b> a redirect from the customer&rsquo;s API reached the caller as &ldquo;nothing was found&rdquo;, which is a lie about their order. Redirects are now followed deliberately and checked, and refused ones say so. The cache also now records <em>why</em> a lookup was or was not served from it, because &ldquo;it was fast that time&rdquo; is not a diagnosis.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.7</span><h3>Build the payment link tool</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>The bot sends a payment link mid-call, and when the money actually arrives &mdash; minutes later, from the provider &mdash; it says so, interrupting itself if the caller is still on the line.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Razorpay</span><span class="chip">Stripe</span><span class="chip">Twilio / WhatsApp</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Task 3.1&rsquo;s generic HTTP tool</span><span class="chip used">Dedicated inbound webhook route</span>
+            <span class="chip used">HMAC-SHA256 + compare_digest</span><span class="chip used">PaymentSession record</span>
+            <span class="chip used">Announce into a live call</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>HMAC-SHA256</dt><dd>A fingerprint of the message computed with a shared secret. Only someone holding the secret can produce a matching one, which is how an unauthenticated address can still tell a real payment provider from anyone else on the internet.</dd></div>
+          <div class="row"><dt>compare_digest</dt><dd>Compares the two fingerprints in constant time, so an attacker cannot learn the right answer one character at a time by measuring how long the check takes.</dd></div>
+          <div class="row"><dt>PaymentSession</dt><dd>The record that ties a provider&rsquo;s reference back to a call. The payment is recorded whether or not anybody is still listening; announcing it is best-effort on top.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> no provider-specific code &mdash; sending the link is configuration through task 3.1&rsquo;s HTTP tool, and only the inbound callback needed writing. Razorpay&rsquo;s own account was still behind identity checks at test time, so the live test ran against a stub that echoes back whatever it is sent. That turned out to be the stronger test: it allowed sending a <em>forged</em> signature, which a real provider can never produce &mdash; and that rejection is exactly the check that stops a stranger telling a caller their money went through.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.8</span><h3>Build the webhook system</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>A customer registers their own address and gets told, on their own system, the moment a call ends or an appointment is booked &mdash; signed, retried, and logged.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">httpx</span><span class="chip">Redis queue</span><span class="chip">HMAC signatures</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">httpx</span><span class="chip used">MongoDB outbox</span>
+            <span class="chip used">HMAC-SHA256</span><span class="chip used">Retry with increasing delays</span>
+            <span class="chip used">Delivery log</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Outbox</dt><dd>The notification is written to the database first and sent by a separate loop. If the process restarts mid-send, the record is still there and it goes out anyway.</dd></div>
+          <div class="row"><dt>Retry with increasing delays</dt><dd>A customer&rsquo;s server being down for a minute should not lose the event; retrying instantly forever would hammer them. So the gaps grow.</dd></div>
+          <div class="row"><dt>Delivery log</dt><dd>Every attempt, successful or not, is kept &mdash; which is what turns &ldquo;we never got it&rdquo; into a question with an answer.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> no Redis. The queue lives in the database that is already running, which is one fewer service to operate, back up and pay for, and it survives a restart the same way. The signature is the exact mirror of task 3.7&rsquo;s inbound check &mdash; the same scheme used on the way out as on the way in.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.9</span><h3>Create bot starting templates</h3><span class="hrs">2h</span></div>
+      <div class="t-body">
+        <p>Instead of an empty instruction box, you pick a starting point &mdash; and it arrives with the right tools already switched on.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">MongoDB seed data</span><span class="chip">React template picker</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">Plain Python data</span><span class="chip used">React template picker</span>
+            <span class="chip used">POST /bots/from-template</span><span class="chip used">One tool row per named tool</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Seed data</dt><dd>Rows inserted into the database when the system is first set up. Changing them later means a migration.</dd></div>
+          <div class="row"><dt>Template picker</dt><dd>The screen that offers the starting points. Everything it fills in is editable afterwards &mdash; that is the point of it, not a fallback.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> templates are content that ships with the product, not a customer&rsquo;s own data, so they live in code and change through a review rather than a database migration. Applying one also creates the tool rows explicitly, because the fallback for an unconfigured bot is <em>every</em> built-in tool &mdash; and a tutoring bot offered an appointment booker is exactly the irrelevance templates exist to avoid.</span></div>
+      </div>
+    </div>
+
+    <div class="task">
+      <div class="t-head"><span class="tid">3.10</span><h3>Add human approval for big actions</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>Anything above a value you set stops and waits for a person. Nothing runs until somebody clicks approve.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Approval queue</span><span class="chip">Slack / email notification</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">PendingApproval collection</span><span class="chip used">Per-tool threshold</span>
+            <span class="chip used">Authenticated approve / deny</span><span class="chip used">Badge in the app&rsquo;s own header</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Held, not undone</dt><dd>The request has not been sent when the approval is created. That is stronger than any rollback &mdash; there is nothing to reverse if it never happened.</dd></div>
+          <div class="row"><dt>Per-tool threshold</dt><dd>The line is set by the customer, per tool. Everything below it runs unsupervised, which is where the call volume actually is.</dd></div>
+        </dl>
+        <div class="note"><span><b>Changed:</b> no Slack and no email. An approval is raised mid-call and has to be seen in seconds, so the notification is an amber count on the Approvals link in the header &mdash; on every page, refreshed every twelve seconds. That was missing at first: the whole mechanism shipped without any way for an operator to know something was waiting unless they happened to open the page. Found the only way it could be, by using it.</span></div>
+      </div>
+    </div>
+
   </div>
 </section>
 
@@ -721,8 +929,8 @@ footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
 </section>
 
 <footer>
-  Voice agent · 18 of 68 tasks complete · Phases 1 and 2 built, deployed and verified on live calls<br>
-  Updated 4 September 2026 · next update when task 3.1 is built and tested
+  Voice agent · 28 of 68 tasks complete · Phases 1, 2 and 3 built, deployed and verified on live calls<br>
+  Updated 7 September 2026 · next update when the first Phase 4 task is built and tested
 </footer>
 
 </div>
@@ -817,7 +1025,7 @@ footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
         <button class="seed">Why did we drop Redis and LiveKit?</button>
         <button class="seed">If an interviewer asks "how does this scale?", what do I say?</button>
         <button class="seed">What is the difference between VAD and Smart Turn?</button>
-        <button class="seed">Quiz me on Phase 2</button>
+        <button class="seed">Quiz me on Phase 3</button>
       </div>
     </div>
   </div>

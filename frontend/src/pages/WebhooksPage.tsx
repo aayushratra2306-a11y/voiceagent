@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
   listWebhookEvents, listWebhookSubscriptions, createWebhookSubscription,
   updateWebhookSubscription, deleteWebhookSubscription, listWebhookDeliveries,
   testWebhookSubscription,
 } from '../lib/api'
 import type { WebhookSubscription, WebhookSubscriptionInput, WebhookDeliveryLogEntry } from '../lib/api'
+import { usePageChrome } from '../context/ChromeContext'
+import PageLoader from '../components/PageLoader'
 
 // Task 3.8 — a customer registering their own URL per event, the manual's
 // second step. Deliberately account-wide rather than per-bot: an event like
@@ -19,7 +20,7 @@ const label = 'block text-xs font-semibold text-slate-400 uppercase tracking-wid
 const field = 'w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-violet-500/60 transition-all'
 
 export default function WebhooksPage() {
-  const navigate = useNavigate()
+  usePageChrome('Webhooks', '/dashboard')
 
   const [events, setEvents] = useState<string[]>([])
   const [subs, setSubs] = useState<WebhookSubscription[]>([])
@@ -98,21 +99,9 @@ export default function WebhooksPage() {
     }
   }
 
-  if (loading) return (
-    <div className="min-h-screen bg-[#070711] flex items-center justify-center">
-      <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
+  if (loading) return <PageLoader />
 
   return (
-    <div className="min-h-screen bg-[#070711] text-white relative overflow-hidden">
-      <div className="absolute top-[-15%] right-[-10%] w-[500px] h-[500px] rounded-full bg-violet-700/15 blur-[130px] pointer-events-none" />
-
-      <header className="relative z-10 border-b border-white/8 px-6 py-4 flex items-center gap-3 backdrop-blur-sm">
-        <button onClick={() => navigate('/dashboard')} className="text-slate-500 hover:text-white transition-colors">←</button>
-        <h1 className="text-sm font-semibold text-slate-200">Webhooks</h1>
-      </header>
-
       <main className="relative z-10 max-w-2xl mx-auto px-6 py-10 space-y-6">
         <p className="text-sm text-slate-400">
           Get notified the moment something happens — a call ends, an appointment is booked — on
@@ -229,6 +218,5 @@ export default function WebhooksPage() {
           </button>
         )}
       </main>
-    </div>
   )
 }
