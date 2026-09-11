@@ -283,7 +283,26 @@ def _shrink_pool_by_one() -> None:
             # be. Retiring one anyway would push it below target and make
             # the next caller pay a cold start for nothing.
             return
-        worker = _idle_pool.pop()
+        # Review finding #3 — the check above is NOT enough, because
+        # connect() claims workers with a bare `_idle_pool.pop(0)` that does
+        # not hold this lock. It cannot: _top_up_pool() holds the lock across
+        # Process.start(), so waiting for it on the event loop would stall
+        # every request in the process for a whole interpreter spawn.
+        #
+        # So this really can lose the race — this function runs on a real
+        # ThreadPoolExecutor thread (via run_in_executor), genuinely
+        # concurrently with the event loop. The list can be emptied between
+        # the length check above and the pop below.
+        #
+        # Losing it is a perfectly good outcome: somebody took the worker we
+        # were about to retire, which is what we wanted to happen to it
+        # anyway. What was NOT acceptable is the IndexError this used to
+        # raise — it propagated into maintain_worker_pool_loop, which had
+        # nothing to catch it, and killed pool autoscaling permanently.
+        try:
+            worker = _idle_pool.pop()
+        except IndexError:
+            return
     worker.process.terminate()
     worker.process.join(timeout=1)
     logger.info(f"[POOL] Retired idle worker pid={worker.process.pid} — demand has settled")
@@ -303,33 +322,49 @@ async def maintain_worker_pool_loop(interval_seconds: int = 15) -> None:
     quiet_ticks = 0
 
     while True:
-        dead = [w for w in _idle_pool if not w.process.is_alive()]
-        for w in dead:
-            _idle_pool.remove(w)
-            w.process.join(timeout=1)
-            logger.warning(f"[POOL] Idle worker pid={w.process.pid} died before use, replacing")
+        # Review finding #3 — one bad tick costs one tick, not the loop.
+        #
+        # Nothing supervises this task. Before this, a single exception
+        # anywhere in the body ended it silently and permanently: the pool
+        # would never top up again, never replace a worker that died, and
+        # never autoscale, with every later call quietly falling back to the
+        # slow cold-spawn path and nothing in the logs explaining why. The
+        # IndexError from the shrink race above was one way in; a transient
+        # OSError out of Process.start() is another.
+        #
+        # CancelledError is deliberately NOT caught (it does not inherit from
+        # Exception): the lifespan cancels these tasks at shutdown and they
+        # have to actually stop.
+        try:
+            dead = [w for w in _idle_pool if not w.process.is_alive()]
+            for w in dead:
+                _idle_pool.remove(w)
+                w.process.join(timeout=1)
+                logger.warning(f"[POOL] Idle worker pid={w.process.pid} died before use, replacing")
 
-        exhausted, _pool_exhausted_since_last_check = _pool_exhausted_since_last_check, False
-        quiet_ticks = 0 if exhausted else quiet_ticks + 1
+            exhausted, _pool_exhausted_since_last_check = _pool_exhausted_since_last_check, False
+            quiet_ticks = 0 if exhausted else quiet_ticks + 1
 
-        available_mb = psutil.virtual_memory().available / (1024 * 1024)
-        new_target = next_pool_target(
-            _pool_target, exhausted, quiet_ticks, available_mb,
-            settings.call_worker_pool_min, settings.call_worker_pool_max,
-            settings.pool_min_free_memory_mb,
-        )
-        if new_target != _pool_target:
-            logger.info(f"[POOL] Target {_pool_target} -> {new_target} "
-                        f"(exhausted={exhausted}, quiet_ticks={quiet_ticks})")
-            _pool_target = new_target
+            available_mb = psutil.virtual_memory().available / (1024 * 1024)
+            new_target = next_pool_target(
+                _pool_target, exhausted, quiet_ticks, available_mb,
+                settings.call_worker_pool_min, settings.call_worker_pool_max,
+                settings.pool_min_free_memory_mb,
+            )
+            if new_target != _pool_target:
+                logger.info(f"[POOL] Target {_pool_target} -> {new_target} "
+                            f"(exhausted={exhausted}, quiet_ticks={quiet_ticks})")
+                _pool_target = new_target
 
-        before = len(_idle_pool)
-        if len(_idle_pool) > _pool_target:
-            await loop.run_in_executor(None, _shrink_pool_by_one)
-        else:
-            await loop.run_in_executor(None, _top_up_pool)
-        if len(_idle_pool) != before:
-            logger.info(f"[POOL] {len(_idle_pool)} warm worker(s) ready (target {_pool_target})")
+            before = len(_idle_pool)
+            if len(_idle_pool) > _pool_target:
+                await loop.run_in_executor(None, _shrink_pool_by_one)
+            else:
+                await loop.run_in_executor(None, _top_up_pool)
+            if len(_idle_pool) != before:
+                logger.info(f"[POOL] {len(_idle_pool)} warm worker(s) ready (target {_pool_target})")
+        except Exception:
+            logger.exception("[POOL] Maintenance tick failed — carrying on to the next one")
 
         await asyncio.sleep(interval_seconds)
 
@@ -341,21 +376,28 @@ async def reap_dead_calls_loop(interval_seconds: int = 10) -> None:
     and finished child processes are never actually reaped."""
     while True:
         await asyncio.sleep(interval_seconds)
-        dead_pc_ids = [
-            pc_id for pc_id, call in _active_calls.items() if not call.process.is_alive()
-        ]
-        for pc_id in dead_pc_ids:
-            call = _active_calls.pop(pc_id)
-            call.process.join(timeout=1)
-            # Task 4.5 — the normal path a slot is freed: the call simply
-            # ended. _end_previous_calls_for above covers the other path
-            # (this same user starting a new call before this loop's next
-            # pass would have caught the old one).
-            await release_call_slot(call.slot_token)
-            logger.info(
-                f"[CALL] Cleaned up finished call pc_id={pc_id} "
-                f"(exitcode={call.process.exitcode})"
-            )
+        # Review finding #3 — same reasoning as maintain_worker_pool_loop:
+        # nothing supervises this task either, and if it dies, _active_calls
+        # only ever grows and finished worker processes are never joined, so
+        # they linger as zombies. CancelledError is deliberately not caught.
+        try:
+            dead_pc_ids = [
+                pc_id for pc_id, call in _active_calls.items() if not call.process.is_alive()
+            ]
+            for pc_id in dead_pc_ids:
+                call = _active_calls.pop(pc_id)
+                call.process.join(timeout=1)
+                # Task 4.5 — the normal path a slot is freed: the call simply
+                # ended. _end_previous_calls_for above covers the other path
+                # (this same user starting a new call before this loop's next
+                # pass would have caught the old one).
+                await release_call_slot(call.slot_token)
+                logger.info(
+                    f"[CALL] Cleaned up finished call pc_id={pc_id} "
+                    f"(exitcode={call.process.exitcode})"
+                )
+        except Exception:
+            logger.exception("[CALL] Reaper tick failed — carrying on to the next one")
 
 
 class WebRTCOffer(BaseModel):
