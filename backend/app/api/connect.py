@@ -354,6 +354,22 @@ async def maintain_worker_pool_loop(interval_seconds: int = 15) -> None:
             if new_target != _pool_target:
                 logger.info(f"[POOL] Target {_pool_target} -> {new_target} "
                             f"(exhausted={exhausted}, quiet_ticks={quiet_ticks})")
+                # Review finding #6 — a shrink that actually happened ends
+                # the quiet period.
+                #
+                # quiet_ticks was only ever reset by demand (`exhausted`
+                # above), so once it first crossed _SHRINK_AFTER_QUIET_TICKS
+                # it stayed above it and kept climbing — and the pool then
+                # shrank on EVERY following tick: 6 -> 5 -> 4 -> 3 -> 2 in
+                # four ticks instead of one step per quiet window. A burst
+                # arriving shortly after a lull would find a cold pool and
+                # pay the full cold-start cost, which is the exact thing the
+                # warm pool exists to prevent.
+                #
+                # Reset here rather than inside next_pool_target(), which
+                # stays a pure function of its inputs.
+                if new_target < _pool_target:
+                    quiet_ticks = 0
                 _pool_target = new_target
 
             before = len(_idle_pool)
