@@ -516,6 +516,12 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
     # Task 4.5 — from here until the call is registered in _active_calls,
     # any failure must release the slot just acquired above, or it leaks
     # forever (nothing else in the system knows this call ever existed).
+    #
+    # Pre-bound so the handler below can tell "no process was ever created"
+    # from "a process exists and is now orphaned" — _MP.Process() itself can
+    # raise, and an UnboundLocalError in the cleanup path would replace the
+    # exception that actually explains what went wrong.
+    proc = None
     try:
         # Take a warm worker if one is waiting. The pool is topped up
         # straight afterwards, off the event loop, so the replacement is
@@ -578,13 +584,38 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         except Exception as e:
             proc.terminate()
             raise HTTPException(status_code=504, detail="Call setup timed out") from e
+
+        # Review finding #5 — registration moved INSIDE the guard.
+        #
+        # It used to sit after the except block had already closed, and
+        # every part of it can fail: `answer["pc_id"]` is a KeyError if the
+        # worker returned a malformed dict, and _ActiveCall construction can
+        # raise on a bad value. Failing there left the slot claimed with
+        # nothing left to release it, and nothing else in the system knowing
+        # the call existed — the reaper only walks _active_calls, and the row
+        # was never added. Effective capacity shrank silently until a
+        # restart (or the ~1-hour TTL sweep, with Redis).
+        #
+        # Once this line succeeds the call is owned by _active_calls and the
+        # reaper will clean it up normally, so nothing below may fail.
+        _active_calls[answer["pc_id"]] = _ActiveCall(
+            proc, ice_queue, str(current_user.id), payment_queue, slot_token
+        )
     except BaseException:
+        # The process is the worse half of the leak: unlike the slot, it is
+        # ALIVE and holding a media track, and unreferenced by anything that
+        # could reap it. Terminated here rather than left to the platform,
+        # which is the same phantom-call shape review finding C3 fixed on the
+        # frontend. Best-effort: a failure to terminate must not replace the
+        # original exception, which is the one that explains what happened.
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                logger.exception("[CALL] Could not terminate a worker that was never registered")
         await release_call_slot(slot_token)
         raise
 
-    _active_calls[answer["pc_id"]] = _ActiveCall(
-        proc, ice_queue, str(current_user.id), payment_queue, slot_token
-    )
     logger.info(f"[CALL] Started call worker pid={proc.pid} pc_id={answer['pc_id']} bot={bot.name}")
     return answer
 
