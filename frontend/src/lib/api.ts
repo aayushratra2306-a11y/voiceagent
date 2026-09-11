@@ -14,16 +14,33 @@ function authHeaders(): HeadersInit {
 // side), only the first would win and the rest would fail.
 let refreshInFlight: Promise<string> | null = null
 
+// Review finding I19 (2026-09-10). Sharing one in-flight refresh is right
+// (see above) but nothing ever told it the session had ended: a refresh
+// still in the air when the user pressed Sign out resolved a moment later
+// and wrote a FRESH access token into localStorage, after sign-out.
+//
+// A counter rather than a boolean, and the same shape as the generation
+// token C3 put in CallContext for the same class of bug: work that started
+// before a teardown must not be allowed to finish into the state that
+// replaced it. A boolean would latch, so the next genuine sign-in could
+// never refresh again; an epoch just means "the session I belong to is
+// gone" and the next one starts clean.
+let authEpoch = 0
+
 async function refreshAccessToken(): Promise<string> {
   if (!refreshInFlight) {
+    const startedIn = authEpoch
     refreshInFlight = fetch(BASE + '/auth/refresh', { method: 'POST', credentials: 'include' })
       .then(async res => {
         if (!res.ok) throw new Error('Session expired')
         const { access_token } = await res.json()
+        // Checked after the await, not before it — the whole window this
+        // closes is the one that opens while the response is in the air.
+        if (startedIn !== authEpoch) throw new Error('Signed out')
         localStorage.setItem('token', access_token)
         return access_token as string
       })
-      .finally(() => { refreshInFlight = null })
+      .finally(() => { if (startedIn === authEpoch) refreshInFlight = null })
   }
   return refreshInFlight
 }
@@ -72,9 +89,22 @@ export async function login(email: string, password: string): Promise<{ access_t
 }
 
 export async function logout(): Promise<void> {
+  // Review finding I19 — these three run BEFORE the await, synchronously,
+  // and the order matters. Bumping the epoch invalidates any refresh
+  // already in the air (see refreshAccessToken); dropping the shared
+  // promise means a caller arriving now starts a fresh one instead of
+  // waiting on a result that is guaranteed to be discarded; and the token
+  // is removed here rather than only in AuthContext so that no window
+  // exists where storage still holds a usable token.
+  authEpoch++
+  refreshInFlight = null
+  localStorage.removeItem('token')
+
   // Best-effort: the point is revoking the refresh token server-side so a
   // captured copy of it stops working, but a failed network call here
-  // shouldn't block the user from being logged out locally.
+  // shouldn't block the user from being logged out locally. That is only
+  // safe because of the three lines above — the local session is already
+  // gone whatever this call does.
   await fetch(BASE + '/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
 }
 

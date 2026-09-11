@@ -41,7 +41,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
-    logoutApi()  // best-effort server-side revocation; don't block on it
+    // Not awaited, and that is safe as of review finding I19: logoutApi()
+    // invalidates any in-flight refresh and clears the stored token
+    // synchronously, before it awaits anything. Only the server-side
+    // revocation is left to finish in the background, so a slow or failed
+    // network call can no longer leave a usable token behind.
+    logoutApi()
     localStorage.removeItem('token')
     setToken(null)
   }
