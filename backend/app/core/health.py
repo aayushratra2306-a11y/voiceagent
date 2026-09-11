@@ -133,6 +133,19 @@ async def report() -> dict:
         logger.warning(f"[HEALTH] could not read the active call count: {type(e).__name__}: {e}")
         active_calls = None
 
+    # Review finding #8 — read off the event loop, and read ONCE.
+    #
+    # breaker.snapshot() is blocking sqlite3 I/O, and this function runs on
+    # the watchdog's 20s timer as well as serving /health to Docker's
+    # HEALTHCHECK — so calling it inline stalled the same loop that
+    # negotiates WebRTC signalling for live calls, on a fixed schedule.
+    # Awaited here rather than inside _safe() below, which is sync by design.
+    try:
+        breaker_snapshot = await breaker.snapshot_async()
+    except Exception as e:
+        logger.warning(f"[HEALTH] could not report circuit breakers: {type(e).__name__}: {e}")
+        breaker_snapshot = {}
+
     return {
         # Only the two real checks decide this. Everything else is context.
         "healthy": db_ok and pool_ok,
@@ -146,7 +159,7 @@ async def report() -> dict:
         # breakers from task 4.6 and the provider ones), plus the provider
         # entries repeated with their backup readiness — the tool ones have
         # no backup concept, so they only ever appear in the first dict.
-        "circuit_breakers": _safe(breaker.snapshot, {}, "circuit breakers"),
+        "circuit_breakers": breaker_snapshot,
         # Review finding #1 — without this, an empty circuit_breakers dict is
         # ambiguous in the worst way: "nothing has tripped" and "the store is
         # unreadable, so every call is going through unchecked" look

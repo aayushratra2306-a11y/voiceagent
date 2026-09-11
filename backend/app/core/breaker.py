@@ -48,6 +48,7 @@ a healthy provider — is one indexed read of a tiny local file.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -303,6 +304,17 @@ def state(name: str) -> str:
 def _state(name: str) -> str:
     conn = _connect()
     _, opened_at, _, _, _ = _row(conn, name)
+    return _state_from(name, opened_at)
+
+
+def _state_from(name: str, opened_at: float | None) -> str:
+    """The state decision, given a row that has already been read.
+
+    Split out for review finding #8: snapshot() selects every row in bulk
+    and then needed each one's state. Calling _state() per breaker made it
+    re-query the row it had just fetched — 1+N queries where opened_at,
+    the only thing the decision needs, was already in hand.
+    """
     if opened_at is None:
         return "closed"
     if time.time() - opened_at >= config_for(name).cooldown_seconds:
@@ -565,12 +577,31 @@ def snapshot() -> dict[str, dict]:
     return result
 
 
+async def snapshot_async() -> dict[str, dict]:
+    """snapshot(), off the event loop.
+
+    Review finding #8. Everything in this module is blocking sqlite3 I/O,
+    which is fine on the call path (single-row reads of a tiny local file)
+    but not for the reporting paths: /metrics is scraped every 15s by
+    Prometheus and health.report() runs on the watchdog's 20s timer, and both
+    were calling the sync snapshot() directly from async code — stalling the
+    same event loop that negotiates WebRTC signalling for live calls, on a
+    fixed schedule rather than an unlucky one.
+
+    Safe to run in a worker thread precisely because connections are
+    thread-local (see _connect): the thread opens its own rather than
+    sharing one, which sqlite3 would refuse anyway.
+    """
+    return await asyncio.to_thread(snapshot)
+
+
 def _snapshot() -> dict[str, dict]:
     conn = _connect()
     out: dict[str, dict] = {}
-    # fetchall before the loop: state() runs its own query on this same
-    # connection, and stepping a live cursor while doing that is asking for
-    # trouble.
+    # One query for the whole snapshot. This used to be a bulk select
+    # followed by a state() call per breaker, each of which re-read the row
+    # it had just been handed — 1+N round trips to answer a question the
+    # first query had already answered (review finding #8).
     rows = conn.execute(
         "SELECT name, failures, opened_at, trial_at, last_reason, trips FROM breakers"
     ).fetchall()
@@ -580,11 +611,7 @@ def _snapshot() -> dict[str, dict]:
         except (ValueError, TypeError):
             stamps = []
         out[name] = {
-            # _state, not state: a failure part-way through this loop should
-            # reach snapshot()'s own handler and be reported as one broken
-            # store, rather than quietly producing a dict where some rows
-            # say "unknown" and the caller cannot tell why.
-            "state": _state(name),
+            "state": _state_from(name, opened_at),
             "recent_failures": len(stamps),
             "opened_at": opened_at,
             "last_reason": reason,

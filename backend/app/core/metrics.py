@@ -138,7 +138,11 @@ async def _build_registry() -> CollectorRegistry:
              expected_max_connections)
 
     try:
-        for name, info in breaker.snapshot().items():
+        # Review finding #8 — snapshot_async(), not snapshot(). This is
+        # blocking sqlite3 I/O, Prometheus scrapes this endpoint every 15s
+        # (see deploy/prometheus.yml), and the loop it would block is the one
+        # negotiating WebRTC signalling for live calls.
+        for name, info in (await breaker.snapshot_async()).items():
             breaker_state.labels(name=name).set(_BREAKER_STATE_VALUE.get(info["state"], -1))
             breaker_trips.labels(name=name).set(info["trips"])
     except Exception as e:
