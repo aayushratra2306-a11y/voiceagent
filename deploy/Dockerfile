@@ -9,6 +9,24 @@
 # the heavy wheels here publish aarch64 Linux builds.
 FROM python:3.11-slim
 
+# Found 2026-09-12, while trying to read a live call's tool calls back out
+# of `docker compose logs`: 213 [PIPELINE] lines in the window and not one
+# [TOOL] line, for any tool, on calls that demonstrably made tool calls.
+#
+# Python block-buffers stdout when it is a pipe rather than a terminal —
+# which is exactly what it is inside a container. Lines sit in that buffer
+# until it fills or the process exits CLEANLY. Task 2.4 gives every call its
+# own worker process and ends it with Process.terminate() (SIGTERM), so a
+# call's last few log lines were not merely delayed, they were discarded
+# with the buffer. The lines that did survive were the ones written early
+# enough in a long call to be pushed out by a later buffer flush.
+#
+# This is a debugging-blindness bug rather than a runtime one: nothing broke
+# for a caller, but the evidence needed to diagnose what did was being
+# thrown away — which is how the datetime defect above ended up having to be
+# diagnosed from what the user heard instead of from the logs.
+ENV PYTHONUNBUFFERED=1
+
 # ffmpeg: audio decode/resample used across the pipeline.
 # build-essential: only needed if a wheel is missing for this arch and pip
 # has to build from source; harmless otherwise.

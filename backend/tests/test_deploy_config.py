@@ -70,3 +70,26 @@ def test_the_backend_port_is_never_published_to_the_host():
         "backend publishes a host port — uvicorn would then trust a spoofable "
         "X-Forwarded-For from the internet (see the sibling test)"
     )
+
+
+def test_python_output_is_unbuffered_in_the_container():
+    """Found 2026-09-12: a live call's tool calls could not be read back out
+    of `docker compose logs` — 213 [PIPELINE] lines in the window and not a
+    single [TOOL] line, on calls that demonstrably made tool calls.
+
+    Python block-buffers stdout when it is a pipe rather than a terminal,
+    which is what it is inside a container. Lines sit in that buffer until it
+    fills or the process exits cleanly — and task 2.4 gives every call its
+    own worker process which is ended with Process.terminate() (SIGTERM), so
+    a call's last log lines were not delayed, they were discarded along with
+    the buffer.
+
+    Asserted as an ENV line rather than by behaviour because nothing pytest
+    can reach runs inside the image. Nothing breaks for a caller when this
+    regresses, which is exactly why it needs a test: the failure mode is
+    losing the evidence you would use to diagnose the next real bug.
+    """
+    assert re.search(r'^ENV\s+PYTHONUNBUFFERED=1\s*$', _dockerfile(), re.M), (
+        "deploy/Dockerfile no longer sets PYTHONUNBUFFERED=1 — worker-process "
+        "log lines will be silently dropped when a call ends"
+    )
