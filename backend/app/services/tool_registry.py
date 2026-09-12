@@ -833,6 +833,14 @@ def _builtin_tools() -> dict[str, Any]:
     return {fn.__name__: fn for fn in TOOLS}
 
 
+def _always_available() -> dict[str, Any]:
+    """Built-ins every bot gets, configured tools or not. See tools.py's
+    ALWAYS_AVAILABLE for why this exists and why it is deliberately tiny."""
+    from app.pipeline.tools import ALWAYS_AVAILABLE
+
+    return {fn.__name__: fn for fn in ALWAYS_AVAILABLE}
+
+
 def to_function_schema(tool: BotTool, jobs=None, saga=None) -> FunctionSchema:
     """One HTTP tool record as something the model can be offered."""
     properties, required = tool.json_schema()
@@ -906,12 +914,34 @@ async def load_tools_for_bot(
             loaded.append(to_function_schema(record, jobs, saga))
         used_names.add(record.name)
 
+    # Found live 2026-09-12: a bot with 8 configured tools was asked the time
+    # and invented one, because the rule above had dropped every built-in
+    # including the clock. Domain tools staying opt-in is right; ambient
+    # context is not a domain tool. See ALWAYS_AVAILABLE in pipeline/tools.py.
+    #
+    # A configured tool of the same name WINS — if a customer has built their
+    # own get_current_datetime, theirs is the one that should run, and two
+    # functions with one name is exactly the collision the loop above warns
+    # about.
+    always_on = 0
+    for name, fn in _always_available().items():
+        if name in used_names:
+            continue
+        loaded.append(fn)
+        used_names.add(name)
+        always_on += 1
+
     has_background = any(r.long_running and r.kind == "http" for r in records)
     has_undo = any(r.kind == "http" and r.undo and r.undo.url for r in records)
     has_payment = any(r.kind == "http" and r.payment and r.payment.enabled for r in records)
     has_approval = any(r.kind == "http" and r.approval and r.approval.enabled for r in records)
+    # Reported separately rather than as one total: this log line is what
+    # diagnosed the missing-clock bug, and it only did so because it said how
+    # many tools the BOT itself had. Folding the always-available ones into
+    # the same number would hide exactly the discrepancy that made it findable.
     logger.info(
-        f"[TOOLS] Bot {bot_id}: loaded {len(loaded)} configured tool(s)"
+        f"[TOOLS] Bot {bot_id}: loaded {len(records)} configured tool(s)"
+        + (f" + {always_on} always-available" if always_on else "")
         + (" (one or more run in the background)" if has_background else "")
     )
     return loaded, has_background, has_undo, has_payment, has_approval

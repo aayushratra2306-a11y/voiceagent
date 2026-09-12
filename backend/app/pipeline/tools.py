@@ -151,3 +151,28 @@ TOOLS = [
     get_order_status,
     *BOOKING_TOOLS,
 ]
+
+
+# Offered to EVERY bot, whether or not it has configured tools of its own.
+#
+# Found on a live call, 2026-09-12. A bot with 8 configured tools was asked
+# the date and time and made one up — confidently, and wrongly. The logs said
+# why in one line: "[TOOLS] Bot ...: loaded 8 configured tool(s)", and no
+# tool call after it. load_tools_for_bot gives a configured bot exactly its
+# own tools and drops the built-ins, so the model had no clock to read and
+# filled the gap itself. It even explained that "IST is UTC+5:30" — reasoning
+# from its own general knowledge rather than from anything real.
+#
+# That per-bot rule is right for DOMAIN tools and stays: a tutor bot has no
+# business being offered book_appointment, and a smaller tool list is an
+# easier choice for the model. But knowing what day it is is not a domain
+# capability, it is ambient context — closer to knowing its own name than to
+# knowing how to issue a refund. Any bot can be asked "are you open
+# tomorrow?", and the alternative to answering from a clock is answering
+# from invention, which is the failure mode this project keeps paying for.
+#
+# Deliberately just this one. get_order_status and the booking template are
+# genuinely domain-specific and stay opt-in.
+ALWAYS_AVAILABLE = [
+    get_current_datetime,
+]
