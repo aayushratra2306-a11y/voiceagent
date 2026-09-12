@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Ten real defects, every one found only after code that already passed its own test suite
+      Fourteen real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,10 +139,10 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">10</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">14</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">7</span><span class="l">were silent — no crash, no error</span></div>
-    <div class="stat"><span class="n">383</span><span class="l">tests in the suite — none caught these</span></div>
+    <div class="stat"><span class="n">10</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">613</span><span class="l">tests in the suite — none caught these</span></div>
   </div>
 
   <div class="section-head">
@@ -534,8 +534,190 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="commit">commit <code>ead0f03</code></span>
   </article>
 
+  <div class="section-head">
+    <span class="num">04</span><h2>Phase 4 — one symptom, three separate bugs</h2><span class="rule"></span>
+  </div>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>&ldquo;The bot told me the wrong time&rdquo; — and three different reasons why</h3>
+      <span class="tag">PHASE 4 · 2026-09-12</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">A caller asked for the date and time. The date was right; the time was
+          <b>5.5 hours out</b>. Fixed it &mdash; same wrong answer. Fixed it again &mdash; same wrong
+          answer. The interesting part of this one isn&rsquo;t any single bug, it&rsquo;s that
+          <b>three unrelated faults produced an identical symptom</b>, stacked, so each fix
+          appeared to do nothing and looked like flailing.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 1: the clock spoke UTC</span>
+        <div class="body"><code>get_current_datetime</code> returned <code>datetime.now(UTC)</code>
+          labelled &ldquo;UTC&rdquo;, knowing nothing about the bot&rsquo;s configured zone. On the second
+          call the model did something more revealing: it read the UTC time out and then remarked that
+          &ldquo;IST is UTC+5:30&rdquo; &mdash; narrating the offset instead of applying it. <b>A language
+          model is not a calculation layer.</b> Handing it a value in the wrong zone and hoping it converts
+          is the same class of mistake as expecting it to enforce business hours.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 2: the fix was unreachable</span>
+        <div class="body">Layer 1&rsquo;s fix changed nothing, because this bot never called that function.
+          A bot with its own tools configured is given <b>exactly those</b> and every built-in is dropped
+          &mdash; and this one had 8 tools, none of them a clock. One log line settled it:
+          <code>loaded 8 configured tool(s)</code>, and no tool call after it. With no clock to read,
+          the model <b>invented the time</b>. Fixing what a function returns is wasted effort while
+          nothing is calling it.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 3: the model invented an argument</span>
+        <div class="body">With the clock finally offered, the model called it as
+          <code>get_current_datetime(human_readable="2026-09-12 14:35:20 PDT")</code> &mdash; inventing
+          both the parameter <i>and</i> a US Pacific timestamp. The function takes no arguments, and the
+          schema says so; the model had read the field name out of the <b>docstring</b>, which named it
+          while describing what came <i>back</i>. The framework splats whatever arrives straight into the
+          function with no filtering against the schema it generated moments earlier, so one invented key
+          is a hard <code>TypeError</code>: the tool never runs and the model answers from imagination
+          &mdash; the exact failure the tool exists to prevent.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Every test called the function <b>directly</b>, in Python, with correct
+          arguments. Not one went through the path a real call uses &mdash; the framework generating a
+          schema, a model choosing what to send, and that being splatted back in. The tests asserted the
+          function was right, and it was; what was wrong was <i>everything around it</i>. Layer 2 had a
+          test that actively <b>encoded the bug</b>: it asserted &ldquo;configured means only
+          configured&rdquo;, which is precisely the rule that starved the bot of a clock.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Convert in code against the bot&rsquo;s own zone, reusing the booking
+          config so &ldquo;what time is it&rdquo; and &ldquo;what time can I book&rdquo; can never
+          disagree. Offer exactly one built-in &mdash; the clock &mdash; to every bot regardless of
+          configuration, on the grounds that knowing what day it is is <b>ambient context, not a domain
+          capability</b>. And drop invented arguments instead of crashing on them, with a warning so a
+          misbehaving model stays visible. The obvious version of that last fix was a trap:
+          adding <code>**kwargs</code> to absorb it publishes a <i>required</i> argument called
+          <code>_ignored</code> to the model &mdash; found by running it rather than reasoning about it,
+          and now held shut by two tests.</div>
+        <div class="evidence"><span class="bad-line">before: arguments {'human_readable': '2026-09-12 14:35:20 PDT'} → TypeError, tool never ran</span>
+<span class="ok-line">after:  arguments {} → "Saturday, 12 September 2026, 11:11 pm India time"</span></div>
+      </div>
+    </div>
+    <span class="commit">commits <code>8b56cdc</code> · <code>3050be3</code> · <code>d4ba16c</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>The logs that would have explained it were being thrown away</h3>
+      <span class="tag">INFRASTRUCTURE · 2026-09-12</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Trying to diagnose the above from the container logs: <b>213</b> pipeline
+          lines in the window, and <b>not one</b> tool line &mdash; on calls that demonstrably made tool
+          calls. The evidence needed to find the bug simply wasn&rsquo;t there, which is why the first
+          two layers had to be diagnosed from what the caller <i>heard</i>.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Python block-buffers its output when it isn&rsquo;t writing to a terminal
+          &mdash; which is exactly the case inside a container. Lines sit in that buffer until it fills
+          or the process exits <b>cleanly</b>. Every call runs in its own worker process that is ended
+          with <code>terminate()</code>, so a call&rsquo;s last log lines weren&rsquo;t delayed, they
+          were <b>discarded with the buffer</b>. The lines that did survive were the ones written early
+          enough in a long call to be pushed out by a later flush.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Nothing was broken for a caller, so nothing could fail. This is a class of
+          defect a test suite cannot have an opinion about: the <b>observability</b> was broken, not the
+          behaviour. It only becomes visible the day you need the logs and they aren&rsquo;t there
+          &mdash; which is the worst possible day to find out.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">One line &mdash; <code>PYTHONUNBUFFERED=1</code> in the container image
+          &mdash; and a test asserting it stays there. Cheap, and it is what made the two remaining
+          layers findable at all.</div>
+      </div>
+    </div>
+    <span class="commit">commit <code>b848cbc</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Total silence on the call — and it wasn&rsquo;t the code</h3>
+      <span class="tag">OPS · 2026-09-12</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Mid-debugging, the bot stopped being audible entirely. Connection fine,
+          transcripts fine, speech recognised &mdash; nothing spoken back. Easy to assume a change had
+          broken it.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The text-to-speech provider had <b>run out of credits</b> and was returning
+          <code>quota_exceeded</code> (HTTP 402) on every request. An external billing state, unrelated
+          to any code change &mdash; but indistinguishable from a regression without reading the logs.
+          Worth naming because the instinct under pressure is to revert recent work, which here would
+          have thrown away good fixes and not restored audio.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Rotated the API key. Notable for the second lesson: an editing slip merged
+          the new key onto the config file&rsquo;s header comment, producing a file the container
+          wouldn&rsquo;t parse. Diagnosed with read-only commands, repaired by deleting the one bad
+          line, and &mdash; the useful habit &mdash; validated with a <b>config check before restarting
+          anything</b>, so a broken file was never handed to a running service.</div>
+        <div class="evidence"><span class="bad-line">cartesia: {"error":"quota_exceeded","status":402} — every request</span>
+<span class="ok-line">after key rotation + config validated: audio restored</span></div>
+      </div>
+    </div>
+    <span class="commit">operational — no code change</span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Two regressions shipped because the test suite couldn&rsquo;t run</h3>
+      <span class="tag">PROCESS · 2026-09-12</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">The database provider was blocking the development machine&rsquo;s IP
+          &mdash; a home connection whose address rotates &mdash; so <code>pytest</code> couldn&rsquo;t
+          reach it. Layer 2&rsquo;s fix was verified by hand with a standalone script instead, and
+          committed. The moment access was restored, the full suite found <b>two tests that fix had
+          broken</b>.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">A manual script checks the thing you thought to check. A suite checks the
+          things you <i>didn&rsquo;t</i> &mdash; here, a test reading <code>.name</code> on every
+          entry in the tool list, which broke the moment a plain function appeared alongside the
+          objects, and a second test that encoded the old rule outright. Neither would have occurred
+          to anyone to check by hand.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Permanent allowlist entry so a rotating home IP can never block the suite
+          again &mdash; access still requires credentials, so the IP gate was providing very little.
+          Then both regressions fixed for their own reasons rather than edited until green, and each
+          attributed by <b>rewinding the code and re-running</b> to prove which commit caused it
+          instead of assuming. The rule this leaves behind: if the suite cannot run, the commit is
+          <b>unverified</b> &mdash; say so, and go back to it.</div>
+      </div>
+    </div>
+    <span class="commit">process — see <code>d4ba16c</code></span>
+  </article>
+
   <footer>
-    <span>Voice Agent · Phase 3 live testing — complete, 3.1 through 3.10</span>
-    <span>Last updated 2026-09-07</span>
+    <span>Voice Agent · Phase 3 complete (3.1–3.10) · Phase 4 live testing in progress</span>
+    <span>Last updated 2026-09-12</span>
   </footer>
 </div>
