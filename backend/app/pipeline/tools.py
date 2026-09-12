@@ -27,6 +27,8 @@ untrusted — the AI can and occasionally will invent a plausible-looking but
 wrong value.
 """
 
+import functools
+import inspect
 from datetime import UTC, datetime
 
 from loguru import logger
@@ -36,17 +38,86 @@ from app.models.order import Order
 from app.pipeline.booking import BOOKING_TOOLS, get_config
 
 
+def _tolerates_invented_arguments(fn):
+    """Drop arguments the model made up, instead of crashing on them.
+
+    Found on a live call, 2026-09-12. The caller asked the time and the
+    model called the clock like this:
+
+        get_current_datetime(human_readable="2026-09-12 14:35:20 PDT")
+
+    That function takes no arguments, and the schema it is advertised under
+    says so — pipecat builds the schema from the SIGNATURE, so the model was
+    told `properties: {}` and passed something anyway. It had read
+    `human_readable` out of the docstring, which named it while explaining
+    what came back, and filled in a US Pacific timestamp it invented whole.
+
+    pipecat then splats whatever arrived straight in
+    (adapters/schemas/direct_function.py:289):
+
+        return await self.function(params=params, **args)
+
+    with no filtering against the schema it generated moments earlier. So
+    one invented key is a hard TypeError, the tool never runs, and the model
+    answers from imagination — the precise failure the tool exists to
+    prevent. Worse for the tools that DO things: a hallucinated argument on
+    book_appointment raises before the booking happens, while the caller may
+    already have been told it worked.
+
+    This is the tools.py header's own rule holding one level up. That header
+    has said since Phase 1 that "the AI can and occasionally will invent a
+    plausible-looking but wrong value"; it turns out the AI will also invent
+    a plausible-looking but wrong *parameter*, and the shape of a call is as
+    untrusted as the values inside it.
+
+    The obvious fix is a trap and is deliberately not used here: adding
+    `**_ignored` to each signature makes it WORSE, because pipecat's
+    parameter loop does not skip VAR_KEYWORD, so the catch-all is published
+    to the model as a required argument named `_ignored`. Verified by
+    running it against pipecat 1.7.0 rather than reasoned about.
+
+    functools.wraps is what keeps this invisible: it copies `__wrapped__`,
+    so `inspect.signature` resolves to the original, and `__annotations__`
+    and `__doc__` come across too — the generated schema is byte-identical
+    to the unwrapped function's. Confirmed by test, because a fix that
+    silently changed what the model is offered would be a worse bug than
+    the one it closes.
+
+    One case stays undefendable and is better stated than hidden: an
+    argument named literally `params` collides with pipecat's own keyword at
+    the call site, and Python raises before any wrapper body runs. Nothing
+    the function can do reaches that. It needs a name the model never sees,
+    and has not been observed.
+    """
+    takes = set(inspect.signature(fn).parameters)
+
+    @functools.wraps(fn)
+    async def guarded(params, **kwargs):
+        invented = sorted(k for k in kwargs if k not in takes)
+        if invented:
+            # Never silent. This defect survived two deploys because the
+            # evidence kept not being in the logs, and a model inventing
+            # arguments is worth seeing even once it stops being fatal.
+            logger.warning(
+                f"[TOOL] {fn.__name__}: the model invented argument(s) "
+                f"{', '.join(invented)} — not in this tool's schema, ignoring them"
+            )
+        return await fn(params=params, **{k: v for k, v in kwargs.items() if k in takes})
+
+    return guarded
+
+
 async def get_current_datetime(params: FunctionCallParams):
-    """Get the current real-world date and time, in the caller's own time zone.
+    """Get the current real-world date and time in the caller's own time zone.
 
-    Use this whenever the caller asks what the date or time is, or asks
-    something relative to "today" or "right now" that you would otherwise
-    have to guess at — you do not know the current date on your own.
+    Takes no arguments. Use it whenever the caller asks what the date or the
+    time is, or asks something relative to "today" or "right now" — you do
+    not know the current date on your own, and must not guess at it.
 
-    `human_readable` is already in the caller's local time zone and already
-    names that zone. Say it as it is given to you. Do NOT convert it, do not
-    add or subtract hours, and do not explain the offset between time zones —
-    the conversion has already been done for you.
+    The answer comes back already converted to the caller's local time zone
+    and already naming that zone. Read it back as it is given to you: do not
+    convert it, do not add or subtract hours, and do not explain the offset
+    between time zones.
     """
     # Found on a live call, 2026-09-11: the caller asked the date and time,
     # got the date right and the time 5.5 hours behind — exactly the UTC-to-
@@ -146,10 +217,17 @@ async def get_order_status(params: FunctionCallParams, order_id: str):
 # Per-bot tool selection is task 3.1 (see services/tool_registry.py): a bot
 # with its own tools configured gets exactly those, and this list is the
 # fallback for every bot that has configured nothing.
+# Wrapped, not bare: see _tolerates_invented_arguments. The wrapping happens
+# at the point of handover to the pipeline rather than on each definition, so
+# the functions above stay ordinary async functions that a test can call
+# directly, and no future tool can be added here without the guard.
 TOOLS = [
-    get_current_datetime,
-    get_order_status,
-    *BOOKING_TOOLS,
+    _tolerates_invented_arguments(fn)
+    for fn in (
+        get_current_datetime,
+        get_order_status,
+        *BOOKING_TOOLS,
+    )
 ]
 
 
@@ -174,5 +252,5 @@ TOOLS = [
 # Deliberately just this one. get_order_status and the booking template are
 # genuinely domain-specific and stay opt-in.
 ALWAYS_AVAILABLE = [
-    get_current_datetime,
+    _tolerates_invented_arguments(get_current_datetime),
 ]

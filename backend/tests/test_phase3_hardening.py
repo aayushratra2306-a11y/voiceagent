@@ -759,8 +759,18 @@ async def test_two_tools_with_the_same_name_do_not_both_reach_the_model():
 
     tools, *_ = await load_tools_for_bot("bot-dupe")
 
-    assert len({t.name for t in tools}) == len(tools)
-    assert len(tools) == 1
+    # Two shapes reach the model, and this list holds both: a configured
+    # HTTP tool is a FunctionSchema carrying `.name`, while a built-in is a
+    # plain function carrying `__name__`. Reading only one of them made this
+    # test raise AttributeError the moment an always-available built-in
+    # started appearing alongside configured tools.
+    names = [getattr(t, "name", None) or t.__name__ for t in tools]
+
+    # The point of the test: the duplicate is collapsed. Asserting a total
+    # count instead would re-break here every time the always-available set
+    # changes, which is a different decision and has its own test.
+    assert names.count("check_stock") == 1
+    assert len(set(names)) == len(names), f"a name is offered twice: {names}"
 
     await a.delete()
     await b.delete()

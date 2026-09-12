@@ -508,15 +508,39 @@ async def test_two_tools_on_one_bot_cannot_share_a_name(client, user_a_token):
     assert again.status_code == 409
 
 
-async def test_configured_tools_replace_the_builtins_for_that_bot(client, user_a_token):
+async def test_configured_tools_replace_the_domain_builtins_for_that_bot(client, user_a_token):
     """The prompt-size half of this task: a bot carries its own tools, not
-    every tool ever written."""
+    every tool ever written.
+
+    Narrowed 2026-09-12, and worth saying why rather than just editing the
+    expected value. This test encoded the rule as "configured means ONLY
+    configured", and that rule is what caused a live defect: a bot with 8
+    configured tools was asked the date and time, had no clock among them,
+    and invented an answer. Exactly one built-in — get_current_datetime —
+    is now offered to every bot regardless of configuration, because
+    knowing what day it is is ambient context rather than a domain
+    capability (see ALWAYS_AVAILABLE in pipeline/tools.py).
+
+    The rule this test was written to protect is unchanged for everything
+    it was actually written for, which is why the assertions below still
+    name the domain built-ins explicitly: a bot that configured a stock
+    lookup must not be handed order tracking or the booking template.
+    """
     bot_id = await _make_bot(client, user_a_token, "Configured bot")
     await client.post(f"/bots/{bot_id}/tools/", json=TOOL_BODY, headers=auth_headers(user_a_token))
 
     tools, *_ = await tool_registry.load_tools_for_bot(bot_id)
     names = [getattr(t, "__name__", getattr(t, "name", "")) for t in tools]
-    assert names == ["check_stock"], names
+
+    assert "check_stock" in names
+    assert "get_current_datetime" in names, "the always-available clock is missing"
+
+    # The original point of the test, stated as what it always meant.
+    for domain_builtin in ("get_order_status", "book_appointment", "check_availability"):
+        assert domain_builtin not in names, (
+            f"{domain_builtin} leaked into a configured bot — the per-bot rule "
+            f"has widened beyond the one deliberate exception"
+        )
 
 
 async def test_a_disabled_tool_is_not_offered_to_the_model(client, user_a_token):

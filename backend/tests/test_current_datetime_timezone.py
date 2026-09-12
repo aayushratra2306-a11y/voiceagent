@@ -152,6 +152,10 @@ async def test_the_docstring_tells_the_model_not_to_convert():
     UTC+5:30"). The conversion is done in code now, and the docstring — the
     only instruction the model gets about this tool — has to say so, or the
     same helpfulness will reintroduce the same wrong answer."""
-    doc = get_current_datetime.__doc__ or ""
+    # Whitespace-normalised, because the instruction is prose in a wrapped
+    # docstring: a line break landing between "do not" and "convert" is a
+    # reformat, not a behaviour change, and this test failing for that
+    # reason teaches nothing. It should fail only if the instruction goes.
+    doc = " ".join((get_current_datetime.__doc__ or "").split()).lower()
 
-    assert "do not convert" in doc.lower() or "not convert" in doc.lower()
+    assert "do not convert" in doc
