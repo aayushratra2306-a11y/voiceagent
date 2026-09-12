@@ -144,11 +144,69 @@ class _InProcessCapacity:
 
 class _RedisCapacity:
     """Same contract, backed by Redis so it is correct across however many
-    API replicas are running. Not used unless settings.redis_url is set."""
+    API replicas are running. Not used unless settings.redis_url is set.
+
+    Every method here degrades to the in-process counter rather than
+    raising, because connect() does not guard its capacity check:
+
+        slot_token = await try_acquire_call_slot()
+
+    so anything that escapes this class is a 500 and a caller who never got
+    through, for a reason that had nothing to do with capacity. Found while
+    deciding whether to set REDIS_URL on the deployed VM — switching it on
+    without this would have traded a cap that is correct across replicas
+    the project does not yet run, for every call failing whenever one
+    container blinks.
+
+    Falling back rather than failing open, because the two obvious
+    behaviours are both wrong. Refusing calls while the counter is
+    unreachable turns a Redis restart into an outage for every new caller.
+    Allowing everything is worse than it sounds: this cap is a MEMORY
+    figure, not a throughput one — each live call is its own ~300MB process
+    on a 4GB VM — so uncapped for a minute means the box runs out of memory,
+    which kills the calls already in progress and the API with them.
+
+    The fallback is simply what this deployment would have been using had
+    REDIS_URL never been set, which on one replica is not a degradation at
+    all but the exactly correct number. On several it is a per-replica
+    approximation: still a real ceiling, still far better than either
+    alternative.
+
+    Accepted limit, stated rather than hidden: slots claimed through Redis
+    before an outage are unknown to the fallback, so while degraded the
+    count reflects only the calls placed after the switchover. Bounded, it
+    recovers on the next successful Redis call, and the alternative was an
+    OOM.
+    """
 
     def __init__(self, redis_client) -> None:
         self._redis = redis_client
         self._script = redis_client.register_script(_LUA_TRY_ACQUIRE)
+        self._fallback = _InProcessCapacity()
+        self._degraded = False
+
+    def _degrade(self, attempted: str, error: Exception) -> None:
+        """Announce an outage once, not once per call. At six calls a minute
+        a line each would bury the incident it is reporting."""
+        if self._degraded:
+            return
+        self._degraded = True
+        logger.error(
+            f"[CAPACITY] Could not {attempted} — Redis is unreachable "
+            f"({type(error).__name__}: {error}). Counting calls in this process "
+            f"instead, so the cap still holds here. Calls are NOT being refused "
+            f"over this."
+        )
+
+    def _recovered(self) -> None:
+        if not self._degraded:
+            return
+        self._degraded = False
+        logger.info(
+            "[CAPACITY] Redis is answering again — the call count is shared across "
+            "replicas once more. Slots claimed during the outage were counted "
+            "locally and are not in this number."
+        )
 
     async def _now(self) -> float:
         """Redis's clock, not this process's.
@@ -166,19 +224,40 @@ class _RedisCapacity:
         # records the slot either way, so the count stays truthful whether
         # or not a cap is configured. See the comment in _LUA_TRY_ACQUIRE.
         token = _new_token()
-        now = await self._now()
-        granted = await self._script(
-            keys=[_KEY], args=[limit, now, SLOT_TTL_SECONDS, token]
-        )
+        try:
+            now = await self._now()
+            granted = await self._script(
+                keys=[_KEY], args=[limit, now, SLOT_TTL_SECONDS, token]
+            )
+        except Exception as e:
+            self._degrade("claim a call slot", e)
+            return await self._fallback.try_acquire(limit)
+        self._recovered()
         return token if granted else None
 
     async def release(self, token: str) -> None:
-        await self._redis.zrem(_KEY, token)
+        # Released locally first and unconditionally. A token claimed while
+        # degraded exists only in the fallback; one claimed through Redis is
+        # not in the fallback at all — discard() makes the miss free either
+        # way, and this runs in a `finally`, where raising would replace the
+        # exception actually being handled AND leak the slot.
+        await self._fallback.release(token)
+        try:
+            await self._redis.zrem(_KEY, token)
+        except Exception as e:
+            self._degrade("release a call slot", e)
 
     async def current(self) -> int:
-        now = await self._now()
-        await self._redis.zremrangebyscore(_KEY, "-inf", now - SLOT_TTL_SECONDS)
-        return int(await self._redis.zcard(_KEY))
+        try:
+            now = await self._now()
+            await self._redis.zremrangebyscore(_KEY, "-inf", now - SLOT_TTL_SECONDS)
+            return int(await self._redis.zcard(_KEY))
+        except Exception as e:
+            # /health and /metrics both read this. Raising here takes the
+            # health endpoint down during precisely the incident it exists
+            # to report.
+            self._degrade("read the active call count", e)
+            return await self._fallback.current()
 
     async def release_stale_for_this_node(self) -> int:
         """Drop every slot tagged with THIS node id.
@@ -188,11 +267,19 @@ class _RedisCapacity:
         node id is a leftover from the incarnation that died. Another
         replica's slots have a different id and are never touched.
         """
-        members = await self._redis.zrange(_KEY, 0, -1)
-        stale = [m for m in members if str(m).startswith(f"{NODE_ID}:")]
-        if stale:
-            await self._redis.zrem(_KEY, *stale)
-        return len(stale)
+        try:
+            members = await self._redis.zrange(_KEY, 0, -1)
+            stale = [m for m in members if str(m).startswith(f"{NODE_ID}:")]
+            if stale:
+                await self._redis.zrem(_KEY, *stale)
+            return len(stale)
+        except Exception as e:
+            # Guarded here as well as at the call site: this runs in the
+            # lifespan, and a container that refuses to boot while Redis is
+            # down is a restart loop feeding off the outage. The TTL sweep
+            # reclaims these slots anyway; this was only the fast path.
+            self._degrade("clear slots left by a previous run", e)
+            return 0
 
 
 _backend = None
