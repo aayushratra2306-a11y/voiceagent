@@ -33,22 +33,60 @@ from loguru import logger
 from pipecat.services.llm_service import FunctionCallParams
 
 from app.models.order import Order
-from app.pipeline.booking import BOOKING_TOOLS
+from app.pipeline.booking import BOOKING_TOOLS, get_config
 
 
 async def get_current_datetime(params: FunctionCallParams):
-    """Get the current real-world date and time.
+    """Get the current real-world date and time, in the caller's own time zone.
 
     Use this whenever the caller asks what the date or time is, or asks
     something relative to "today" or "right now" that you would otherwise
     have to guess at — you do not know the current date on your own.
+
+    `human_readable` is already in the caller's local time zone and already
+    names that zone. Say it as it is given to you. Do NOT convert it, do not
+    add or subtract hours, and do not explain the offset between time zones —
+    the conversion has already been done for you.
     """
-    now = datetime.now(UTC)
+    # Found on a live call, 2026-09-11: the caller asked the date and time,
+    # got the date right and the time 5.5 hours behind — exactly the UTC-to-
+    # IST offset — because this returned datetime.now(UTC) stamped "UTC" and
+    # knew nothing about the bot's configured zone.
+    #
+    # On the second call the model did something more revealing still: it
+    # read the UTC time out, then remarked that "IST is UTC+5:30" without
+    # ever doing the arithmetic. That is the lesson this project keeps
+    # relearning — the model is not a calculation layer. Handing it a value
+    # in the wrong zone and hoping it converts is the same class of mistake
+    # as expecting it to enforce business hours (see booking.py's
+    # _within_business_hours). Convert here, in code, and give it a sentence
+    # it only has to repeat.
+    #
+    # booking.get_config() already solves exactly this: the bot's zone, read
+    # once per call and cached, with a spoken name ("India time", not
+    # "Asia/Kolkata"). Reusing it is also what keeps "what time is it" and
+    # "what time can I book" from disagreeing inside one conversation.
+    now_utc = datetime.now(UTC)
+    config = await get_config()
+    local = now_utc.astimezone(config.zone)
+
+    # Same spoken shape booking.py uses (see its _spoken): 12-hour, no
+    # leading zero, minutes omitted on the hour — "8 am", not "08:00".
+    hour = local.strftime("%I").lstrip("0") or "12"
+    minute = "" if local.minute == 0 else f":{local.minute:02d}"
+    spoken_time = f"{hour}{minute} {local.strftime('%p').lower()}"
+
     logger.info("[TOOL] get_current_datetime called")
 
     result = {
-        "iso_datetime": now.isoformat(),
-        "human_readable": now.strftime("%A, %d %B %Y, %H:%M UTC"),
+        # Deliberately still UTC: this is the machine-readable field, and
+        # anything else that reads it (logs, another tool) should get an
+        # unambiguous instant rather than having to guess a zone.
+        "iso_datetime": now_utc.isoformat(),
+        "human_readable": (
+            f"{local.strftime('%A, %d %B %Y')}, {spoken_time} {config.spoken_zone}"
+        ),
+        "timezone": config.timezone,
     }
     logger.info(f"[TOOL] get_current_datetime -> {result['human_readable']}")
     await params.result_callback(result)
