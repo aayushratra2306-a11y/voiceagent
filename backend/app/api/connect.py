@@ -164,9 +164,11 @@ _idle_pool: list[_PooledWorker] = []
 _pool_target = min(max(settings.call_worker_pool_size, settings.call_worker_pool_min),
                     settings.call_worker_pool_max)
 
-# Task 4.3 — set by connect() the moment a call has to fall back to a cold
-# spawn because the pool was empty: unambiguous evidence that demand
-# exceeded supply, checked and cleared once per autoscale tick.
+# Task 4.3 — set by connect() whenever a caller does not get a READY worker:
+# the pool list was empty (cold spawn), or the worker it held was still
+# starting. Both mean that caller waited through a cold start, which is what
+# demand exceeding supply actually looks like from the caller's side. Checked
+# and cleared once per autoscale tick.
 _pool_exhausted_since_last_check = False
 
 # How many consecutive quiet ticks (the pool was not exhausted) before
@@ -463,6 +465,8 @@ async def ice_servers(current_user: User = Depends(get_current_user)):
 
 @router.post("/connect")
 async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_user)):
+    global _pool_exhausted_since_last_check
+
     # Review finding #4 — validate BEFORE tearing anything down.
     #
     # This lookup used to come third, after the previous call had already
@@ -563,8 +567,26 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
                 "sdp_type": body.type,
                 "pc_id": body.pc_id,
             })
-            warm = "warm" if worker.ready.is_set() else "still starting"
-            logger.info(f"[POOL] Claimed {warm} worker pid={proc.pid} ({len(_idle_pool)} left)")
+            if worker.ready.is_set():
+                logger.info(f"[POOL] Claimed warm worker pid={proc.pid} ({len(_idle_pool)} left)")
+            else:
+                # Task 4.3, found live 2026-09-13 — this caller is about to
+                # sit through the full cold start (22 seconds in the log that
+                # found it) exactly as if the pool had been empty, so it is
+                # demand exactly as if the pool had been empty.
+                #
+                # Only an EMPTY list used to count. But a claimed worker is
+                # replaced at once, and the replacement enters the list the
+                # moment its process starts, seconds before it can take a
+                # call — so under a real burst the list is almost never
+                # empty. Callers got still-starting workers, the log said
+                # "1 left" every time, and the pool never grew. The question
+                # that matters is whether this caller got a READY worker.
+                _pool_exhausted_since_last_check = True
+                logger.warning(
+                    f"[POOL] Claimed still starting worker pid={proc.pid} ({len(_idle_pool)} left) "
+                    f"— this caller waits for a cold start; counting it as demand"
+                )
             loop.run_in_executor(None, _top_up_pool)
         else:
             # Pool exhausted — a burst of simultaneous calls. Fall back to
@@ -572,9 +594,8 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
             # to answer, but it answers, which beats queueing behind the
             # pool.
             #
-            # Task 4.3 — this is the demand signal next_pool_target() acts
-            # on: unambiguous evidence that supply fell short this tick.
-            global _pool_exhausted_since_last_check
+            # Task 4.3 — one of the two demand signals next_pool_target()
+            # acts on (the other is a still-starting claim, above).
             _pool_exhausted_since_last_check = True
             logger.warning("[POOL] Empty, spawning a cold worker for this call")
             answer_queue = _MP.Queue()
