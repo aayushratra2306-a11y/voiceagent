@@ -1,0 +1,16 @@
+# Build context for deploy/Dockerfile (context: repo root).
+#
+# backend/tests is the reason this file exists. On 2026-09-13 the test suite
+# was run inside the live backend container, and its teardown dropped the
+# production database. With the tests absent from the image, there is
+# nothing on the server to run by mistake. Tests belong on a laptop or in CI.
+backend/tests
+
+# Local-only weight the image never uses. local_models is a runtime volume.
+backend/venv
+backend/local_models
+backend/.state
+**/__pycache__
+**/.pytest_cache
+.git
+frontend/node_modules

@@ -151,6 +151,45 @@ definition is unchanged. And the `grep` because "the build printed
 something" and "the new code is live" turned out to be different claims —
 check for a string you know only the new version contains.
 
+### Backups: three layers
+
+Added after 2026-09-13, when a test run on this server dropped the production
+database and Atlas had no backup. Each layer covers a failure the one before
+it cannot.
+
+| Layer | Where the copy lives | Protects against | Cost |
+|---|---|---|---|
+| 1. `backup` service | On the VM, `~/voiceagent-backups` | A bad command, a wiped or corrupted database, losing the Atlas cluster | Free |
+| 2. `deploy/pull-backups.ps1` | Your PC, `D:\voiceagent-backups` | Losing the VM as well | Free (needs the gcloud CLI) |
+| 3. Atlas Cloud Backup | Inside Atlas | Point-in-time restore without any of the above | Paid: requires upgrading the cluster tier |
+
+**Check layer 1 is working** (read-only):
+```bash
+docker compose -f deploy/docker-compose.yml logs --since 7h backup | grep BACKUP
+ls ~/voiceagent-backups
+```
+
+**If the logs say retention is FROZEN**, the document count dropped sharply
+between two snapshots and no snapshot is being deleted. Check the data first.
+If the drop was intended, delete `~/voiceagent-backups/RETENTION_FROZEN`.
+
+**Restore** (writes to a database, so read this first):
+```bash
+# 1. Prove the snapshot is intact. Read-only.
+docker compose -f deploy/docker-compose.yml run --rm -v ~/voiceagent-backups:/backups backup \
+    python -m scripts.db_backup verify /backups/<snapshot>
+# 2. Restore into a TEST database first and look at it. Inserts only.
+docker compose -f deploy/docker-compose.yml run --rm -v ~/voiceagent-backups:/backups backup \
+    python -m scripts.db_backup restore /backups/<snapshot> --target-db voiceagent_restore_test
+# 3. Only then into production: take a fresh snapshot of production first, then
+#    add --target-db voiceagent --i-understand-this-writes-to-a-non-test-database,
+#    then restart the backend so it rebuilds the indexes (unique email etc.).
+```
+
+**Never run the test suite on this server.** Its teardown drops its database.
+The test files are no longer in the image (`.dockerignore`), and the suite
+refuses to start unless `DB_NAME` ends in `_test` or `_ci`.
+
 ## Step 6 — Allow the server's IP in MongoDB Atlas
 
 Atlas blocks by IP. Add the VM's public IP under **Network Access**, or the

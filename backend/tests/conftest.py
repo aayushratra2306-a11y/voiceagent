@@ -14,7 +14,24 @@
 # just the fallback for running pytest locally with no override.
 import os
 
+import pytest
+
+from app.core.db_safety import is_disposable_database
+
+# 2026-09-13 — this line used to be the whole guard, and it dropped
+# production. setdefault only fills a MISSING value; the live container
+# already had DB_NAME=voiceagent, so the suite kept it, and the teardown
+# below deleted every account, bot and document on the server. Now the name
+# has to declare itself disposable, or nothing runs — see
+# tests/test_database_safety.py.
 os.environ.setdefault("DB_NAME", "voiceagent_test")
+if not is_disposable_database(os.environ["DB_NAME"]):
+    pytest.exit(
+        f"Refusing to run the test suite against database {os.environ['DB_NAME']!r}. "
+        f"The suite DROPS its database when it finishes, so DB_NAME must end in "
+        f"'_test' or '_ci'. Never run the tests on the production server.",
+        returncode=3,
+    )
 
 # Task 2.7 — deliberately blanked, not setdefault'd: once a real DSN exists
 # in backend/.env, every deliberately-triggered error in this suite (the
@@ -24,7 +41,6 @@ os.environ.setdefault("DB_NAME", "voiceagent_test")
 # imported, which is where init() runs.
 os.environ["SENTRY_DSN"] = ""
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
@@ -56,6 +72,11 @@ async def _test_db():
                    RevokedRefreshToken, BotTool, PaymentSession,
                    WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
     yield
+    # Checked again at the moment it matters, not only at import: the name
+    # that reaches this line is the one actually connected to, and it is the
+    # one that gets destroyed.
+    if not is_disposable_database(database.name):
+        raise RuntimeError(f"Refusing to drop non-disposable database {database.name!r}")
     await database.client.drop_database(database.name)
 
 

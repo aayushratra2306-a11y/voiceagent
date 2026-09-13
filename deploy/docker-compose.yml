@@ -35,6 +35,34 @@ services:
       redis:
         condition: service_healthy
 
+  # Backup layer 1, added after 2026-09-13, when a test run on this server
+  # dropped the production database and Atlas had no backup. Same image as
+  # the backend (same code, same .env) running scripts/db_backup.py: a full
+  # snapshot every BACKUP_INTERVAL_HOURS, verified after writing, pruned
+  # (7 days of every snapshot, then one per day to 30 days), and FROZEN
+  # against pruning if the document count suddenly collapses, so the good
+  # snapshots from before a wipe cannot rotate away.
+  #
+  # Reads the database; writes only to the backup folder, which is OUTSIDE
+  # the git checkout (~/voiceagent-backups) so no git operation can touch it.
+  # Layer 2 copies these off the server: deploy/pull-backups.ps1.
+  backup:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BACKUP_DIR: /backups
+    command: ["python", "-m", "scripts.db_backup", "loop"]
+    volumes:
+      - ../../voiceagent-backups:/backups
+    # The image's HEALTHCHECK polls the API on :8080, which this container
+    # does not serve; left on, it would report a healthy backup as unhealthy.
+    healthcheck:
+      disable: true
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
