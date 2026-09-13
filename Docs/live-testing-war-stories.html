@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Sixteen real defects, every one found only after code that already passed its own test suite
+      Seventeen real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,10 +139,10 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">16</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">17</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">11</span><span class="l">were silent — no crash, no error</span></div>
-    <div class="stat"><span class="n">642</span><span class="l">tests in the suite — none caught these</span></div>
+    <div class="stat"><span class="n">12</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">646</span><span class="l">tests in the suite — none caught these</span></div>
   </div>
 
   <div class="section-head">
@@ -798,6 +798,49 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
       </div>
     </div>
     <span class="commit">commit <code>594c571</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>The autoscaler couldn&rsquo;t see the callers it existed for</h3>
+      <span class="tag">TASK 4.3 · 2026-09-13</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Task 4.3&rsquo;s own acceptance test &mdash; &ldquo;a burst of calls visibly triggers new
+          workers&rdquo; &mdash; never passed. Every claim logged <code>(1 left)</code>, the pool never grew, and
+          buried earlier in the log was a caller who waited <b>22 seconds</b> for a call to start while the
+          autoscaler reported nothing at all.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The only demand signal was the pool <i>list</i> being empty. But a claimed worker is
+          replaced immediately, and the replacement enters the list the moment its process starts &mdash;
+          about 8 seconds before it can take a call. So under a real burst the list is almost never empty:
+          callers get a <b>still-starting</b> worker, sit through the full cold start the pool exists to
+          prevent, and the autoscaler sees a healthy pool. It measured the wrong thing: not &ldquo;did this
+          caller get a <i>ready</i> worker&rdquo; but &ldquo;is there an object in a list&rdquo;.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">The scaling decision was a pure function, well tested: given &ldquo;exhausted&rdquo;,
+          it grows. Nothing tested what <i>produced</i> &ldquo;exhausted&rdquo;, and no test modelled time
+          &mdash; a worker that exists but is not yet ready is a state only a clock can create. The unit
+          tests proved the brain was right while the eyes were blind.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">A still-starting claim now counts as demand, exactly like an empty pool, and logs a
+          warning. A warm claim still does not &mdash; otherwise every call would pin the pool at its maximum.
+          Getting a fair test also took two corrections of my own test design: three tabs in one browser
+          share one login (so each call ended the last), and calls spaced 16 seconds apart give the pool time
+          to recover. Re-run with three real sessions inside three seconds, it grew and shrank on cue.</div>
+        <div class="evidence"><span class="bad-line">before: Claimed still starting worker (1 left) … 22s wait … no growth, ever</span>
+<span class="ok-line">after:  still starting — counting it as demand → Target 2 -> 3 → 60s quiet → Target 3 -> 2</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>3fb9d7e</code></span>
   </article>
 
   <footer>
