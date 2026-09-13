@@ -1,12 +1,14 @@
 import asyncio
 import io
 import re
+import time
 
 import pypdf
 from loguru import logger
 from openai import AsyncOpenAI
 from pinecone import Pinecone
 
+from app.core import breaker
 from app.core.config import settings
 
 _openai = AsyncOpenAI(api_key=settings.openai_api_key)
@@ -257,9 +259,45 @@ RERANK_TOP_N = 4
 RERANK_THRESHOLD = 0.15
 RERANK_MODEL = "bge-reranker-v2-m3"
 
+# Found live 2026-09-13: Pinecone refused every rerank with
+# "429 RESOURCE_EXHAUSTED ... reached the rerank request limit (500) ... for
+# the current month". The fallback below already handled the refusal, but
+# only after paying the round trip for it, on every search, in every call:
+# each call is its own process (task 2.4), so nothing in memory could
+# remember that the allowance was gone. That wasted round trip is part of why
+# searches overran the 3.5s budget and answers went out without the document.
+#
+# The shared breaker store is what every call process reads, so a used-up
+# allowance is recorded there once and respected by all of them. One refusal
+# opens it (a quota does not recover in seconds); after the cooldown exactly
+# one trial rerank checks whether it came back. Only a QUOTA refusal counts:
+# a one-off network error says nothing about the next request, and switching
+# reranking off for an hour over one would cost answer quality for nothing.
+RERANK_BREAKER = "provider:rerank:pinecone"
+RERANK_QUOTA_COOLDOWN_SECONDS = 3600
+
+
+def _is_quota_refusal(error: Exception) -> bool:
+    text = str(error)
+    return "RESOURCE_EXHAUSTED" in text or "429" in text
+
+
+async def _rerank_allowed(loop) -> bool:
+    # Registered here rather than at import: breaker config can be cleared at
+    # runtime (tests do), and a forgotten config would silently fall back to
+    # the default 30-second cooldown.
+    breaker.configure(RERANK_BREAKER, breaker.BreakerConfig(
+        failure_threshold=1,
+        window_seconds=RERANK_QUOTA_COOLDOWN_SECONDS,
+        cooldown_seconds=RERANK_QUOTA_COOLDOWN_SECONDS,
+    ))
+    # A local SQLite read, but still off the event loop: this runs inside a
+    # live call's reply path (see review finding #8 on breaker reads).
+    return await loop.run_in_executor(None, breaker.allows, RERANK_BREAKER)
+
 
 async def query_context(
-    bot_id: str, query: str, top_k: int = RETRIEVE_TOP_K
+    bot_id: str, query: str, top_k: int = RETRIEVE_TOP_K, *, rerank: bool = True
 ) -> tuple[str, list[dict]]:
     """Returns (context_text, sources).
 
@@ -268,128 +306,186 @@ async def query_context(
     nothing passed the rerank threshold — which is the signal the frontend
     uses to say the answer came from general knowledge rather than from the
     customer's documents.
+
+    rerank=False runs everything except the rerank request. The per-call
+    connection warm-up uses it: it exists to open connections, and a full
+    search there spent one of Pinecone's monthly rerank requests on the words
+    "warm up", on every single call (found 2026-09-13).
+
+    Always logs one "search timing" line, INCLUDING when the search is
+    cancelled by the caller's budget, naming the step it stopped in. The live
+    log for 2026-09-13 said only "exceeded 3.5s budget", which left the slow
+    step to guesswork.
     """
-    index = _get_index()
-    sparse_index = _get_sparse_index()
-    loop = asyncio.get_event_loop()
+    started = time.perf_counter()
+    timings: dict[str, str] = {}
+    stage = "embed"
+    mark = started
 
-    page_num = _extract_page_num(query)
-    filter_dict = {"page": {"$eq": page_num}} if page_num else None
-
-    # Task 1.8 — hybrid retrieval. Run meaning-based (dense) and keyword-based
-    # (sparse) search in parallel, then union the two candidate pools before
-    # reranking. This deliberately skips the hand-tuned alpha-weighted score
-    # blend the manual describes as the default approach — with Task 1.7's
-    # cross-encoder reranker already in place, it's a strictly better
-    # combiner than a fixed weight: it actually reads each candidate against
-    # the query rather than trusting two differently-scaled raw scores to
-    # blend meaningfully. Widening the candidate pool is exactly what dense
-    # alone was missing for exact identifiers (order IDs, part numbers) that
-    # embeddings represent poorly but keyword search finds directly.
-    dense_embeddings, sparse_embeddings = await asyncio.gather(
-        _embed([query]), _embed_sparse([query], input_type="query"),
-    )
-    dense_vector = dense_embeddings[0]
-    sparse_vector = sparse_embeddings[0]
-
-    dense_results, sparse_results = await asyncio.gather(
-        loop.run_in_executor(
-            None,
-            lambda: index.query(
-                vector=dense_vector,
-                top_k=top_k,
-                namespace=bot_id,
-                include_metadata=True,
-                filter=filter_dict,
-            ),
-        ),
-        loop.run_in_executor(
-            None,
-            lambda: sparse_index.query(
-                sparse_vector=sparse_vector,
-                top_k=top_k,
-                namespace=bot_id,
-                include_metadata=True,
-                filter=filter_dict,
-            ),
-        ),
-    )
-
-    for m in dense_results.matches:
-        logger.debug(f"[RAG] dense candidate score={m.score:.3f} page={m.metadata.get('page')} text={m.metadata.get('text','')[:80]}")
-    for m in sparse_results.matches:
-        logger.debug(f"[RAG] sparse candidate score={m.score:.3f} page={m.metadata.get('page')} text={m.metadata.get('text','')[:80]}")
-
-    # Dedupe by id — the same chunk very often surfaces on both sides.
-    #
-    # Task 2.10 — each chunk's metadata is kept alongside its text so an
-    # answer can be attributed back to a document and page. Keyed by TEXT
-    # rather than id on purpose: the reranker returns documents by their
-    # text content and drops the ids we sent, so text is the only thing
-    # that survives the round trip.
-    seen_ids: set[str] = set()
-    candidates: list[str] = []
-    meta_by_text: dict[str, dict] = {}
-    for m in list(dense_results.matches) + list(sparse_results.matches):
-        if m.id in seen_ids or "text" not in m.metadata:
-            continue
-        seen_ids.add(m.id)
-        text = m.metadata["text"]
-        candidates.append(text)
-        raw_page = m.metadata.get("page")
-        meta_by_text[text] = {
-            "doc_id": m.metadata.get("doc_id"),
-            # Pinecone returns numeric metadata as float — 7.0 reads badly
-            # as a page number.
-            "page": int(raw_page) if raw_page is not None else None,
-        }
-
-    if not candidates:
-        logger.info(f"[RAG] 0 candidates retrieved (page_filter={page_num})")
-        return "", []
+    def finish_step(name: str) -> None:
+        nonlocal mark
+        now = time.perf_counter()
+        timings[name] = f"{now - mark:.2f}s"
+        mark = now
 
     try:
-        reranked = await loop.run_in_executor(
-            None,
-            lambda: _pc.inference.rerank(
-                model=RERANK_MODEL,
-                query=query,
-                documents=candidates,
-                top_n=RERANK_TOP_N,
-                return_documents=True,
+        index = _get_index()
+        sparse_index = _get_sparse_index()
+        loop = asyncio.get_event_loop()
+
+        page_num = _extract_page_num(query)
+        filter_dict = {"page": {"$eq": page_num}} if page_num else None
+
+        # Task 1.8 — hybrid retrieval. Run meaning-based (dense) and keyword-based
+        # (sparse) search in parallel, then union the two candidate pools before
+        # reranking. This deliberately skips the hand-tuned alpha-weighted score
+        # blend the manual describes as the default approach — with Task 1.7's
+        # cross-encoder reranker already in place, it's a strictly better
+        # combiner than a fixed weight: it actually reads each candidate against
+        # the query rather than trusting two differently-scaled raw scores to
+        # blend meaningfully. Widening the candidate pool is exactly what dense
+        # alone was missing for exact identifiers (order IDs, part numbers) that
+        # embeddings represent poorly but keyword search finds directly.
+        dense_embeddings, sparse_embeddings = await asyncio.gather(
+            _embed([query]), _embed_sparse([query], input_type="query"),
+        )
+        dense_vector = dense_embeddings[0]
+        sparse_vector = sparse_embeddings[0]
+        finish_step("embed")
+
+        stage = "query"
+        dense_results, sparse_results = await asyncio.gather(
+            loop.run_in_executor(
+                None,
+                lambda: index.query(
+                    vector=dense_vector,
+                    top_k=top_k,
+                    namespace=bot_id,
+                    include_metadata=True,
+                    filter=filter_dict,
+                ),
+            ),
+            loop.run_in_executor(
+                None,
+                lambda: sparse_index.query(
+                    sparse_vector=sparse_vector,
+                    top_k=top_k,
+                    namespace=bot_id,
+                    include_metadata=True,
+                    filter=filter_dict,
+                ),
             ),
         )
-        for r in reranked.data:
-            logger.debug(f"[RAG] reranked score={r.score:.4f} text={r.document['text'][:80]}")
-        scored = [(r.document["text"], r.score) for r in reranked.data if r.score > RERANK_THRESHOLD]
-        logger.info(f"[RAG] {len(scored)}/{len(reranked.data)} reranked matches passed threshold (from {len(candidates)} candidates, page_filter={page_num})")
-    except Exception as e:
-        # Fail open: a broken reranker call should degrade to the old
-        # raw-similarity behavior, never break the whole RAG lookup.
-        # Score is None here rather than the raw cosine value — those sit on
-        # a completely different scale (see RERANK_THRESHOLD) and showing
-        # one to a user beside a reranked score would be actively wrong.
-        logger.warning(f"[RAG] Rerank failed, falling back to raw similarity: {e}")
-        scored = [(t, None) for t in candidates[:RERANK_TOP_N]]
+        finish_step("query")
 
-    # One citation per (document, page). Several retrieved chunks landing on
-    # the same page is the common case, and listing it three times reads as
-    # a bug rather than as thoroughness.
-    sources: list[dict] = []
-    seen_pages: set[tuple] = set()
-    for text, score in scored:
-        meta = meta_by_text.get(text)
-        if meta is None:
-            continue
-        key = (meta["doc_id"], meta["page"])
-        if key in seen_pages:
-            continue
-        seen_pages.add(key)
-        sources.append({**meta, "score": score})
+        for m in dense_results.matches:
+            logger.debug(f"[RAG] dense candidate score={m.score:.3f} page={m.metadata.get('page')} text={m.metadata.get('text','')[:80]}")
+        for m in sparse_results.matches:
+            logger.debug(f"[RAG] sparse candidate score={m.score:.3f} page={m.metadata.get('page')} text={m.metadata.get('text','')[:80]}")
 
-    return "\n\n".join(t for t, _ in scored), sources
+        # Dedupe by id — the same chunk very often surfaces on both sides.
+        #
+        # Task 2.10 — each chunk's metadata is kept alongside its text so an
+        # answer can be attributed back to a document and page. Keyed by TEXT
+        # rather than id on purpose: the reranker returns documents by their
+        # text content and drops the ids we sent, so text is the only thing
+        # that survives the round trip.
+        seen_ids: set[str] = set()
+        candidates: list[str] = []
+        meta_by_text: dict[str, dict] = {}
+        for m in list(dense_results.matches) + list(sparse_results.matches):
+            if m.id in seen_ids or "text" not in m.metadata:
+                continue
+            seen_ids.add(m.id)
+            text = m.metadata["text"]
+            candidates.append(text)
+            raw_page = m.metadata.get("page")
+            meta_by_text[text] = {
+                "doc_id": m.metadata.get("doc_id"),
+                # Pinecone returns numeric metadata as float — 7.0 reads badly
+                # as a page number.
+                "page": int(raw_page) if raw_page is not None else None,
+            }
 
+        if not candidates:
+            logger.info(f"[RAG] 0 candidates retrieved (page_filter={page_num})")
+            timings["rerank"] = "not needed"
+            stage = "done"
+            return "", []
 
+        stage = "rerank"
+        unranked = [(t, None) for t in candidates[:RERANK_TOP_N]]
+        # Score is None for unranked results rather than the raw cosine value —
+        # those sit on a completely different scale (see RERANK_THRESHOLD) and
+        # showing one to a user beside a reranked score would be actively wrong.
+        if not rerank:
+            scored = unranked
+            timings["rerank"] = "off"
+        elif not await _rerank_allowed(loop):
+            logger.info(
+                "[RAG] Rerank skipped: Pinecone's rerank allowance is used up (breaker open); "
+                "using raw similarity until the cooldown ends"
+            )
+            scored = unranked
+            timings["rerank"] = "skipped (allowance used up)"
+        else:
+            try:
+                reranked = await loop.run_in_executor(
+                    None,
+                    lambda: _pc.inference.rerank(
+                        model=RERANK_MODEL,
+                        query=query,
+                        documents=candidates,
+                        top_n=RERANK_TOP_N,
+                        return_documents=True,
+                    ),
+                )
+                await loop.run_in_executor(None, breaker.record_success, RERANK_BREAKER)
+                for r in reranked.data:
+                    logger.debug(f"[RAG] reranked score={r.score:.4f} text={r.document['text'][:80]}")
+                scored = [(r.document["text"], r.score) for r in reranked.data if r.score > RERANK_THRESHOLD]
+                logger.info(f"[RAG] {len(scored)}/{len(reranked.data)} reranked matches passed threshold (from {len(candidates)} candidates, page_filter={page_num})")
+                finish_step("rerank")
+            except Exception as e:
+                # Fail open: a broken reranker call should degrade to the old
+                # raw-similarity behavior, never break the whole RAG lookup.
+                if _is_quota_refusal(e):
+                    await loop.run_in_executor(
+                        None, breaker.record_failure, RERANK_BREAKER, "rerank allowance used up"
+                    )
+                    logger.warning(
+                        f"[RAG] Rerank refused (allowance used up) — skipping rerank for "
+                        f"{RERANK_QUOTA_COOLDOWN_SECONDS // 60} min across all calls: {e}"
+                    )
+                else:
+                    logger.warning(f"[RAG] Rerank failed, falling back to raw similarity: {e}")
+                scored = unranked
+                finish_step("rerank")
+                timings["rerank"] += " (failed)"
+
+        # One citation per (document, page). Several retrieved chunks landing on
+        # the same page is the common case, and listing it three times reads as
+        # a bug rather than as thoroughness.
+        sources: list[dict] = []
+        seen_pages: set[tuple] = set()
+        for text, score in scored:
+            meta = meta_by_text.get(text)
+            if meta is None:
+                continue
+            key = (meta["doc_id"], meta["page"])
+            if key in seen_pages:
+                continue
+            seen_pages.add(key)
+            sources.append({**meta, "score": score})
+
+        stage = "done"
+        return "\n\n".join(t for t, _ in scored), sources
+    finally:
+        steps = " ".join(f"{name}={timings.get(name, '-')}" for name in ("embed", "query", "rerank"))
+        outcome = "completed" if stage == "done" else f"stopped during {stage}"
+        logger.info(
+            f"[RAG] search timing: {steps} total={time.perf_counter() - started:.2f}s ({outcome})"
+        )
 # ── Pinecone delete ────────────────────────────────────────────────────────────
 
 async def delete_document_vectors(bot_id: str, doc_id: str, chunk_count: int):

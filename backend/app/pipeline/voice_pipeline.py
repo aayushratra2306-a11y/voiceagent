@@ -843,7 +843,10 @@ async def run_voice_pipeline(
         async def _warm_retrieval():
             try:
                 t = time.perf_counter()
-                await query_context(bot_id, "warm up")
+                # rerank=False: this only opens connections. A full search here
+                # spent one of Pinecone's monthly rerank requests per call on the
+                # words "warm up" (found 2026-09-13, when the allowance ran out).
+                await query_context(bot_id, "warm up", rerank=False)
                 logger.info(f"[PIPELINE] Retrieval connections warmed in {time.perf_counter() - t:.2f}s")
             except Exception as e:
                 logger.debug(f"[PIPELINE] Retrieval warm-up skipped: {e}")

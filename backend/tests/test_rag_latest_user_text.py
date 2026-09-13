@@ -1,4 +1,4 @@
-"""Guards latest_user_text() (added 2026-09-03, see rag_processor.py's
+"""Guards pending_user_text() (added 2026-09-03 as latest_user_text; see rag_processor.py's
 docstring for the full story of the bug this replaced).
 
 RAGContextProcessor used to read `frame.text` off a raw TranscriptionFrame
@@ -9,7 +9,9 @@ extraction logic directly, independent of pipecat's frame/processor
 machinery, the same way needs_retrieval() is tested standalone.
 """
 
-from app.pipeline.rag_processor import latest_user_text
+# Renamed 2026-09-13 when it started joining every unanswered user message;
+# these single-message cases still hold. Multi-message cases: test_rag_search_fixes.py.
+from app.pipeline.rag_processor import pending_user_text as latest_user_text
 
 
 def test_finds_the_last_user_message():

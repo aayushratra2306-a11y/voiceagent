@@ -107,9 +107,48 @@ def needs_retrieval(text: str) -> bool:
     return not all(w in _FILLER_WORDS for w in words)
 
 
-def latest_user_text(messages: list[dict]) -> str | None:
-    """The text of the most recent user-role message, or None if there
-    isn't one.
+# How many unanswered user messages are searched together. See pending_user_text.
+MAX_PENDING_USER_MESSAGES = 3
+
+
+def _message_text(msg: dict) -> str | None:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content.strip() or None
+    if isinstance(content, list):
+        # Some LLM context implementations represent a message as a list of
+        # typed parts (multimodal-style) rather than a plain string. Join
+        # whatever text parts exist rather than silently returning nothing for
+        # a message that does have real content.
+        parts = [p.get("text", "") for p in content if isinstance(p, dict)]
+        return " ".join(p for p in parts if p).strip() or None
+    return None
+
+
+def pending_user_text(messages: list[dict]) -> str | None:
+    """Everything the caller has said since the bot last replied, joined, or
+    None if there is nothing.
+
+    Found live 2026-09-13. A caller asked about page 50 in three short
+    sentences with pauses, and they reached the conversation as three
+    separate user messages with no reply between them:
+
+        user -> What about I have uploaded a PDF.
+        user -> Please tell me what's there on the page fifty of the PDF?
+        user -> The headline of that particular page.
+
+    This used to search only the LAST user message, so it searched "headline
+    of that page" with no page number, found unrelated pages, and the bot
+    could not answer. The LLM itself reads all three, so searching less than
+    it reads was the bug; searching the unanswered run matches what the model
+    is about to answer.
+
+    Trailing assistant tool calls and tool results are skipped: they are the
+    bot's own round trip on the question, not a reply to the caller.
+    Capped at MAX_PENDING_USER_MESSAGES, most recent kept, so a long stretch
+    of speech over a silent bot cannot become one enormous search.
+
+    Earlier history of this function (as latest_user_text, 2026-09-03):
 
     Bug found 2026-09-03 from live logs, root-caused by reading pipecat's
     aggregator source rather than guessing. This processor used to sit
@@ -138,22 +177,26 @@ def latest_user_text(messages: list[dict]) -> str | None:
     searches on LESS text than the LLM itself is about to see, which is
     the part that was structurally broken.
     """
-    for msg in reversed(messages):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            # Some LLM context implementations represent a message as a
-            # list of typed parts (multimodal-style) rather than a plain
-            # string. Join whatever text parts exist rather than silently
-            # returning nothing for a message that does have real content.
-            parts = [p.get("text", "") for p in content if isinstance(p, dict)]
-            joined = " ".join(p for p in parts if p)
-            return joined or None
+    def is_tool_round_trip(msg: dict) -> bool:
+        if msg.get("role") == "tool":
+            return True
+        # An assistant turn that only calls tools has not answered the caller.
+        return msg.get("role") == "assistant" and bool(msg.get("tool_calls")) and not msg.get("content")
+
+    i = len(messages) - 1
+    while i >= 0 and is_tool_round_trip(messages[i]):
+        i -= 1
+
+    collected: list[str] = []
+    while i >= 0 and messages[i].get("role") == "user":
+        text = _message_text(messages[i])
+        if text:
+            collected.append(text)
+        i -= 1
+
+    if not collected:
         return None
-    return None
+    return " ".join(reversed(collected[:MAX_PENDING_USER_MESSAGES]))
 
 
 class RAGContextProcessor(FrameProcessor):
@@ -161,7 +204,7 @@ class RAGContextProcessor(FrameProcessor):
     Sits between the user context aggregator and the LLM service.
     Fires once per real, aggregator-confirmed user turn (an
     `LLMContextFrame`) rather than on every raw STT fragment — see
-    `latest_user_text`'s docstring for why that distinction matters.
+    `pending_user_text`'s docstring for why that distinction matters.
     """
 
     def __init__(
@@ -239,7 +282,17 @@ class RAGContextProcessor(FrameProcessor):
         """Rewrite then search. Separated so the pair can share one deadline —
         a budget on the search alone would still let a slow rewrite blow it."""
         t0 = time.perf_counter()
-        search_query = await rewrite_query(raw_text)
+        try:
+            search_query = await rewrite_query(raw_text)
+        except asyncio.CancelledError:
+            # The budget ran out before the rewrite came back. query_context
+            # logs its own steps, but it never started, so say so here, or a
+            # slow rewrite would leave no trace at all.
+            logger.info(
+                f"[RAG] search timing: rewrite still running after "
+                f"{time.perf_counter() - t0:.2f}s (stopped during rewrite)"
+            )
+            raise
         t_rewrite = time.perf_counter() - t0
 
         # Keep the raw transcript in the log even though search_query is what
@@ -264,7 +317,7 @@ class RAGContextProcessor(FrameProcessor):
         is_real_turn = (
             isinstance(frame, LLMContextFrame) and direction == FrameDirection.DOWNSTREAM
         )
-        raw_text = latest_user_text(frame.context.messages) if is_real_turn else None
+        raw_text = pending_user_text(frame.context.messages) if is_real_turn else None
 
         if raw_text and raw_text.strip():
             # Mutated on the frame's own context object, not self._context.
