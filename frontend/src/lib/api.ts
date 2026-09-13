@@ -45,6 +45,57 @@ async function refreshAccessToken(): Promise<string> {
   return refreshInFlight
 }
 
+// Found live 2026-09-13: creating an account with a short password showed
+// "[object Object]". FastAPI reports a validation failure as a LIST of
+// objects ({detail: [{loc, msg, type, input, ctx}]}), and every error site
+// below did `new Error(err.detail)` — which stringifies an array of objects
+// to exactly that. Hand-written HTTPExceptions send a plain string, which is
+// why this only ever showed up on forms the backend validates.
+//
+// Built from `msg` and the field name ONLY. FastAPI echoes the submitted
+// value back in `input`, so rendering the object — or JSON.stringify-ing it
+// to be "safe" — would put the user's password on the screen.
+export function errorMessage(body: unknown, fallback: string): string {
+  const detail = (body as { detail?: unknown } | null)?.detail
+
+  if (typeof detail === 'string' && detail.trim()) return detail
+
+  if (Array.isArray(detail)) {
+    const lines = detail.map(describeValidationError).filter(Boolean)
+    return lines.length ? lines.join(' ') : fallback
+  }
+
+  return fallback
+}
+
+function describeValidationError(item: unknown): string {
+  const { loc, msg, type, ctx } = (item ?? {}) as {
+    loc?: unknown[]; msg?: unknown; type?: unknown; ctx?: Record<string, unknown>
+  }
+  if (typeof msg !== 'string') return ''
+
+  // loc is ["body", "password"] — the last element is the field. Where it
+  // came from ("body", "query") means nothing to the person filling the form.
+  const field = Array.isArray(loc) ? loc[loc.length - 1] : undefined
+  const label = typeof field === 'string'
+    ? field.charAt(0).toUpperCase() + field.slice(1).replace(/_/g, ' ')
+    : ''
+
+  // Pydantic's own wording for a length rule is "String should have at
+  // least 12 characters", which is accurate and reads like a stack trace.
+  // The one rule a person hits on sign-up gets a sentence; everything else
+  // keeps pydantic's message, which is already specific.
+  if (label && type === 'string_too_short' && typeof ctx?.min_length === 'number') {
+    return `${label} must be at least ${ctx.min_length} characters.`
+  }
+  if (label && type === 'string_too_long' && typeof ctx?.max_length === 'number') {
+    return `${label} must be at most ${ctx.max_length} characters.`
+  }
+
+  const sentence = msg.endsWith('.') ? msg : `${msg}.`
+  return label ? `${label}: ${sentence}` : sentence
+}
+
 async function request<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
   const res = await fetch(BASE + path, {
     ...options,
@@ -64,7 +115,7 @@ async function request<T>(path: string, options: RequestInit = {}, _retried = fa
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Request failed')
+    throw new Error(errorMessage(err, 'Request failed'))
   }
   return res.json()
 }
@@ -83,7 +134,7 @@ export async function login(email: string, password: string): Promise<{ access_t
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Login failed')
+    throw new Error(errorMessage(err, 'Login failed'))
   }
   return res.json()
 }
@@ -310,7 +361,7 @@ export async function uploadDocument(botId: string, file: File): Promise<BotDocu
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Upload failed')
+    throw new Error(errorMessage(err, 'Upload failed'))
   }
   return res.json()
 }
@@ -339,7 +390,7 @@ export async function fetchDocumentBlobUrl(docId: string, _retried = false): Pro
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? 'Could not open document')
+    throw new Error(errorMessage(err, 'Could not open document'))
   }
 
   return URL.createObjectURL(await res.blob())
