@@ -167,11 +167,17 @@ class _Index:
 
 class _Inference:
     def __init__(self, behaviour):
+        import threading
         self.behaviour = behaviour
         self.calls = 0
+        # Set the moment a rerank request is actually being made, so a test
+        # can cancel the search DURING rerank rather than after a guessed
+        # delay (a fixed 0.1s was not always enough on a busy machine).
+        self.started = threading.Event()
 
     def rerank(self, **kwargs):
         self.calls += 1
+        self.started.set()
         return self.behaviour(kwargs)
 
 
@@ -208,12 +214,41 @@ def pinecone(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(rag, "_embed", fake_embed)
     monkeypatch.setattr(rag, "_embed_sparse", fake_embed_sparse)
 
+    import threading
+    in_flight = [0]
+    lock = threading.Lock()
+    real_rerank_and_record = rag._rerank_and_record
+
+    def counted_rerank_and_record(*args):
+        # Counted around the WHOLE thread body, breaker write included: a
+        # count taken inside the fake rerank drops to zero before the
+        # outcome is recorded.
+        with lock:
+            in_flight[0] += 1
+        try:
+            return real_rerank_and_record(*args)
+        finally:
+            with lock:
+                in_flight[0] -= 1
+
+    monkeypatch.setattr(rag, "_rerank_and_record", counted_rerank_and_record)
+
     def install(behaviour):
         inference = _Inference(behaviour)
-        monkeypatch.setattr(rag, "_pc", types.SimpleNamespace(inference=inference))
+        client = types.SimpleNamespace(inference=inference)
+        monkeypatch.setattr(rag, "_pc", client)
+        monkeypatch.setattr(rag, "_get_rerank_client", lambda: client)
         return inference
 
     yield install
+    # A rerank the search stopped waiting for is still running in its thread.
+    # Left alone, it records into the NEXT test's breaker store when it
+    # finishes (use_database is process-wide), which can flip that test's
+    # breaker. Wait for it here, while this test's store is still the live one.
+    import time as _time
+    deadline = _time.monotonic() + 5
+    while in_flight[0] and _time.monotonic() < deadline:
+        _time.sleep(0.02)
     breaker._configs.clear()
 
 
@@ -291,6 +326,17 @@ async def test_after_the_cooldown_one_trial_rerank_is_let_through(pinecone, monk
 
 # --- (c) timing that survives the budget -------------------------------------------
 
+async def _cancel_during_rerank(inference):
+    """What the caller's budget does (asyncio.wait_for cancels the search),
+    timed to land while the rerank request is in flight."""
+    task = asyncio.create_task(rag.query_context("bot-1", "page 50"))
+    started = await _eventually(inference.started.is_set)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert started, "the search never reached rerank"
+
+
 def _capture_logs():
     lines: list[str] = []
     sink = logger.add(lambda m: lines.append(str(m)), level="INFO")
@@ -319,11 +365,10 @@ async def test_a_search_cut_off_by_the_budget_still_says_where_it_was(pinecone):
         _time.sleep(0.5)
         return _good_rerank(kwargs)
 
-    pinecone(slow_rerank)
+    inference = pinecone(slow_rerank)
     lines, sink = _capture_logs()
     try:
-        with pytest.raises(TimeoutError):
-            await asyncio.wait_for(rag.query_context("bot-1", "page 50"), timeout=0.1)
+        await _cancel_during_rerank(inference)
     finally:
         logger.remove(sink)
 
@@ -331,3 +376,277 @@ async def test_a_search_cut_off_by_the_budget_still_says_where_it_was(pinecone):
     assert timing, "a search cancelled by the budget logged nothing"
     assert "stopped during rerank" in timing[-1]
     assert "embed=" in timing[-1] and "query=" in timing[-1]
+
+
+# --- (e) a slow rerank inside the budget -----------------------------------------
+#
+# Retest 2026-09-13, after (a)-(d) were deployed. The rewrite worked
+# ("page fifty" -> "page 50") and embed + query took 1.2s, then:
+#
+#     search timing: embed=0.63s query=0.57s rerank=- total=3.15s (stopped during rerank)
+#     Retrieval exceeded 3.5s budget ... answering without document context
+#
+# Two things went wrong at once:
+#
+# 1. The rerank step had no deadline of its own, so a slow rerank did not
+#    just lose the ranking: the 3.5s budget threw away the whole search,
+#    page-50 results included, which were already in hand.
+# 2. The budget cancels by raising CancelledError at the await, which skips
+#    the except block that records a quota refusal. The breaker from (b)
+#    could therefore never open on exactly the slow refusal it exists for,
+#    and every later search would pay the same delay again.
+#
+# Why the refusal was slow at all: the Pinecone SDK (9.1) retries a 429 three
+# times, sleeping between attempts, inside the worker thread, where nothing
+# can cancel it. A MONTHLY allowance does not come back in a few seconds.
+
+def _slow(behaviour, seconds):
+    import time as _time
+
+    def run(kwargs):
+        _time.sleep(seconds)
+        return behaviour(kwargs)
+    return run
+
+
+async def _eventually(check, timeout=3.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not check():
+        if asyncio.get_running_loop().time() > deadline:
+            return False
+        await asyncio.sleep(0.02)
+    return True
+
+
+async def test_a_slow_rerank_keeps_the_results_it_already_found(pinecone, monkeypatch):
+    """The live failure: page-50 chunks were found, then discarded because
+    the reranker was slow. They must reach the answer, unranked."""
+    monkeypatch.setattr(rag, "RERANK_TIMEOUT_SECONDS", 0.2)
+    pinecone(_slow(_good_rerank, 0.8))
+
+    started = asyncio.get_running_loop().time()
+    context, sources = await rag.query_context("bot-1", "headline page 50")
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 0.6, f"waited {elapsed:.2f}s for a reranker past its deadline"
+    assert "[Page 50]" in context, "the results already found were thrown away"
+    assert sources and all(s["score"] is None for s in sources)
+
+
+async def test_a_slow_rerank_is_named_in_the_timing_line(pinecone, monkeypatch):
+    monkeypatch.setattr(rag, "RERANK_TIMEOUT_SECONDS", 0.2)
+    pinecone(_slow(_good_rerank, 0.8))
+    lines, sink = _capture_logs()
+    try:
+        await rag.query_context("bot-1", "page 50")
+    finally:
+        logger.remove(sink)
+
+    timing = [line for line in lines if "search timing" in line][-1]
+    assert "rerank=timed out" in timing and "completed" in timing
+
+
+async def test_a_quota_refusal_that_arrives_after_the_deadline_still_opens_the_breaker(
+    pinecone, monkeypatch
+):
+    monkeypatch.setattr(rag, "RERANK_TIMEOUT_SECONDS", 0.1)
+    pinecone(_slow(_quota_refusal, 0.4))
+
+    await rag.query_context("bot-1", "page 50")
+
+    assert await _eventually(lambda: breaker.state(rag.RERANK_BREAKER) == "open"), (
+        "the refusal came back after the search moved on and was never recorded"
+    )
+
+
+async def test_a_refusal_cut_off_by_the_whole_budget_still_opens_the_breaker(pinecone):
+    """Exactly the live shape: the CALLER's budget cancels the search while
+    the refusal is still on its way back."""
+    inference = pinecone(_slow(_quota_refusal, 0.4))
+
+    await _cancel_during_rerank(inference)
+
+    assert await _eventually(lambda: breaker.state(rag.RERANK_BREAKER) == "open"), (
+        "cancellation skipped recording the refusal, so the next call pays for it again"
+    )
+
+
+async def test_a_late_network_error_does_not_switch_reranking_off(pinecone, monkeypatch):
+    monkeypatch.setattr(rag, "RERANK_TIMEOUT_SECONDS", 0.1)
+    inference = pinecone(_slow(_network_blip, 0.3))
+
+    await rag.query_context("bot-1", "page 50")
+    await asyncio.sleep(0.5)
+
+    assert breaker.state(rag.RERANK_BREAKER) != "open"
+    inference.behaviour = _good_rerank
+    await rag.query_context("bot-1", "page 50")
+    assert inference.calls == 2
+
+
+async def test_an_abandoned_rerank_does_not_log_an_unretrieved_exception(pinecone, monkeypatch):
+    """A future nobody waits for any more still finishes. If its exception is
+    never read, asyncio reports it as an error in the log when it is garbage
+    collected, which would look like a crash in the middle of a call."""
+    import gc
+
+    monkeypatch.setattr(rag, "RERANK_TIMEOUT_SECONDS", 0.1)
+    pinecone(_slow(_network_blip, 0.3))
+    loop = asyncio.get_running_loop()
+    reported = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    try:
+        await rag.query_context("bot-1", "page 50")
+        await asyncio.sleep(0.5)
+        gc.collect()
+        await asyncio.sleep(0.05)
+    finally:
+        loop.set_exception_handler(previous)
+
+    assert not reported, reported
+
+
+def test_the_reranker_does_not_retry_a_refusal(monkeypatch):
+    """The SDK's default is 3 retries with sleeps in between, all inside a
+    thread nothing can cancel. For rerank that bought nothing (a fallback
+    exists) and cost the budget."""
+    built = {}
+
+    class FakePinecone:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    monkeypatch.setattr(rag, "Pinecone", FakePinecone)
+    monkeypatch.setattr(rag, "_rerank_pc", None)
+
+    rag._get_rerank_client()
+
+    assert built["retry_config"].max_retries == 0
+
+
+# --- (e, review) bounding the abandoned request, and the time actually left ----
+#
+# Independent review of the fix above, 2026-09-13:
+# - an abandoned rerank kept the SDK's 30s request timeout, holding one of the
+#   few default thread-pool threads (min(32, cpus + 4)) that embed, the index
+#   queries and breaker reads also wait on;
+# - a fixed 1.2s deadline ignores how much of the 3.5s budget is left, so slow
+#   earlier steps plus 1.2s of rerank could still lose the results.
+
+def test_an_abandoned_rerank_cannot_hold_a_thread_for_long(monkeypatch):
+    built = {}
+
+    class FakePinecone:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    monkeypatch.setattr(rag, "Pinecone", FakePinecone)
+    monkeypatch.setattr(rag, "_rerank_pc", None)
+
+    rag._get_rerank_client()
+
+    assert built["timeout"] <= 3.0, "an abandoned rerank could hold a worker thread for the SDK's 30s"
+    assert built["timeout"] > rag.RERANK_TIMEOUT_SECONDS, "the request would die before the search stops waiting"
+
+
+async def test_no_rerank_is_sent_when_the_budget_is_already_spent(pinecone):
+    inference = pinecone(_good_rerank)
+    lines, sink = _capture_logs()
+    try:
+        context, sources = await rag.query_context(
+            "bot-1", "page 50", deadline=asyncio.get_running_loop().time() - 0.1
+        )
+    finally:
+        logger.remove(sink)
+
+    assert inference.calls == 0, "a rerank that could not come back in time still spent the allowance"
+    assert "[Page 50]" in context and all(s["score"] is None for s in sources)
+    timing = [line for line in lines if "search timing" in line][-1]
+    assert "rerank=skipped (no time left)" in timing
+
+
+async def test_rerank_waits_only_for_the_time_actually_left(pinecone, monkeypatch):
+    monkeypatch.setattr(rag, "RERANK_TIMEOUT_SECONDS", 5.0)
+    pinecone(_slow(_good_rerank, 0.8))
+    loop = asyncio.get_running_loop()
+
+    started = loop.time()
+    context, _sources = await rag.query_context("bot-1", "page 50", deadline=started + 0.4)
+    elapsed = loop.time() - started
+
+    assert elapsed < 0.7, f"rerank ran {elapsed:.2f}s past the caller's deadline"
+    assert "[Page 50]" in context
+
+
+async def test_the_processor_hands_its_deadline_to_the_search(monkeypatch):
+    from pipecat.frames.frames import LLMContextFrame
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    async def _noop(self, frame, direction):
+        return None
+
+    monkeypatch.setattr(FrameProcessor, "process_frame", _noop)
+    seen = {}
+
+    async def fake_rewrite(text):
+        return "page 50"
+
+    async def fake_query(bot_id, query, **kwargs):
+        seen.update(kwargs)
+        return "", []
+
+    monkeypatch.setattr(rp, "rewrite_query", fake_rewrite)
+    monkeypatch.setattr(rp, "query_context", fake_query)
+    processor = rp.RAGContextProcessor("bot-1", LLMContext(list(LIVE_MESSAGES)), "prompt")
+
+    async def capture(frame, direction=None):
+        return None
+
+    processor.push_frame = capture
+    before = asyncio.get_running_loop().time()
+    await processor.process_frame(
+        LLMContextFrame(context=LLMContext(list(LIVE_MESSAGES))), FrameDirection.DOWNSTREAM
+    )
+
+    assert "deadline" in seen, "the search was not told how long it has"
+    assert before < seen["deadline"] < before + rp.RETRIEVAL_BUDGET_SECONDS, (
+        "the deadline must leave room to build the answer inside the budget"
+    )
+
+
+async def test_a_rerank_that_answers_late_is_logged_with_its_time(pinecone, monkeypatch):
+    """Whether 1.2s is the right deadline is not yet measured (the quota ran
+    out before timing was logged). Late answers are the evidence, so each
+    one says how long it actually took."""
+    monkeypatch.setattr(rag, "RERANK_TIMEOUT_SECONDS", 0.1)
+    pinecone(_slow(_good_rerank, 0.3))
+    lines, sink = _capture_logs()
+    try:
+        await rag.query_context("bot-1", "page 50")
+        assert await _eventually(lambda: any("answered late" in line for line in lines))
+    finally:
+        logger.remove(sink)
+
+    late = [line for line in lines if "answered late" in line][-1]
+    assert "after 0." in late
+
+
+async def test_a_search_with_no_time_left_does_not_use_up_the_one_trial(pinecone, monkeypatch):
+    """After the cooldown, breaker.allows() hands exactly ONE caller the trial
+    and records that it did. A search that then declined to send the rerank
+    for lack of time would strand that trial, and reranking would stay off
+    for another full hour."""
+    inference = pinecone(_quota_refusal)
+    await rag.query_context("bot-1", "page 50")
+    assert breaker.state(rag.RERANK_BREAKER) == "open"
+
+    real_time = breaker.time.time
+    monkeypatch.setattr(breaker.time, "time", lambda: real_time() + rag.RERANK_QUOTA_COOLDOWN_SECONDS + 5)
+    inference.behaviour = _good_rerank
+    await rag.query_context("bot-1", "page 50", deadline=asyncio.get_running_loop().time() - 0.1)
+    _context, sources = await rag.query_context("bot-1", "page 50")
+
+    assert inference.calls == 2, "the post-cooldown trial was used up by a search that never sent it"
+    assert sources[0]["score"] is not None

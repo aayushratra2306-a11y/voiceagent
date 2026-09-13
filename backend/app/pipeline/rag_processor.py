@@ -80,6 +80,13 @@ _EDGE_PUNCT = ".,!?;:'\"()[]{}…–—-।॥"
 RETRIEVAL_BUDGET_SECONDS = 3.5
 AGGREGATOR_TURN_STOP_TIMEOUT = 5.0  # pipecat LLMUserAggregatorParams default
 
+# The search is handed a deadline this much BEFORE the budget runs out, so
+# that when rerank gives up at the deadline, there is still time to return
+# the results and build the prompt inside the budget. Added 2026-09-13
+# (independent review): with only a fixed rerank wait, slow earlier steps
+# plus that wait could still reach the budget and lose results in hand.
+RETRIEVAL_FINISH_MARGIN_SECONDS = 0.25
+
 
 def needs_retrieval(text: str) -> bool:
     """False only when every word is recognised conversational filler.
@@ -278,9 +285,12 @@ class RAGContextProcessor(FrameProcessor):
         except Exception as e:
             logger.warning(f"[RAG] Could not send sources to client: {e}")
 
-    async def _retrieve(self, raw_text: str):
+    async def _retrieve(self, raw_text: str, deadline: float):
         """Rewrite then search. Separated so the pair can share one deadline —
-        a budget on the search alone would still let a slow rewrite blow it."""
+        a budget on the search alone would still let a slow rewrite blow it.
+
+        deadline is on the event loop's clock; the search uses it to cut
+        rerank short rather than let the budget discard everything."""
         t0 = time.perf_counter()
         try:
             search_query = await rewrite_query(raw_text)
@@ -304,7 +314,7 @@ class RAGContextProcessor(FrameProcessor):
             logger.info(f"[RAG] Query (unchanged): '{raw_text}'")
 
         t1 = time.perf_counter()
-        retrieved, sources = await query_context(self._bot_id, search_query)
+        retrieved, sources = await query_context(self._bot_id, search_query, deadline=deadline)
         return search_query, retrieved, sources, t_rewrite, time.perf_counter() - t1
 
     async def process_frame(self, frame: Frame, direction):
@@ -338,10 +348,15 @@ class RAGContextProcessor(FrameProcessor):
                 return
 
             t_start = time.perf_counter()
+            deadline = (
+                asyncio.get_running_loop().time()
+                + RETRIEVAL_BUDGET_SECONDS
+                - RETRIEVAL_FINISH_MARGIN_SECONDS
+            )
             try:
                 search_query, retrieved, sources, t_rewrite, t_search = (
                     await asyncio.wait_for(
-                        self._retrieve(raw_text), timeout=RETRIEVAL_BUDGET_SECONDS
+                        self._retrieve(raw_text, deadline), timeout=RETRIEVAL_BUDGET_SECONDS
                     )
                 )
             except TimeoutError:

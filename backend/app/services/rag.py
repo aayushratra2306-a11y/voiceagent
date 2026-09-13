@@ -6,7 +6,7 @@ import time
 import pypdf
 from loguru import logger
 from openai import AsyncOpenAI
-from pinecone import Pinecone
+from pinecone import Pinecone, RetryConfig
 
 from app.core import breaker
 from app.core.config import settings
@@ -15,6 +15,33 @@ _openai = AsyncOpenAI(api_key=settings.openai_api_key)
 
 _pc: Pinecone | None = None
 _index = None
+_rerank_pc: Pinecone | None = None
+
+
+def _get_rerank_client() -> Pinecone:
+    """A Pinecone client used only for rerank, with the SDK's retries off.
+
+    Found 2026-09-13: pinecone 9.1 retries a 429 three times by default,
+    sleeping between attempts inside the worker thread, where a budget
+    cannot cancel it. A refused MONTHLY allowance is still refused a second
+    later, so those retries only spent the caller's 3.5s. Rerank already
+    falls back to raw similarity on any failure, so a retry buys nothing
+    here. Every other Pinecone call keeps the SDK defaults on _pc.
+
+    The request timeout is short for a related reason (independent review,
+    same day): a rerank the search stops waiting for still runs in its
+    thread, and with the SDK's 30s default it could hold one of the few
+    default thread-pool threads that embed, the index queries and breaker
+    reads also queue for. See RERANK_REQUEST_TIMEOUT_SECONDS.
+    """
+    global _rerank_pc
+    if _rerank_pc is None:
+        _rerank_pc = Pinecone(
+            api_key=settings.pinecone_api_key,
+            retry_config=RetryConfig(max_retries=0),
+            timeout=RERANK_REQUEST_TIMEOUT_SECONDS,
+        )
+    return _rerank_pc
 
 _groq: AsyncOpenAI | None = None
 
@@ -276,10 +303,98 @@ RERANK_MODEL = "bge-reranker-v2-m3"
 RERANK_BREAKER = "provider:rerank:pinecone"
 RERANK_QUOTA_COOLDOWN_SECONDS = 3600
 
+# Rerank's own deadline, inside the caller's 3.5s retrieval budget
+# (rag_processor.RETRIEVAL_BUDGET_SECONDS). Found on the 2026-09-13 retest:
+# with no deadline of its own, a slow rerank did not just lose the ranking,
+# the budget threw away the whole search, including results already in hand.
+#
+# Sized from that call's log: rewrite ~0.35s + embed 0.63s + query 0.57s
+# = ~1.55s before rerank starts, so 1.2s here still finishes by ~2.75s.
+#
+# NOT yet measured against a healthy rerank: the monthly allowance ran out
+# before per-step timing was logged. The only older number is a whole
+# search cycle of ~2.0s (2026-09-03), which would put rerank near 0.45s,
+# but that subtracts steps timed on a different day. So a rerank that
+# answers after this deadline logs "answered late after Xs": if those show
+# up once the allowance resets, this number is too small.
+#
+# The caller's remaining budget can make the wait shorter still: see the
+# deadline parameter of query_context.
+RERANK_TIMEOUT_SECONDS = 1.2
+
+# Bounds how long an ABANDONED rerank request keeps its thread (see
+# _get_rerank_client). Longer than RERANK_TIMEOUT_SECONDS, so the request is
+# never killed while the search is still waiting for it. The SDK passes it to
+# httpx, which applies it to each phase (connect, write, read) separately, so
+# the real worst case is a few multiples of this, not this: ~5-7.5s rather
+# than the SDK's 30s default.
+RERANK_REQUEST_TIMEOUT_SECONDS = 2.5
+
+# Below this much time left, a rerank is not sent at all: the answer could
+# not come back in time, and sending it would still spend one of the
+# month's requests.
+RERANK_MIN_WINDOW_SECONDS = 0.3
+
 
 def _is_quota_refusal(error: Exception) -> bool:
     text = str(error)
     return "RESOURCE_EXHAUSTED" in text or "429" in text
+
+
+def _rerank_and_record(query: str, candidates: list[str]):
+    """Runs in a worker thread: the rerank request AND recording its outcome.
+
+    Recording lives here, not after the await, on purpose. The search may
+    stop waiting (its own deadline, or the caller's budget cancelling it),
+    but a thread cannot be cancelled: the request still finishes. Found on
+    the 2026-09-13 retest, when the budget's CancelledError skipped the
+    except block that recorded the refusal, so the breaker could never open
+    on the slow refusal it exists for. Recording in the thread means the
+    outcome is kept whether or not anyone is still waiting for it.
+    """
+    try:
+        result = _get_rerank_client().inference.rerank(
+            model=RERANK_MODEL,
+            query=query,
+            documents=candidates,
+            top_n=RERANK_TOP_N,
+            return_documents=True,
+        )
+    except Exception as e:
+        if _is_quota_refusal(e):
+            breaker.record_failure(RERANK_BREAKER, "rerank allowance used up")
+            logger.warning(
+                f"[RAG] Rerank refused (allowance used up) — skipping rerank for "
+                f"{RERANK_QUOTA_COOLDOWN_SECONDS // 60} min across all calls: {e}"
+            )
+        raise
+    breaker.record_success(RERANK_BREAKER)
+    return result
+
+
+def _consume_outcome(future: asyncio.Future) -> None:
+    # A rerank nobody waits for any more still finishes; reading its
+    # exception here stops asyncio reporting "exception was never retrieved"
+    # as an error in the middle of a call. Its outcome is already recorded.
+    if not future.cancelled():
+        future.exception()
+
+
+def _log_late_answer(started: float):
+    """The evidence for whether RERANK_TIMEOUT_SECONDS is too small."""
+    def log(future: asyncio.Future) -> None:
+        if future.cancelled():
+            return
+        took = time.perf_counter() - started
+        outcome = "refused/failed" if future.exception() is not None else "succeeded"
+        logger.info(f"[RAG] Rerank answered late after {took:.2f}s ({outcome}); that turn used raw similarity")
+    return log
+
+
+def _rerank_wait(loop, deadline: float | None) -> float:
+    if deadline is None:
+        return RERANK_TIMEOUT_SECONDS
+    return min(RERANK_TIMEOUT_SECONDS, deadline - loop.time())
 
 
 async def _rerank_allowed(loop) -> bool:
@@ -297,7 +412,12 @@ async def _rerank_allowed(loop) -> bool:
 
 
 async def query_context(
-    bot_id: str, query: str, top_k: int = RETRIEVE_TOP_K, *, rerank: bool = True
+    bot_id: str,
+    query: str,
+    top_k: int = RETRIEVE_TOP_K,
+    *,
+    rerank: bool = True,
+    deadline: float | None = None,
 ) -> tuple[str, list[dict]]:
     """Returns (context_text, sources).
 
@@ -311,6 +431,11 @@ async def query_context(
     connection warm-up uses it: it exists to open connections, and a full
     search there spent one of Pinecone's monthly rerank requests on the words
     "warm up", on every single call (found 2026-09-13).
+
+    deadline is the caller's own cut-off, on the event loop's clock
+    (loop.time()). Rerank waits no longer than the time left before it, and
+    is not sent at all when too little is left: a fixed wait alone would let
+    slow earlier steps plus a slow rerank lose results already in hand.
 
     Always logs one "search timing" line, INCLUDING when the search is
     cancelled by the caller's budget, naming the step it stopped in. The live
@@ -421,6 +546,17 @@ async def query_context(
         if not rerank:
             scored = unranked
             timings["rerank"] = "off"
+        # The time check comes BEFORE the breaker: after a cooldown,
+        # breaker.allows() hands one caller the trial and records it, so a
+        # search that asked and then declined to send would strand the trial
+        # and keep reranking off for another full hour.
+        elif deadline is not None and deadline - loop.time() < RERANK_MIN_WINDOW_SECONDS:
+            logger.info(
+                f"[RAG] Rerank not sent: {max(deadline - loop.time(), 0):.2f}s left of the "
+                f"retrieval budget (page_filter={page_num}); using raw similarity"
+            )
+            scored = unranked
+            timings["rerank"] = "skipped (no time left)"
         elif not await _rerank_allowed(loop):
             logger.info(
                 "[RAG] Rerank skipped: Pinecone's rerank allowance is used up (breaker open); "
@@ -429,39 +565,43 @@ async def query_context(
             scored = unranked
             timings["rerank"] = "skipped (allowance used up)"
         else:
-            try:
-                reranked = await loop.run_in_executor(
-                    None,
-                    lambda: _pc.inference.rerank(
-                        model=RERANK_MODEL,
-                        query=query,
-                        documents=candidates,
-                        top_n=RERANK_TOP_N,
-                        return_documents=True,
-                    ),
+            # Re-read after the breaker check, which took a little time. Once
+            # allowed, the request is sent even if that dipped the window
+            # below the minimum, so a claimed trial always reports back.
+            wait = max(_rerank_wait(loop, deadline), 0.0)
+            rerank_started = time.perf_counter()
+            pending = loop.run_in_executor(None, _rerank_and_record, query, candidates)
+            pending.add_done_callback(_consume_outcome)
+            # asyncio.wait, not wait_for: on timeout it leaves the request
+            # running, so _rerank_and_record can still record what Pinecone
+            # says. The thread could not be stopped anyway.
+            done, _ = await asyncio.wait({pending}, timeout=wait)
+            if not done:
+                pending.add_done_callback(_log_late_answer(rerank_started))
+                logger.warning(
+                    f"[RAG] Rerank did not answer within {wait:.2f}s — using raw "
+                    f"similarity for this turn (page_filter={page_num}); its outcome is still "
+                    f"recorded when it arrives"
                 )
-                await loop.run_in_executor(None, breaker.record_success, RERANK_BREAKER)
-                for r in reranked.data:
-                    logger.debug(f"[RAG] reranked score={r.score:.4f} text={r.document['text'][:80]}")
-                scored = [(r.document["text"], r.score) for r in reranked.data if r.score > RERANK_THRESHOLD]
-                logger.info(f"[RAG] {len(scored)}/{len(reranked.data)} reranked matches passed threshold (from {len(candidates)} candidates, page_filter={page_num})")
-                finish_step("rerank")
-            except Exception as e:
-                # Fail open: a broken reranker call should degrade to the old
-                # raw-similarity behavior, never break the whole RAG lookup.
-                if _is_quota_refusal(e):
-                    await loop.run_in_executor(
-                        None, breaker.record_failure, RERANK_BREAKER, "rerank allowance used up"
-                    )
-                    logger.warning(
-                        f"[RAG] Rerank refused (allowance used up) — skipping rerank for "
-                        f"{RERANK_QUOTA_COOLDOWN_SECONDS // 60} min across all calls: {e}"
-                    )
-                else:
-                    logger.warning(f"[RAG] Rerank failed, falling back to raw similarity: {e}")
                 scored = unranked
-                finish_step("rerank")
-                timings["rerank"] += " (failed)"
+                timings["rerank"] = "timed out"
+            else:
+                try:
+                    reranked = pending.result()
+                    for r in reranked.data:
+                        logger.debug(f"[RAG] reranked score={r.score:.4f} text={r.document['text'][:80]}")
+                    scored = [(r.document["text"], r.score) for r in reranked.data if r.score > RERANK_THRESHOLD]
+                    logger.info(f"[RAG] {len(scored)}/{len(reranked.data)} reranked matches passed threshold (from {len(candidates)} candidates, page_filter={page_num})")
+                    finish_step("rerank")
+                except Exception as e:
+                    # Fail open: a broken reranker call should degrade to the old
+                    # raw-similarity behavior, never break the whole RAG lookup.
+                    # A quota refusal was already recorded and logged in the thread.
+                    if not _is_quota_refusal(e):
+                        logger.warning(f"[RAG] Rerank failed, falling back to raw similarity: {e}")
+                    scored = unranked
+                    finish_step("rerank")
+                    timings["rerank"] += " (failed)"
 
         # One citation per (document, page). Several retrieved chunks landing on
         # the same page is the common case, and listing it three times reads as
