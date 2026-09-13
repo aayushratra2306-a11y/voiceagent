@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Fourteen real defects, every one found only after code that already passed its own test suite
+      Sixteen real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,10 +139,10 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">14</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">16</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">10</span><span class="l">were silent — no crash, no error</span></div>
-    <div class="stat"><span class="n">613</span><span class="l">tests in the suite — none caught these</span></div>
+    <div class="stat"><span class="n">11</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">642</span><span class="l">tests in the suite — none caught these</span></div>
   </div>
 
   <div class="section-head">
@@ -716,8 +716,92 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="commit">process — see <code>d4ba16c</code></span>
   </article>
 
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Three days of fixes that never reached the server</h3>
+      <span class="tag">DEPLOYMENT · 2026-09-13</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">A new show-password button was committed, pulled onto the server and built. The
+          page loaded without it. Hard refresh, same. The git log on the server showed the right commit.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The build is <code>tsc -b &amp;&amp; vite build</code>: a type-check of
+          <b>every</b> file under <code>src</code>, then the actual bundle only if that passes. Three days
+          earlier the frontend had gained its first tests, and with them two dev dependencies. The server's
+          update routine was <code>git pull &amp;&amp; npm run build</code> &mdash; never an install &mdash;
+          so the type-check failed on the <i>test files</i>, <code>&amp;&amp;</code> stopped, and the old
+          bundle stayed on disk, served as if nothing had happened. Nobody reads the tail of a build they
+          believe succeeded. The damage was not the button: two review fixes &mdash; a microphone left live
+          after a call ended mid-connect, and sign-out being undone by an in-flight token refresh &mdash;
+          had been <b>unshipped for three days</b> on a server everyone believed was current.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Every test passed &mdash; on a laptop whose dependencies were installed. The tests
+          were, in a sense, the cause: adding them is what changed the build's requirements. A test suite
+          verifies the code; it has no opinion on whether the artifact on the server was built from it.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Diagnosed by checking the <b>artifact</b> instead of the process: grep the built
+          bundle, and the copy the web server actually reads, for a string only the new version contains.
+          Both said <code>0</code>; the build output then showed <code>Cannot find module 'vitest'</code>.
+          <code>npm ci</code> before every build, and the deploy guide now has an update procedure &mdash; it
+          only ever documented first-time setup, which is how the missing install became the habit.</div>
+        <div class="evidence"><span class="bad-line">server:  git log → 594c571 (correct)   grep "Show password" dist → 0</span>
+<span class="ok-line">after npm ci:  ✓ built in 964ms   grep → 1   — and C3 + I19 finally live</span></div>
+      </div>
+    </div>
+    <span class="commit">deployment — see <code>deploy/README.md</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Every validation error in the app said &ldquo;[object Object]&rdquo;</h3>
+      <span class="tag">FRONTEND · 2026-09-13</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Creating a test account failed with a red box reading <code>[object Object]</code>.
+          No way to tell what was wrong.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The password was five characters; the backend rightly refused it (12 is the floor).
+          But FastAPI reports validation failures as a <b>list of objects</b>, and the API client did
+          <code>new Error(err.detail)</code>. <code>Error()</code> stringifies its argument, and an array of
+          objects stringifies to exactly <code>[object Object]</code>. Hand-written errors are plain strings,
+          so this only surfaced on backend-validated forms &mdash; all of them. Capturing the real response
+          showed a second thing: FastAPI echoes the submitted value back in <code>input</code>. <b>The
+          obvious fix &mdash; print the whole error to be safe &mdash; would have put the user&rsquo;s
+          password on the screen.</b></div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">No test had ever sent the frontend a validation failure. The backend tests asserted
+          the 422 was returned &mdash; correctly &mdash; and stopped at the boundary; nothing checked what a
+          person saw on the other side of it.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">One helper builds the message from the field name and <code>msg</code> only, used at
+          all four error sites, with a test that fails if the password ever appears in the output. Plus a
+          show-password toggle (<code>type="button"</code> so it doesn&rsquo;t submit the form) and the
+          12-character rule stated before anyone gets it wrong.</div>
+        <div class="evidence"><span class="bad-line">before: [object Object]</span>
+<span class="ok-line">after:  Password must be at least 12 characters.</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>594c571</code></span>
+  </article>
+
   <footer>
     <span>Voice Agent · Phase 3 complete (3.1–3.10) · Phase 4 live testing in progress</span>
-    <span>Last updated 2026-09-12</span>
+    <span>Last updated 2026-09-13</span>
   </footer>
 </div>

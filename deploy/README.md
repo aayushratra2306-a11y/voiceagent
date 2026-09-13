@@ -118,6 +118,39 @@ docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml logs -f
 ```
 
+### Updating a running deployment
+
+```bash
+cd ~/voiceagent && git pull
+
+# Frontend — `npm ci` EVERY time, not only on first setup.
+cd frontend && npm ci && npm run build && cd ..
+# Then grep dist/assets/*.js for a string only THIS release adds (for the
+# 2026-09-13 release: "Show password") — expect a non-zero count.
+
+# Backend — --build for code changes, --force-recreate if deploy/.env changed.
+docker compose -f deploy/docker-compose.yml config > /dev/null && echo VALID
+docker compose -f deploy/docker-compose.yml up -d --build --force-recreate backend
+```
+
+Found 2026-09-13: the update routine had become `git pull && npm run build`,
+and on 2026-09-10 the frontend gained test tooling (vitest,
+@testing-library). `npm run build` is `tsc -b && vite build`, and `tsc -b`
+type-checks every file under `src` — test files included — so on a server
+that never installed those packages the type-check failed, `&&` stopped,
+and **the old bundle kept being served with nothing on the page to say so**.
+Two review fixes (C3, a microphone left live after a call ended mid-connect;
+I19, sign-out undone by an in-flight token refresh) sat unshipped for three
+days on a server everyone believed was current.
+
+Why each flag above earns its place, all learned the hard way on this VM:
+`npm ci` installs exactly what package-lock.json lists, so a dependency
+added since the last deploy is never missing. `--force-recreate` because a
+container does not re-read `.env` on a plain `up -d` when its service
+definition is unchanged. And the `grep` because "the build printed
+something" and "the new code is live" turned out to be different claims —
+check for a string you know only the new version contains.
+
 ## Step 6 — Allow the server's IP in MongoDB Atlas
 
 Atlas blocks by IP. Add the VM's public IP under **Network Access**, or the
