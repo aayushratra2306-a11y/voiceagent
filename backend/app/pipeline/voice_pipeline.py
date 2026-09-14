@@ -11,6 +11,8 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    CancelFrame,
+    EndFrame,
     Frame,
     FunctionCallResultFrame,
     LLMFullResponseStartFrame,
@@ -277,18 +279,27 @@ class MarkdownStripper(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+# How long saving the last turn may hold up a call that is ending. A stuck
+# database write must not keep a finished call's process alive.
+FINAL_TURN_SAVE_TIMEOUT_SECONDS = 2.0
+
+
 class TranscriptRecorder(FrameProcessor):
     """Task 1.5 — saves every completed turn to MongoDB, with per-stage
     timing captured live as it happens (not reconstructed afterward), so a
     future "it feels slow" question is a query, not the manual log-timestamp
     hunt this exact session needed today to find the ~1.5s Groq/RAG gap.
 
-    Positioned after MarkdownStripper, before tts — the one spot that sees
-    everything in a single pass without needing two processors:
-      - TranscriptionFrame / UserStoppedSpeakingFrame: these originate
-        upstream (STT / the turn aggregator) and flow downstream through
-        here on their way into the LLM, same as into any other processor
-        positioned after them.
+    Positioned after MarkdownStripper, before tts:
+      - The caller's words do NOT reach this position as frames. Found
+        2026-09-14: this used to read TranscriptionFrame, but pipecat 1.7's
+        user aggregator consumes those and never pushes them downstream, so
+        every saved turn had an empty user_transcript (all 145 turns in the
+        2026-09-13 backup). The finished text of each caller turn now comes
+        from the aggregator's on_user_turn_stopped event, via
+        record_user_turns() -> add_user_text().
+      - UserStoppedSpeakingFrame: broadcast by the aggregator, so it does
+        arrive here, which is why the timing fields were being filled.
       - LLMFullResponseStartFrame / TextFrame / FunctionCallResultFrame:
         originate at `llm` and flow straight downstream to here.
       - BotStartedSpeakingFrame / BotStoppedSpeakingFrame: originate at
@@ -306,8 +317,19 @@ class TranscriptRecorder(FrameProcessor):
         self._bot_name = bot_name
         self._reset_turn()
 
+    def add_user_text(self, text: str | None) -> None:
+        """One finished caller turn, from the aggregator's on_user_turn_stopped.
+
+        Kept as a list, not overwritten: a caller can finish several turns
+        before the bot replies (live 2026-09-13, three sentences with pauses
+        and one answer), and all of them belong to the turn that reply ends.
+        """
+        text = (text or "").strip()
+        if text:
+            self._user_parts.append(text)
+
     def _reset_turn(self):
-        self._user_transcript = ""
+        self._user_parts: list[str] = []
         self._assistant_parts: list[str] = []
         self._tool_calls: list[dict] = []
         self._user_stopped_at: datetime | None = None
@@ -320,8 +342,6 @@ class TranscriptRecorder(FrameProcessor):
         if isinstance(frame, UserStoppedSpeakingFrame):
             if self._user_stopped_at is None:
                 self._user_stopped_at = datetime.now(UTC)
-        elif isinstance(frame, TranscriptionFrame) and frame.text:
-            self._user_transcript = frame.text
         elif isinstance(frame, LLMFullResponseStartFrame):
             if self._llm_first_response_at is None:
                 self._llm_first_response_at = datetime.now(UTC)
@@ -340,13 +360,22 @@ class TranscriptRecorder(FrameProcessor):
                 self._bot_started_speaking_at = datetime.now(UTC)
         elif isinstance(frame, BotStoppedSpeakingFrame):
             await self._finalize_turn()
+        elif isinstance(frame, (EndFrame, CancelFrame)):
+            # The call is ending. Anything not yet saved (usually the caller's
+            # last words, with no reply because they hung up) is saved now.
+            # Seen twice in the 2026-09-14 logs: "That's all for now. Thank
+            # you." and then the call ended, and those words were lost.
+            try:
+                await asyncio.wait_for(self._finalize_turn(), timeout=FINAL_TURN_SAVE_TIMEOUT_SECONDS)
+            except TimeoutError:
+                logger.warning("[TRANSCRIPT] Gave up saving the last turn: the database did not answer in time")
 
         await self.push_frame(frame, direction)
 
     async def _finalize_turn(self):
         # Nothing real happened — e.g. a stray bot-speaking event with no
         # content either side. Don't write empty noise to the database.
-        if not self._user_transcript and not self._assistant_parts:
+        if not self._user_parts and not self._assistant_parts:
             self._reset_turn()
             return
 
@@ -354,7 +383,7 @@ class TranscriptRecorder(FrameProcessor):
             session_id=self._session_id,
             bot_id=self._bot_id,
             bot_name=self._bot_name,
-            user_transcript=self._user_transcript,
+            user_transcript=" ".join(self._user_parts),
             assistant_reply="".join(self._assistant_parts),
             tool_calls=self._tool_calls,
             user_stopped_speaking_at=self._user_stopped_at,
@@ -372,20 +401,36 @@ class TranscriptRecorder(FrameProcessor):
                     (self._bot_started_speaking_at - self._user_stopped_at).total_seconds() * 1000
                 )
 
+        # Cleared BEFORE the save is awaited, not after. The caller's next
+        # words arrive through an event task that can run while the insert is
+        # still waiting on the database: clearing afterwards wiped them (found
+        # by independent review, 2026-09-14: a caller cutting the bot off with
+        # a short "no, stop" during a 100-300ms save to Atlas). The turn object
+        # above already holds its own copy of everything it needs.
+        tools = [t["name"] for t in self._tool_calls]
+        self._reset_turn()
+
         try:
             await turn.insert()
             logger.info(
                 f"[TRANSCRIPT] Saved turn — "
                 f"time_to_first_token_ms={turn.time_to_first_token_ms}, "
                 f"time_to_speech_ms={turn.time_to_speech_ms}, "
-                f"tools={[t['name'] for t in self._tool_calls]}"
+                f"tools={tools}"
             )
         except Exception as e:
             # A transcript-saving failure must never take down the actual
             # conversation — log it and move on.
             logger.warning(f"[TRANSCRIPT] Failed to save turn: {e}")
 
-        self._reset_turn()
+
+def record_user_turns(user_aggregator, recorder: TranscriptRecorder) -> None:
+    """Hand each finished caller turn to the recorder. See TranscriptRecorder:
+    the words never reach it as frames, only through this event."""
+
+    @user_aggregator.event_handler("on_user_turn_stopped")
+    async def _on_user_turn_stopped(_aggregator, _strategy, message):
+        recorder.add_user_text(message.content)
 
 
 async def run_voice_pipeline(
@@ -691,10 +736,13 @@ async def run_voice_pipeline(
             RAGContextProcessor(bot_id, context, voice_system_prompt, webrtc_connection)
         )
 
+    transcript_recorder = TranscriptRecorder(session_id=session_id, bot_id=bot_id, bot_name=bot_name)
+    record_user_turns(user_aggregator, transcript_recorder)
+
     pipeline_steps += [
         llm,
         MarkdownStripper(),
-        TranscriptRecorder(session_id=session_id, bot_id=bot_id, bot_name=bot_name),
+        transcript_recorder,
         tts,
         transport.output(),
         context_aggregator.assistant(),
