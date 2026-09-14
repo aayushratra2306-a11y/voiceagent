@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     # describe_index() on the existing index), so keyword matching needs its
     # own separate index, queried alongside the dense one and merged.
     pinecone_sparse_index_name: str = "voiceagent-sparse"
+    # Optional: each index's direct address (the "host" shown on the index's
+    # page in the Pinecone console, e.g. https://voiceagent-xxxx.svc....
+    # pinecone.io). Blank = look it up by name. Found 2026-09-14: looking an
+    # index up by name is a Pinecone control-plane request measured at 0.5s
+    # to 17s from this server, and every call process repeats it. With both
+    # hosts set, a call makes no lookups at all.
+    pinecone_index_host: str = ""
+    pinecone_sparse_index_host: str = ""
 
     # Task 2.3 — WebRTC connectivity.
     #

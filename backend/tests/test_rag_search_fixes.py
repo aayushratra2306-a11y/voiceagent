@@ -202,6 +202,13 @@ def pinecone(monkeypatch, tmp_path: Path):
     """A fake index, embedder and reranker, and a breaker store of its own."""
     breaker.use_database(tmp_path / "breakers.db")
     breaker._configs.clear()
+    # rag caches its built clients in module globals, and query_context uses
+    # them directly once they exist. tests/rag_eval runs earlier in the suite
+    # against the REAL Pinecone and leaves real clients cached, which would
+    # otherwise replace the fakes below (found 2026-09-14: a real query to
+    # namespace "bot-1" came back with 0 matches in 1.33s).
+    monkeypatch.setattr(rag, "_index", None)
+    monkeypatch.setattr(rag, "_sparse_index", None)
 
     async def fake_embed(texts):
         return [[0.0] * 3 for _ in texts]

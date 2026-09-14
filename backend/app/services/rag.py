@@ -1,21 +1,82 @@
 import asyncio
 import io
 import re
+import threading
 import time
 
+import httpx
 import pypdf
 from loguru import logger
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from pinecone import Pinecone, RetryConfig
 
 from app.core import breaker
 from app.core.config import settings
 
-_openai = AsyncOpenAI(api_key=settings.openai_api_key)
+# How long an idle connection is kept for reuse. httpx's default is 5s.
+#
+# Measured 2026-09-14 from the production server: Pinecone's search hosts are
+# in AWS us-east-1, 261ms to connect plus ~520ms of TLS. A query after 3s idle
+# took 0.30s; after 7s idle, 1.05s, because the 5s default had closed the
+# connection. With the pool kept open, queries after 7s, 25s and 55s idle all
+# took 0.27-0.30s: Pinecone keeps idle connections at least 55s, so only our
+# own setting was closing them. A caller's questions are routinely more than
+# 5s apart, and the per-call warm-up finished 6-9s before the first question,
+# so the connections it opened were already gone. Kept under the measured 55s
+# so the client never holds on longer than the server was seen to.
+KEEPALIVE_SECONDS = 50.0
+
+
+def _long_lived_http_client() -> httpx.AsyncClient:
+    # OpenAI's own defaults (connection limits, timeouts, redirects), with
+    # only the idle expiry changed.
+    return DefaultAsyncHttpxClient(
+        limits=httpx.Limits(
+            max_connections=1000, max_keepalive_connections=100, keepalive_expiry=KEEPALIVE_SECONDS
+        )
+    )
+
+
+def _keep_connections_open(client) -> None:
+    """Raise the idle expiry on a Pinecone SDK client's connection pool(s).
+
+    pinecone 9.1 builds its httpx pool internally and exposes no setting for
+    this, so the pool is found and adjusted after construction. That relies
+    on httpx/httpcore internals (versions pinned in requirements.txt), which
+    is why tests/test_rag_connection_setup.py checks the real SDK client: an
+    upgrade that moves the pool fails that test instead of silently undoing
+    the fix. At runtime a missing pool only costs speed, so it is logged,
+    never raised.
+    """
+    pools, seen, stack = [], set(), [(client, 0)]
+    while stack:
+        obj, depth = stack.pop()
+        if id(obj) in seen or depth > 6:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, httpx.HTTPTransport):
+            pools.append(obj._pool)
+            continue
+        stack.extend((value, depth + 1) for value in getattr(obj, "__dict__", {}).values())
+    for pool in pools:
+        pool._keepalive_expiry = KEEPALIVE_SECONDS
+    if not pools:
+        logger.warning(
+            f"[RAG] No connection pool found on {type(client).__name__}; idle connections "
+            f"will close after httpx's 5s default and each question will reconnect"
+        )
+
+
+_openai = AsyncOpenAI(api_key=settings.openai_api_key, http_client=_long_lived_http_client())
 
 _pc: Pinecone | None = None
 _index = None
 _rerank_pc: Pinecone | None = None
+
+# Held while the Pinecone clients are being built, so a call's warm-up and a
+# quick first question do the lookups once between them rather than twice.
+# Re-entrant because _get_sparse_index() builds the dense side first.
+_setup_lock = threading.RLock()
 
 
 def _get_rerank_client() -> Pinecone:
@@ -55,15 +116,38 @@ def _get_groq() -> AsyncOpenAI | None:
     if not settings.groq_api_key:
         return None
     if _groq is None:
-        _groq = AsyncOpenAI(api_key=settings.groq_api_key, base_url="https://api.groq.com/openai/v1")
+        _groq = AsyncOpenAI(
+            api_key=settings.groq_api_key,
+            base_url="https://api.groq.com/openai/v1",
+            http_client=_long_lived_http_client(),
+        )
     return _groq
 
 
 def _get_index():
+    """Blocking: may make a network request. Never call it on the event loop;
+    await _indexes() instead.
+
+    Found 2026-09-14: looking an index up by name is a Pinecone control-plane
+    request, measured at 0.5s to 17.3s from the production server. Called
+    straight from async code, it froze the whole call (an event-loop
+    heartbeat measured 13.45s), which is the ~6s of silence at the start of
+    every call and could stall a first question. A configured host skips the
+    lookup entirely (settings.pinecone_index_host).
+    """
     global _pc, _index
     if _index is None:
-        _pc = Pinecone(api_key=settings.pinecone_api_key)
-        _index = _pc.Index(settings.pinecone_index_name)
+        with _setup_lock:
+            if _index is None:
+                if _pc is None:
+                    _pc = Pinecone(api_key=settings.pinecone_api_key)
+                    _keep_connections_open(_pc.inference)
+                if settings.pinecone_index_host:
+                    index = _pc.Index(host=settings.pinecone_index_host)
+                else:
+                    index = _pc.Index(settings.pinecone_index_name)
+                _keep_connections_open(index)
+                _index = index
     return _index
 
 
@@ -81,21 +165,46 @@ def _get_sparse_index():
     metric='dotproduct' (required for sparse) rather than the dense index's
     'cosine'. Same ids and namespace convention as the dense index, so
     results from both sides can be correlated/deduped by id.
+
+    Blocking, like _get_index(): await _indexes() from async code. With
+    settings.pinecone_sparse_index_host set, the existence check and lookup
+    below are skipped; the index is then assumed to exist already.
     """
     global _sparse_index
     if _sparse_index is None:
-        _get_index()  # ensures _pc is initialized
-        existing = {idx["name"] for idx in _pc.list_indexes()}
-        if settings.pinecone_sparse_index_name not in existing:
-            logger.info(f"[RAG] Creating sparse index '{settings.pinecone_sparse_index_name}' (first run)")
-            _pc.create_index(
-                name=settings.pinecone_sparse_index_name,
-                vector_type="sparse",
-                metric="dotproduct",
-                spec={"serverless": {"cloud": "aws", "region": "us-east-1"}},
-            )
-        _sparse_index = _pc.Index(settings.pinecone_sparse_index_name)
+        with _setup_lock:
+            if _sparse_index is None:
+                _get_index()  # ensures _pc is initialized
+                if settings.pinecone_sparse_index_host:
+                    index = _pc.Index(host=settings.pinecone_sparse_index_host)
+                else:
+                    existing = {idx["name"] for idx in _pc.list_indexes()}
+                    if settings.pinecone_sparse_index_name not in existing:
+                        logger.info(f"[RAG] Creating sparse index '{settings.pinecone_sparse_index_name}' (first run)")
+                        _pc.create_index(
+                            name=settings.pinecone_sparse_index_name,
+                            vector_type="sparse",
+                            metric="dotproduct",
+                            spec={"serverless": {"cloud": "aws", "region": "us-east-1"}},
+                        )
+                    index = _pc.Index(settings.pinecone_sparse_index_name)
+                _keep_connections_open(index)
+                _sparse_index = index
     return _sparse_index
+
+
+async def _indexes():
+    """(dense index, sparse index), built off the event loop on first use.
+
+    Already-built clients return straight away without a thread. Concurrent
+    first callers (a call's warm-up and its first question) each wait in a
+    worker thread on _setup_lock, so the lookups happen once, and the loop
+    keeps running audio and everything else meanwhile.
+    """
+    if _index is not None and _sparse_index is not None:
+        return _index, _sparse_index
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: (_get_index(), _get_sparse_index()))
 
 
 # ── PDF parsing ────────────────────────────────────────────────────────────────
@@ -148,7 +257,7 @@ async def _embed_sparse(texts: list[str], input_type: str) -> list[dict]:
     values are accepted). Returns Pinecone's native sparse-vector shape
     ({"indices": [...], "values": [...]}) ready to pass straight into an
     upsert or query call."""
-    _get_index()  # ensures _pc is initialized (return value unused here)
+    await _indexes()  # ensures _pc is initialized, off the event loop
     loop = asyncio.get_event_loop()
     out: list[dict] = []
     for i in range(0, len(texts), _SPARSE_EMBED_BATCH):
@@ -197,8 +306,7 @@ async def upsert_document(bot_id: str, doc_id: str, chunks: list[dict]) -> int:
         for i, (chunk, sparse_emb) in enumerate(zip(chunks, sparse_embeddings, strict=True))
     ]
 
-    index = _get_index()
-    sparse_index = _get_sparse_index()
+    index, sparse_index = await _indexes()
     loop = asyncio.get_event_loop()
     for i in range(0, len(vectors), 100):
         batch, sparse_batch = vectors[i : i + 100], sparse_vectors[i : i + 100]
@@ -444,7 +552,11 @@ async def query_context(
     """
     started = time.perf_counter()
     timings: dict[str, str] = {}
-    stage = "embed"
+    # Each request inside a step, timed on its own. Live call 2026-09-14 logged
+    # "embed=- (stopped during embed)" after 3.17s, and nothing said whether
+    # OpenAI or Pinecone was the request that stalled.
+    parts: dict[str, str] = {}
+    stage = "setup"
     mark = started
 
     def finish_step(name: str) -> None:
@@ -453,9 +565,20 @@ async def query_context(
         timings[name] = f"{now - mark:.2f}s"
         mark = now
 
+    async def timed(name: str, awaitable):
+        t0 = time.perf_counter()
+        try:
+            result = await awaitable
+        except asyncio.CancelledError:
+            parts[name] = f"{time.perf_counter() - t0:.2f}s+unfinished"
+            raise
+        parts[name] = f"{time.perf_counter() - t0:.2f}s"
+        return result
+
     try:
-        index = _get_index()
-        sparse_index = _get_sparse_index()
+        index, sparse_index = await _indexes()
+        finish_step("setup")
+        stage = "embed"
         loop = asyncio.get_event_loop()
 
         page_num = _extract_page_num(query)
@@ -472,7 +595,8 @@ async def query_context(
         # alone was missing for exact identifiers (order IDs, part numbers) that
         # embeddings represent poorly but keyword search finds directly.
         dense_embeddings, sparse_embeddings = await asyncio.gather(
-            _embed([query]), _embed_sparse([query], input_type="query"),
+            timed("openai", _embed([query])),
+            timed("sparse_embed", _embed_sparse([query], input_type="query")),
         )
         dense_vector = dense_embeddings[0]
         sparse_vector = sparse_embeddings[0]
@@ -480,7 +604,7 @@ async def query_context(
 
         stage = "query"
         dense_results, sparse_results = await asyncio.gather(
-            loop.run_in_executor(
+            timed("dense", loop.run_in_executor(
                 None,
                 lambda: index.query(
                     vector=dense_vector,
@@ -489,8 +613,8 @@ async def query_context(
                     include_metadata=True,
                     filter=filter_dict,
                 ),
-            ),
-            loop.run_in_executor(
+            )),
+            timed("sparse", loop.run_in_executor(
                 None,
                 lambda: sparse_index.query(
                     sparse_vector=sparse_vector,
@@ -499,7 +623,7 @@ async def query_context(
                     include_metadata=True,
                     filter=filter_dict,
                 ),
-            ),
+            )),
         )
         finish_step("query")
 
@@ -621,7 +745,17 @@ async def query_context(
         stage = "done"
         return "\n\n".join(t for t, _ in scored), sources
     finally:
-        steps = " ".join(f"{name}={timings.get(name, '-')}" for name in ("embed", "query", "rerank"))
+        def step(name: str, sub_steps: tuple[str, ...] = ()) -> str:
+            text = f"{name}={timings.get(name, '-')}"
+            shown = [f"{sub}={parts[sub]}" for sub in sub_steps if sub in parts]
+            return f"{text} ({' '.join(shown)})" if shown else text
+
+        steps = " ".join([
+            step("setup"),
+            step("embed", ("openai", "sparse_embed")),
+            step("query", ("dense", "sparse")),
+            step("rerank"),
+        ])
         outcome = "completed" if stage == "done" else f"stopped during {stage}"
         logger.info(
             f"[RAG] search timing: {steps} total={time.perf_counter() - started:.2f}s ({outcome})"
@@ -632,8 +766,7 @@ async def delete_document_vectors(bot_id: str, doc_id: str, chunk_count: int):
     ids = [f"{doc_id}_{i}" for i in range(chunk_count)]
     if not ids:
         return
-    index = _get_index()
-    sparse_index = _get_sparse_index()
+    index, sparse_index = await _indexes()
     loop = asyncio.get_event_loop()
     await asyncio.gather(
         loop.run_in_executor(None, lambda: index.delete(ids=ids, namespace=bot_id)),
