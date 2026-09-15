@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Seventeen real defects, every one found only after code that already passed its own test suite
+      Twenty real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,10 +139,10 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">17</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">20</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">12</span><span class="l">were silent — no crash, no error</span></div>
-    <div class="stat"><span class="n">646</span><span class="l">tests in the suite — none caught these</span></div>
+    <div class="stat"><span class="n">15</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">707</span><span class="l">tests in the suite — none caught these</span></div>
   </div>
 
   <div class="section-head">
@@ -843,8 +843,168 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="commit">commit <code>3fb9d7e</code></span>
   </article>
 
+  <div class="section-head">
+    <span class="num">05</span><h2>RAG search &amp; the record of the call</h2><span class="rule"></span>
+  </div>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Nitya couldn&rsquo;t read page fifty &mdash; and the fix that passed its own tests still failed live</h3>
+      <span class="tag">RAG SEARCH · 2026-09-13 → 09-14</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">A caller asked what was on page 50 of an uploaded PDF. The bot said it had no
+          access to the file &mdash; the document was uploaded, chunked and indexed correctly. Found the
+          causes in the logs, fixed them, deployed, retested. <b>Same failure, a different log line
+          underneath it.</b></div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 1: only the last fragment was searched</span>
+        <div class="body">The caller spoke in three short sentences with pauses between them, and they
+          landed as three separate transcribed messages with no reply in between. The search read only
+          the <b>last</b> one &mdash; &ldquo;The headline of that particular page.&rdquo; &mdash; which had
+          no page number in it, and returned pages <code>40, 41, 5 and 11</code>.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 2: every search paid for a doomed request first</span>
+        <div class="body">Pinecone&rsquo;s monthly rerank allowance (500 requests) was exhausted &mdash;
+          every rerank came back <code>429 RESOURCE_EXHAUSTED</code>. That refusal round trip ate into the
+          3.5-second retrieval budget on every real question, and a full search &mdash; rerank included
+          &mdash; ran on the words &ldquo;warm up&rdquo; at the start of <b>every single call</b>, spending
+          the same exhausted allowance a second time before the caller had said a word.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix — first pass</span>
+        <div class="body">Search the whole unanswered turn (up to 3 messages), not just the last one;
+          the warm-up runs with rerank disabled; a circuit breaker records a quota refusal so later
+          searches skip it for an hour; a timing line names the exact step a cut-off search stopped in,
+          where the log previously said only &ldquo;exceeded 3.5s budget&rdquo;.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 3: the retest failed for a reason the fix never modelled</span>
+        <div class="body">Deployed, retested &mdash; still no answer: <code>stopped during rerank</code> at
+          3.15s. Pinecone&rsquo;s own SDK retries a refused request <b>three times with sleeps between
+          attempts</b>, inside a worker thread nothing can cancel &mdash; measured against a fake transport
+          that always refuses: <b>4 attempts, 3.45 seconds</b>, not the near-instant refusal the first fix
+          assumed. The whole budget was spent waiting on a request that was never going to succeed, and
+          when the deadline finally cancelled it, that cancellation landed <i>before</i> the line that
+          records the refusal into the breaker &mdash; so the exact case the breaker exists for was the one
+          case it could never learn from. Every later search paid the same tax again.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why the first fix's own tests missed this</span>
+        <div class="body">The breaker tests used a fake refusal that raised instantly, so the fix looked
+          complete: the breaker opened, later searches skipped it. Nothing modelled a refusal that takes
+          real time to arrive &mdash; which is exactly what a production quota refusal does.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix — second pass</span>
+        <div class="body">A rerank-only Pinecone client with retries off and its own 2.5-second timeout;
+          the request and the breaker record now run <b>together in the worker thread</b>, so the outcome
+          is kept even after the caller stops waiting on it; the search waits at most 1.2 seconds for
+          rerank &mdash; never longer than the time actually left in the budget &mdash; and skips sending it
+          under 0.3 seconds remaining, checked <i>before</i> the breaker&rsquo;s own allowance check so a
+          claimed post-cooldown trial can never be stranded. Two independent reviews caught four more edges
+          before this shipped, including an abandoned rerank that could otherwise hold a thread for the
+          SDK&rsquo;s 30-second default.</div>
+        <div class="evidence"><span class="bad-line">before: search timing: embed=0.63s query=0.57s rerank=- total=3.15s (stopped during rerank)</span>
+<span class="ok-line">after:  search timing: embed=0.63s query=1.35s rerank=0.41s (failed) total=2.38s (completed) — Retrieved 1134 chars of context</span></div>
+      </div>
+    </div>
+    <span class="commit">commits <code>551b39f</code> · <code>f590f9e</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Every call froze for six seconds before it even started</h3>
+      <span class="tag">RAG SEARCH · 2026-09-14</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Two more real calls, still no page 50 &mdash; but a <b>new</b> failure shape
+          this time: <code>stopped during query</code>, <code>stopped during embed</code>. And every call
+          now carried 4.5&ndash;5.9 seconds of dead silence between the pipeline starting and the call
+          actually connecting.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Looking an index up by name is a real network request to Pinecone&rsquo;s
+          control plane, and it ran as a plain, unwrapped synchronous call directly on the event loop,
+          inside otherwise-async code &mdash; measured on the server: <b>0.5 to 17.3 seconds</b>. An
+          event-loop heartbeat run during a cold search measured a <b>13.45-second freeze</b>: nothing else
+          &mdash; not the greeting, not the caller&rsquo;s own turn &mdash; could run while it waited.
+          Layered on top: httpx&rsquo;s default idle-connection timeout is 5 seconds; Pinecone&rsquo;s
+          search hosts sit in AWS us-east-1, and the warm-up&rsquo;s connections were routinely closed
+          again by the time a caller&rsquo;s question arrived 6&ndash;9 seconds later, so almost every real
+          search paid a fresh reconnect out of its 3.5-second budget.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Index setup now runs in a worker thread under a lock, so the warm-up and a quick
+          first question share one setup instead of racing to repeat it. Two optional settings let an
+          operator skip the lookup entirely by giving Pinecone&rsquo;s index addresses directly. Idle
+          connections are kept open 50 seconds &mdash; just under the 55 seconds Pinecone was measured to
+          allow. And the search-timing log line now times each request separately (the embedding call, the
+          dense query, the sparse query), so a future stall names the actual slow step instead of a blank
+          <code>embed=-</code>.</div>
+        <div class="evidence"><span class="bad-line">before: 5.9s of silence before the call connects; dense query after ~6s idle: 1.05s</span>
+<span class="ok-line">after:  0.02s of silence before the call connects; dense query after ~6s idle: 0.56s (connection reused)</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>83c7583</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>The caller&rsquo;s side of every conversation was never saved</h3>
+      <span class="tag">DATA INTEGRITY · 2026-09-14</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Checking the fix above against a real call, the saved conversation record
+          showed the bot&rsquo;s reply in full and an <b>empty string</b> for what the caller had said.
+          Every one of the 145 turns in the latest backup, and all 146 in the database&rsquo;s own change
+          log from before it, had the same gap &mdash; going back to the day the feature was written.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">The recorder that saves each turn read <code>TranscriptionFrame</code>, but it
+          sits &mdash; correctly, for other reasons &mdash; <i>after</i> pipecat&rsquo;s user-turn
+          aggregator. That aggregator consumes transcription frames itself rather than passing them on; the
+          finished text of a caller&rsquo;s turn is only ever delivered through a separate event,
+          <code>on_user_turn_stopped</code>, which nothing in this project was listening for. The recorder
+          had simply never seen a single word the caller said.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">No test ever ran the recorder behind the <b>real</b> aggregator &mdash; existing
+          tests either constructed frames by hand or inspected the pipeline&rsquo;s service ordering. A
+          test that exercises the real event, rather than a shape that merely resembles it, is what finally
+          caught this.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">A small function forwards the aggregator&rsquo;s <code>on_user_turn_stopped</code>
+          event straight to the recorder. Several sentences said before one reply are all kept, not just
+          the last; the caller&rsquo;s final words before hanging up are saved too, bounded by a timeout so
+          a stuck database write can never hold the call open. Independent review found one more:
+          the pending turn used to be cleared only <i>after</i> the database write returned, so a caller
+          speaking again while the previous turn was still saving had those words silently erased by the
+          reset. Reproduced with a failing test first, fixed by clearing the pending turn before the write
+          is awaited, not after.</div>
+        <div class="evidence"><span class="bad-line">before: USER: ''   BOT: "Sure thing! On page 20 of the document..."</span>
+<span class="ok-line">after:  USER: 'what is on page fifty'   BOT: "Page 50 covers context windows..."</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>7b590ed</code></span>
+  </article>
+
   <footer>
     <span>Voice Agent · Phase 3 complete (3.1–3.10) · Phase 4 live testing in progress</span>
-    <span>Last updated 2026-09-13</span>
+    <span>Last updated 2026-09-14</span>
   </footer>
 </div>
