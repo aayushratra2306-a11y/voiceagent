@@ -13,10 +13,21 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Found 2026-09-14: faster-whisper caches its model through
+      # huggingface_hub, whose default is /root/.cache/huggingface, inside
+      # the container's own filesystem. `up -d --build` (every deploy)
+      # deleted the 464 MB Whisper backup, and the speech-recognition
+      # fallback would quietly go back to "not ready". Pointing HF_HOME into
+      # the local_models volume keeps it with the Piper voices. A
+      # subdirectory, not local_models itself: Piper's readiness check looks
+      # for *.onnx directly in that directory.
+      HF_HOME: /app/local_models/huggingface
     volumes:
-      # Local Whisper/Piper models (Task 2.2), if you ever switch the
-      # providers to local — persisted so they aren't re-downloaded on
-      # every container restart.
+      # Local Whisper/Piper models (Task 2.2, and the Task 4.6 backups that
+      # a tripped provider breaker switches to). Persisted so they survive
+      # restarts and rebuilds. Fill it once per machine with
+      # `python -m scripts.prefetch_local_models`, run inside this container.
       - local_models:/app/local_models
     expose:
       - "8080"

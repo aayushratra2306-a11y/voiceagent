@@ -36,10 +36,16 @@ from app.pipeline.language import resolve_voice
 # runs. Measured 2026-09-03: 3.75s to import with it, 1.71s without.
 
 
-# Task 2.2 — where local model files (Whisper weights via faster-whisper's
-# own cache, Piper .onnx voices) get stored. Keeping this inside the repo
+# Task 2.2 — where local model files get stored. Keeping this inside the repo
 # (gitignored) rather than the OS default cache dir makes "where did my
 # disk space go" and "move this to another machine" both obvious.
+#
+# Piper .onnx voices are written here directly. Whisper weights are NOT
+# written here by the code: faster-whisper caches through huggingface_hub,
+# which uses $HF_HOME (default ~/.cache/huggingface). The deployment sets
+# HF_HOME to local_models/huggingface (deploy/docker-compose.yml) so both
+# backups live in the one persisted volume; found 2026-09-14, when a
+# rebuild would have silently deleted the Whisper backup.
 LOCAL_MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "local_models"
 LOCAL_MODELS_DIR.mkdir(exist_ok=True)
 
