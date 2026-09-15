@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Twenty real defects, every one found only after code that already passed its own test suite
+      Twenty-one real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,10 +139,10 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">20</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">21</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">15</span><span class="l">were silent — no crash, no error</span></div>
-    <div class="stat"><span class="n">707</span><span class="l">tests in the suite — none caught these</span></div>
+    <div class="stat"><span class="n">16</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">711</span><span class="l">tests in the suite — none caught these</span></div>
   </div>
 
   <div class="section-head">
@@ -1003,8 +1003,66 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="commit">commit <code>7b590ed</code></span>
   </article>
 
+  <div class="section-head">
+    <span class="num">06</span><h2>Resilience &mdash; the fallback that wasn&rsquo;t there</h2><span class="rule"></span>
+  </div>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>The backup voice was designed, tested, and never actually on the server</h3>
+      <span class="tag">TASK 4.6 · 2026-09-14 → 09-15</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">The text-to-speech provider ran out of credits again, mid-testing, and every call
+          went silent &mdash; on a system with a circuit breaker and a local backup voice built for exactly
+          this. The breaker did its job: <code>failure 1/3</code>, <code>2/3</code>, then open, all logged.
+          <b>No call ever switched to the backup.</b></div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 1: the spare was never installed</span>
+        <div class="body">The fallback deliberately refuses a backup whose model files are not already on
+          disk: starting a several-hundred-megabyte download while a caller waits to be greeted would be
+          worse than the outage. That check was right. But <code>local_models/</code> on the server was
+          <b>empty</b> &mdash; the one-time download script had never been run on that machine &mdash; so
+          every tripped breaker correctly found nothing usable and carried on with the dead provider.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause — layer 2: the next deploy would have removed it again</span>
+        <div class="body">Running the download script revealed a second gap. The Piper voices (121&nbsp;MB)
+          landed in the persistent volume, but the Whisper speech-recognition backup (464&nbsp;MB) went to
+          the machine-learning library&rsquo;s <b>default cache</b>, inside the container&rsquo;s own
+          filesystem. The very next <code>up -d --build</code> &mdash; which every deploy runs &mdash;
+          would have deleted it, and readiness would have quietly gone back to &ldquo;not ready&rdquo; until
+          the next outage found out.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Every piece was tested and every test was correct: the breaker trips, the fallback
+          picks the backup, readiness refuses a missing model. None of them can see that the machine it
+          runs on was <b>never given the model files</b> &mdash; that is a deployment step, not code. And no
+          test knew where a third-party library caches by default, which is what decides whether a file
+          survives a rebuild.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">Ran the download once, and pointed the library&rsquo;s cache
+          (<code>HF_HOME</code>) into the same persistent volume as the Piper voices. Proved persistence by
+          recreating the container with no download: still ready. Then proved the whole chain the way the
+          task asks &mdash; <b>breaking the provider on purpose</b>: held the text-to-speech breaker open for
+          three minutes, and a real call was built on the backup and spoke in its voice, with no key changed
+          and no restart. The breaker was reset automatically at the end.</div>
+        <div class="evidence"><span class="bad-line">before: local_models/ empty → piper ready=False → silent calls through a real outage</span>
+<span class="ok-line">after:  [BREAKER] provider:tts:cartesia is open — this call will use piper instead</span>
+<span class="ok-line">        [PROVIDERS] TTS: local Piper (voice=en_US-amy-medium) → greeting spoken</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>5f03d05</code></span>
+  </article>
+
   <footer>
     <span>Voice Agent · Phase 3 complete (3.1–3.10) · Phase 4 live testing in progress</span>
-    <span>Last updated 2026-09-14</span>
+    <span>Last updated 2026-09-15</span>
   </footer>
 </div>
