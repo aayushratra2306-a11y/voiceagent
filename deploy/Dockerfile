@@ -59,12 +59,22 @@ EXPOSE 8080
 # able to answer AT ALL — wedged, or dead — from outside it entirely, which
 # a check running on that same possibly-wedged loop cannot.
 #
-# python -c ... rather than curl/wget: keeps the image free of an extra
-# apt package for a single GET request. --start-period gives the pipeline
-# stack (Silero VAD, Smart Turn's ONNX model) time to import on the first
-# boot before failed checks start counting.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request as u; import sys; sys.exit(0 if u.urlopen('http://localhost:8080/health', timeout=4).status == 200 else 1)"
+# python rather than curl/wget: keeps the image free of an extra apt package
+# for a single GET request. --start-period gives the pipeline stack (Silero
+# VAD, Smart Turn's ONNX model) time to import on the first boot before
+# failed checks start counting.
+#
+# Found 2026-09-15: plain Docker only LABELS an unhealthy container; it never
+# restarts one (proven on the production server: a container failing its
+# health check stayed up with restarts=0). So scripts/healthcheck.py does
+# more than report: after 3 checks in a row with no answer at all, it
+# force-stops the frozen app, the container exits, and the restart policy
+# brings it back. A 503 answer is left to the in-process Watchdog. Needs
+# `init: true` in docker-compose.yml, or the app is pid 1 and unkillable.
+# --timeout=12s: the script waits up to 8s for /health, because /health's
+# slowest honest answer (a database outage) takes about 5s.
+HEALTHCHECK --interval=30s --timeout=12s --start-period=40s --retries=3 \
+    CMD python scripts/healthcheck.py
 
 # One uvicorn worker on purpose: Task 2.4 already gives every CALL its own
 # process, and the in-memory call registry in app/api/connect.py assumes a

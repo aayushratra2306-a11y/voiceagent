@@ -25,14 +25,20 @@ The watchdog is the "and automatic restarts" half. A stuck process does not
 reliably notice its own deadlock, so this is a plain periodic timer, not
 triggered by the same event loop that might be the thing that's stuck —
 if THIS loop is wedged, the check never runs and the watchdog does nothing,
-same as `check_worker_pool` catching a wedged pool from a live loop. What
-still catches a fully wedged process is the container platform's own
-HEALTHCHECK (see deploy/Dockerfile) hitting /health from outside the
-process entirely and Docker restarting on repeated failure — the two are
-complementary, not redundant: this watchdog restarts on a DEPENDENCY being
-broken (the database is unreachable) even while the event loop is
-otherwise responsive; Docker's HEALTHCHECK restarts when the process
-cannot even answer that from outside.
+same as `check_worker_pool` catching a wedged pool from a live loop.
+
+What catches a fully wedged process is scripts/healthcheck.py, the
+container's HEALTHCHECK, hitting /health from outside the process. CORRECTED
+2026-09-15: this docstring used to say Docker restarts a container on
+repeated health-check failure. It does not: plain Docker (no Swarm) only
+labels it unhealthy, proven on the production server (restarts=0 after 40s
+of failing checks). So the health-check script force-stops an app that has
+not answered at all for 3 checks in a row, and the restart policy brings it
+back. The two are complementary, not redundant: this watchdog restarts on a
+DEPENDENCY being broken (the database unreachable) while the app still
+answers, and waits for live calls first; the health-check script restarts
+an app that cannot answer at all, and deliberately leaves any answer, even
+a 503, to this watchdog.
 """
 
 from __future__ import annotations
@@ -48,7 +54,21 @@ from loguru import logger
 # module-level state between tests.
 
 
-async def check_database(timeout: float = 3.0) -> tuple[bool, str]:
+# /health must always answer in bounded time. Found 2026-09-15 (independent
+# review): scripts/healthcheck.py treats "no answer" as a frozen app and
+# force-stops it. The database ping waits up to DB_PING_TIMEOUT_SECONDS
+# before reporting an outage, and the Redis call count had no timeout at all,
+# so a working app during an Atlas or Redis outage could answer too late and
+# be killed as frozen, bypassing the Watchdog's wait for live calls. Every
+# reading that is only context now has its own short limit, and
+# REPORT_MAX_SECONDS is the ceiling the health-check script's timeout is
+# tested against.
+DB_PING_TIMEOUT_SECONDS = 3.0
+EXTRA_READING_TIMEOUT_SECONDS = 1.0
+REPORT_MAX_SECONDS = DB_PING_TIMEOUT_SECONDS + 2 * EXTRA_READING_TIMEOUT_SECONDS
+
+
+async def check_database(timeout: float = DB_PING_TIMEOUT_SECONDS) -> tuple[bool, str]:
     """Not "is the client object constructed" — an actual round trip.
     `ping` is the standard trivial admin command for exactly this."""
     from app.db.mongo import client
@@ -128,7 +148,10 @@ async def report() -> dict:
             return fallback
 
     try:
-        active_calls = await active_call_count()
+        # Bounded: the Redis client has no socket timeout, so a hung Redis
+        # would otherwise hold /health open indefinitely. None reads as
+        # "unknown", which the Watchdog already treats as calls in progress.
+        active_calls = await asyncio.wait_for(active_call_count(), timeout=EXTRA_READING_TIMEOUT_SECONDS)
     except Exception as e:
         logger.warning(f"[HEALTH] could not read the active call count: {type(e).__name__}: {e}")
         active_calls = None
@@ -141,7 +164,9 @@ async def report() -> dict:
     # negotiates WebRTC signalling for live calls, on a fixed schedule.
     # Awaited here rather than inside _safe() below, which is sync by design.
     try:
-        breaker_snapshot = await breaker.snapshot_async()
+        # Bounded too: it queues for a thread-pool slot, which can be slow
+        # when many calls are busy.
+        breaker_snapshot = await asyncio.wait_for(breaker.snapshot_async(), timeout=EXTRA_READING_TIMEOUT_SECONDS)
     except Exception as e:
         logger.warning(f"[HEALTH] could not report circuit breakers: {type(e).__name__}: {e}")
         breaker_snapshot = {}

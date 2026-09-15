@@ -11,6 +11,13 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
+    # Task 4.7, found 2026-09-15. Runs Docker's small init process as pid 1,
+    # with the app as its child. The health check (scripts/healthcheck.py)
+    # force-stops a frozen app so this restart policy can bring it back, and
+    # the kernel ignores a kill sent to a namespace's pid 1 from inside it:
+    # without this, a frozen app could never be stopped. Also reaps exited
+    # call-worker processes, which pid 1 is responsible for.
+    init: true
     env_file:
       - .env
     environment:
