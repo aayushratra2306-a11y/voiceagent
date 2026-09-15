@@ -30,6 +30,8 @@ mechanism rather than a written file.
 
 import asyncio
 import multiprocessing as mp
+import os
+import threading
 
 from loguru import logger
 from pipecat.transports.smallwebrtc.connection import IceServer, SmallWebRTCConnection
@@ -46,6 +48,48 @@ from app.core.config import settings
 # forever quietly eating memory — the manual's own explicit warning about
 # this exact failure mode. 1 hour is generously above any real call length.
 MAX_CALL_LIFETIME_SECONDS = 60 * 60
+
+# Found 2026-09-15: a finished call's process never exited, so the API never
+# gave back its capacity slot (it frees one only when the call's process has
+# exited: connect.py reap_dead_calls_loop). Each call held one of the places
+# for the 65-minute TTL, and six calls within an hour made the next caller
+# hear "at capacity" with nobody on the phone. The cause is fixed in
+# _handle_call below; this is the safety net for causes not yet known: once
+# a call has ended, its process may take this long to shut down on its own
+# (saving the last transcript turn, closing connections) before it is ended
+# regardless.
+SHUTDOWN_GRACE_SECONDS = 30
+
+
+def _arm_exit_after_call(grace: float | None = None) -> bool:
+    """Guarantees a finished call's process ends. Returns whether it armed.
+
+    os._exit, deliberately: whatever is blocking a normal exit (a thread stuck
+    in a blocking read, for instance) is exactly what a normal exit would wait
+    for. A daemon timer, so a process that exits normally first is not held
+    up by it. Never in a top-level process (the API server as deployed, with
+    `uvicorn --workers 1`, or a test runner), where os._exit would end far
+    more than one call. The check is "this process has a multiprocessing
+    parent", which is true of every call worker; it would also be true of an
+    API process started by `uvicorn --reload` or `--workers >1`, which is
+    harmless only because nothing but a call worker ever calls _handle_call.
+    """
+    if mp.parent_process() is None:
+        return False
+    grace = SHUTDOWN_GRACE_SECONDS if grace is None else grace
+    pid = mp.current_process().pid
+
+    def _exit() -> None:
+        logger.warning(
+            f"[CALL WORKER pid={pid}] still running {grace:.0f}s after its call ended: something is "
+            f"blocking a normal exit. Exiting now so the call's capacity slot is released."
+        )
+        os._exit(0)
+
+    timer = threading.Timer(grace, _exit)
+    timer.daemon = True
+    timer.start()
+    return True
 
 
 def _build_ice_servers() -> list[IceServer]:
@@ -304,3 +348,20 @@ async def _handle_call(
         )
     finally:
         ice_forward_task.cancel()
+        # The fix for the process that never exited (see
+        # SHUTDOWN_GRACE_SECONDS). _forward_ice above, and voice_pipeline's
+        # _forward_payments, each wait for the next message with
+        # run_in_executor(None, queue.get). Cancelling the task does not stop
+        # the THREAD blocked in queue.get(), and when this process's
+        # asyncio.run finishes it shuts down the default executor, which in
+        # Python 3.11 waits for those threads with no timeout. Both forwarders
+        # already stop on a None message; nothing ever sent one. A queue can
+        # be written from either end, so this process sends its own readers
+        # the stop message.
+        for queue in (ice_queue, payment_queue):
+            if queue is not None:
+                try:
+                    queue.put(None)
+                except Exception:
+                    logger.exception("[CALL WORKER] could not release a queue reader")
+        _arm_exit_after_call()
