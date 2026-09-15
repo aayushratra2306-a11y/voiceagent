@@ -131,7 +131,7 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
     <span class="eyebrow">Voice Agent — Interview Prep</span>
     <h1>Live Testing War Stories</h1>
     <p class="lede">
-      Twenty-one real defects, every one found only after code that already passed its own test suite
+      Twenty-three real defects, every one found only after code that already passed its own test suite
       was put in front of a real phone call. Each entry follows the same shape: what the symptom
       looked like, the actual mechanism underneath it, the fix, and — the part worth saying out
       loud in an interview — <b style="color:var(--text)">why the tests didn't catch it.</b>
@@ -139,10 +139,10 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
   </header>
 
   <div class="stat-row">
-    <div class="stat"><span class="n">21</span><span class="l">defects found live</span></div>
+    <div class="stat"><span class="n">23</span><span class="l">defects found live</span></div>
     <div class="stat"><span class="n">0</span><span class="l">caught by CI first</span></div>
-    <div class="stat"><span class="n">16</span><span class="l">were silent — no crash, no error</span></div>
-    <div class="stat"><span class="n">711</span><span class="l">tests in the suite — none caught these</span></div>
+    <div class="stat"><span class="n">18</span><span class="l">were silent — no crash, no error</span></div>
+    <div class="stat"><span class="n">733</span><span class="l">tests in the suite — none caught these</span></div>
   </div>
 
   <div class="section-head">
@@ -1059,6 +1059,97 @@ footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); colo
       </div>
     </div>
     <span class="commit">commit <code>5f03d05</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>A frozen server would have stayed frozen: Docker only labels it unhealthy</h3>
+      <span class="tag">TASK 4.7 · 2026-09-15</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">None yet &mdash; found by reading a claim instead of trusting it. The health module said a
+          fully frozen app is covered by the container&rsquo;s health check and <i>&ldquo;Docker restarting on
+          repeated failure&rdquo;</i>. The in-process watchdog cannot cover it: it runs on the same event loop
+          that froze.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Plain Docker, without Swarm or Kubernetes, <b>never restarts a container for being
+          unhealthy</b>; it only sets a label. Proven on the production server with two throwaway containers
+          under <code>restart: unless-stopped</code>: one alive but failing its health check stayed up with
+          <code>restarts=0</code> after 40 seconds; one that exited was restarted four times. A frozen API
+          would have refused every new call until a person noticed.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">The watchdog&rsquo;s tests were right about the watchdog. The part that failed was an
+          assumption about the platform, written down as fact in a docstring &mdash; and no test can check what
+          Docker does with a label. And the first version of the fix had its own trap, caught by independent
+          review: its 3-second timeout equalled the database ping&rsquo;s, so during a database outage a
+          <b>working</b> app&rsquo;s honest &ldquo;503&rdquo; would have arrived as &ldquo;no answer&rdquo; and
+          got it killed with calls in progress.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">The health check acts: after 3 checks in a row with <b>no answer at all</b> it
+          force-stops the app process and the restart policy brings it back; any answer, even a 503, is left to
+          the watchdog, which waits for live calls. <code>init: true</code>, because the kernel ignores a kill
+          sent to a namespace&rsquo;s pid 1 from inside it. The health page&rsquo;s context readings are each
+          bounded so it always answers within 5 seconds, and the check waits 8. Proven live by freezing the app
+          with <code>kill -STOP</code>.</div>
+        <div class="evidence"><span class="bad-line">14:38:29  app frozen on purpose</span>
+<span class="ok-line">14:40:19  [HEALTHCHECK] No answer ... for 3 checks in a row: the app is frozen. Force-stopping pid 7</span>
+<span class="ok-line">14:40:40  restarts 0 → 1, healthy again</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>ec21cf8</code></span>
+  </article>
+
+  <article class="incident">
+    <div class="incident-head">
+      <h3>Every call kept its place for an hour after the caller hung up</h3>
+      <span class="tag">TASK 4.5 / 4.7 · 2026-09-15</span>
+    </div>
+    <div class="anatomy">
+      <div class="beat symptom">
+        <span class="label">Symptom</span>
+        <div class="body">Checking the server after the freeze test, the call counter showed <b>one call in
+          progress</b> with nobody on the phone. The slot was stamped to the second a test call had started an
+          hour earlier. A fresh test call confirmed it: two minutes after hanging up, its place was still held
+          and the program that ran it was still running, idle.</div>
+      </div>
+      <div class="beat cause">
+        <span class="label">Root cause</span>
+        <div class="body">Each call runs in its own process, and the API frees a call&rsquo;s place only when that
+          process exits. It never did. Two helpers waited for the next message with
+          <code>run_in_executor(None, queue.get)</code>; ending the call cancelled the tasks, but <b>a thread
+          blocked in <code>queue.get()</code> cannot be cancelled</b>, and on the way out Python 3.11&rsquo;s
+          <code>asyncio.run</code> waits for its executor threads with no timeout. Both helpers were written to
+          stop on a <code>None</code> message that nothing ever sent. With a 65-minute expiry on each place,
+          <b>six calls within an hour would have filled every place</b> &mdash; the next caller refused as
+          &ldquo;at capacity&rdquo; with nobody on the line &mdash; and each finished call kept its memory.</div>
+      </div>
+      <div class="beat gap">
+        <span class="label">Why tests missed it</span>
+        <div class="body">Every capacity test released slots by calling the release function, and the reaper was
+          tested with processes that simply ended. Nothing ran a real call to its end in a real process and
+          checked that the process actually exited. Frequent deploys hid it too: each one recreated the
+          container and killed the lingering workers along with everything else.</div>
+      </div>
+      <div class="beat fix">
+        <span class="label">Fix</span>
+        <div class="body">When a call ends, the worker sends its own two helpers the stop message, so the process
+          exits normally; and a 30-second safety net ends a finished call&rsquo;s process that something unknown
+          still holds open, armed only in a spawned worker. Reproduced first in a standalone script (alive 8
+          seconds after its call, gone the moment one message arrived), then proved with the real call-ending
+          code in spawned processes, then on a live call.</div>
+        <div class="evidence"><span class="bad-line">before: hung up 15:24:42 → 2 min later: worker alive, slot still held</span>
+<span class="ok-line">after:  16:07:26.857 Client disconnected → 16:07:33.452 [CALL] Cleaned up finished call</span></div>
+      </div>
+    </div>
+    <span class="commit">commit <code>aacd631</code></span>
   </article>
 
   <footer>
