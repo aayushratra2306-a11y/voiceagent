@@ -1,3 +1,4 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found]){display:none!important}</style></head><body>
 <title>Toolbox by Task</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 
@@ -898,6 +899,43 @@ footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
 
 <section>
   <div class="sec-head">
+    <span class="eyebrow">Part five · in progress</span>
+    <h2>Phase 4 — Scale Foundations</h2>
+    <p class="sec-desc">Nine tasks for handling many calls at once rather than one at a time. Only 4.9 has a block here so far &mdash; the rest of Phase 4 (4.1&ndash;4.8: rate limiting, the call queue, local providers as a paid-provider fallback, mongo pool sizing, the concurrency cap, pool autoscaling, health checks, and the free load test) is built and live-verified but not yet written up here. This section grows as each is added.</p>
+  </div>
+
+  <div class="tasks">
+
+    <div class="task">
+      <div class="t-head"><span class="tid">4.9</span><h3>Build monitoring dashboards</h3><span class="hrs">3h</span></div>
+      <div class="t-body">
+        <p>A screen showing whether the system is healthy right now &mdash; live calls, warm workers, tripped breakers &mdash; plus rules that fire the moment something is wrong.</p>
+        <div class="cols">
+          <div class="col"><span class="col-h">Plan specified</span><div class="chips">
+            <span class="chip">Grafana</span><span class="chip">Prometheus</span><span class="chip">Langfuse</span></div></div>
+          <div class="col"><span class="col-h">Actually used</span><div class="chips">
+            <span class="chip used">prometheus-client</span><span class="chip used">Self-hosted Prometheus</span>
+            <span class="chip used">Self-hosted Grafana</span><span class="chip used">Provisioned dashboard</span>
+            <span class="chip used">Bearer token auth</span><span class="chip used">localhost-only ports</span></div></div>
+        </div>
+        <dl class="terms">
+          <div class="terms-h">What these are</div>
+          <div class="row"><dt>Prometheus</dt><dd>Pulls a fresh set of numbers from the app every 15 seconds and keeps a history of them &mdash; live calls, warm workers, breaker state. It is the thing that actually collects the data.</dd></div>
+          <div class="row"><dt>Grafana</dt><dd>Draws Prometheus&rsquo;s numbers as an actual readable screen &mdash; graphs, not raw figures. This is the dashboard itself.</dd></div>
+          <div class="row"><dt>prometheus-client</dt><dd>The Python library that turns the app&rsquo;s own internal counters into the page Prometheus reads (<code>/metrics</code>). System-level only &mdash; live calls, warm-pool size, breaker state, database sizing &mdash; deliberately not duplicating task 2.7&rsquo;s Langfuse, which already covers what happens inside one AI call.</dd></div>
+          <div class="row"><dt>Bearer token</dt><dd>A shared secret Prometheus sends with every scrape. <code>/metrics</code> names which customer APIs have tripped a breaker and how many calls are live, so it refuses anyone who does not know the secret.</dd></div>
+          <div class="row"><dt>localhost-only ports</dt><dd>Neither Grafana nor Prometheus is reachable from the internet, on purpose &mdash; reaching them means an SSH tunnel from your own machine. An unauthenticated Prometheus or a default Grafana password has no business on a public IP.</dd></div>
+          <div class="row"><dt>Alert rules</dt><dd>Conditions worth waking up for &mdash; the backend not answering, a breaker stuck open, the warm pool empty &mdash; checked every 15 seconds and visible in Prometheus&rsquo;s own screen with no extra setup.</dd></div>
+        </dl>
+        <div class="note"><span><b>Proven live, not just installed:</b> confirmed the scrape itself is genuinely working (Prometheus reports the target &ldquo;up&rdquo;, zero errors), that the app&rsquo;s own numbers are flowing (active calls, warm-pool size, capacity limit), that the alert rules are loaded and evaluating, and that Grafana&rsquo;s dashboard is wired to the right data source. One thing deliberately left for later: the rules <em>detect</em> a problem but are not yet wired to <em>notify</em> anyone (Slack, email) &mdash; that needs Alertmanager and a destination only the account holder can choose, which the manual itself calls the easy part to skip and the one that matters most.</span></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
     <span class="eyebrow">Reference</span>
     <h2>What is actually installed</h2>
     <p class="sec-desc">The pinned versions, in case you are asked exactly what the project runs on.</p>
@@ -922,6 +960,7 @@ footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
         <tr><td class="m">slowapi</td><td>0.1.10</td><td>Rate limiting</td></tr>
         <tr><td class="m">sentry-sdk</td><td>2.68.1</td><td>Error tracking</td></tr>
         <tr><td class="m">pypdf</td><td>6.16.2</td><td>Reading uploaded PDFs</td></tr>
+        <tr><td class="m">prometheus_client</td><td>0.26.0</td><td>Exports the app's own counters for Prometheus</td></tr>
         <tr><td class="m">react / vite</td><td>19 / 8</td><td>The web interface</td></tr>
       </tbody>
     </table>
@@ -929,8 +968,8 @@ footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
 </section>
 
 <footer>
-  Voice agent · 28 of 68 tasks complete · Phases 1, 2 and 3 built, deployed and verified on live calls<br>
-  Updated 7 September 2026 · next update when the first Phase 4 task is built and tested
+  Voice agent · 29 of 68 tasks written up here (28 from Phases 1&ndash;3, plus 4.9) · Phase 4&rsquo;s other 8 tasks are built and live-verified, not yet written up<br>
+  Updated 16 September 2026 · next update when another Phase 4 task is added to this document
 </footer>
 
 </div>
@@ -1214,3 +1253,5 @@ footer{margin-top:56px; padding-top:18px; border-top:1px solid var(--line);
   }
 })();
 </script>
+
+</body></html>
