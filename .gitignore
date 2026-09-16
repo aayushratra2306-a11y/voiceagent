@@ -2,6 +2,16 @@
 .env
 *.env
 deploy/.env
+# Copies left behind by in-place edits (`sed -i.save`, editors, hand-made
+# "let me keep the old one" copies). FOUND 2026-09-16: two of these were
+# sitting in deploy/ holding eleven credentials each, matching none of the
+# rules above — `.env.save` does not end in `.env`, so `*.env` never caught
+# it. One `git add -A` would have committed every key in them. Real env
+# backups belong OUTSIDE the checkout (~/env-backups on the server).
+.env.save*
+*.env.save*
+.env.bak*
+.env.old*
 
 # Python
 __pycache__/
