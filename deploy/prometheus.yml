@@ -16,6 +16,15 @@ global:
 rule_files:
   - /etc/prometheus/alerts.yml
 
+# Where a firing rule is sent. Without this block Prometheus evaluates every
+# rule perfectly, shows it firing on its own page, and tells nobody — which
+# looks exactly like a working alerting setup until the first real outage.
+# See alertmanager.yml for what happens to an alert once it arrives there.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: voiceagent
     metrics_path: /metrics

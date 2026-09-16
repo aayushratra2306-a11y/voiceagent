@@ -52,6 +52,24 @@ services:
     ports:
       - "127.0.0.1:9090:9090"   # localhost only — see the warning above
 
+  # Task 4.9's last step. Prometheus decides an alert is firing; this decides
+  # who hears about it. Kept as its own service rather than folded into
+  # Prometheus because it is the piece that holds a live mail credential, and
+  # because silencing an alert during an incident should not mean restarting
+  # the thing that is recording the incident.
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # The SMTP password, on this machine only — never in git. Create it
+      # before bringing this up; see the note at the top of alertmanager.yml.
+      # Alertmanager will not start without it.
+      - ./smtp_password:/etc/alertmanager/smtp_password:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"   # localhost only — see the warning above
+
   grafana:
     image: grafana/grafana:11.3.1
     restart: unless-stopped
@@ -84,3 +102,4 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
+  alertmanager_data:

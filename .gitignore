@@ -22,6 +22,12 @@ backend/local_models/
 # worth sharing via git.
 backend/.state/
 
+# Task 4.9 — the SMTP password Alertmanager sends alert mail with. A live
+# credential to a real mailbox, kept in a file rather than in
+# deploy/alertmanager.yml (which is committed) or deploy/.env (which would
+# force the call-serving backend to recreate every time it changed).
+deploy/smtp_password
+
 # Node
 node_modules/
 dist/

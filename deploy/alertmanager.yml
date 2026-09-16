@@ -1,0 +1,68 @@
+# Task 4.9, last step — getting an alert to a person.
+#
+# The rules in alerts.yml have fired since the day they were written. They
+# fired into Prometheus's own page at http://localhost:9090/alerts, which
+# nobody sits watching, so in practice they went nowhere. This file is the
+# difference between "the system noticed" and "somebody found out".
+#
+# THE PASSWORD IS NOT IN THIS FILE. It is a real credential to a real
+# mailbox and this file is in git. Alertmanager reads it from a separate
+# file instead (auth_password_file, below), which lives only on the server
+# and is in .gitignore. Create it there with:
+#
+#     printf '%s' 'your-16-char-app-password' > ~/voiceagent/deploy/smtp_password
+#     chmod 600 ~/voiceagent/deploy/smtp_password
+#
+# Gmail needs an APP PASSWORD, not the account password: Google Account →
+# Security → 2-Step Verification → App passwords. Sixteen characters, shown
+# once. A normal password is rejected by Gmail's SMTP outright.
+
+global:
+  smtp_smarthost: smtp.gmail.com:587
+  smtp_from: aayush.ratra2306@gmail.com
+  smtp_require_tls: true
+
+route:
+  receiver: email
+  # Group everything about one alert name together, so a breaker that trips
+  # on three providers at once is one email rather than three.
+  group_by: [alertname]
+  # Wait this long for other alerts of the same group before sending, so a
+  # burst arriving together does not become a burst of separate emails.
+  group_wait: 30s
+  # Then at most one email per group per this interval while it is still
+  # firing. A flapping problem cannot fill an inbox.
+  group_interval: 5m
+  # And a reminder only every four hours for something still broken. Short
+  # enough not to be forgotten, long enough not to become noise you filter.
+  repeat_interval: 4h
+
+receivers:
+  - name: email
+    email_configs:
+      - to: aayush.ratra2306@gmail.com
+        auth_username: aayush.ratra2306@gmail.com
+        # See the note at the top: the secret lives on the server only.
+        auth_password_file: /etc/alertmanager/smtp_password
+        # The recovery mail matters as much as the alert. Without it you are
+        # left checking by hand whether something fixed itself, which is how
+        # people start ignoring the alerts that are real.
+        send_resolved: true
+        headers:
+          Subject: >-
+            [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} — voice agent
+        # Plain text rather than Alertmanager's HTML default: this is read on
+        # a phone, at speed, by someone who wants to know what broke and what
+        # to look at, not to admire a table.
+        text: >-
+          {{ range .Alerts }}{{ .Annotations.summary }}
+
+          {{ .Annotations.description }}
+
+          Severity: {{ .Labels.severity }}
+          Started:  {{ .StartsAt }}
+
+          {{ end }}
+          Dashboards (SSH tunnel first — neither is public):
+            Grafana     http://localhost:3000
+            Prometheus  http://localhost:9090/alerts
