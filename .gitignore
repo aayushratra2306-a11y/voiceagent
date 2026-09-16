@@ -38,6 +38,12 @@ backend/.state/
 # force the call-serving backend to recreate every time it changed).
 deploy/smtp_password
 
+# Task 4.8 — the account list scripts/loadtest_accounts.py writes for a run.
+# Disposable by design (the accounts are deleted after the test), and it
+# names real accounts that existed in production while it ran. The results
+# CSV is kept; this is not.
+backend/loadtest_accounts*.json
+
 # Node
 node_modules/
 dist/
