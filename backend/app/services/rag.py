@@ -342,6 +342,11 @@ async def rewrite_query(raw_query: str) -> str:
     API error, empty/junk response) — a slightly messier search beats
     breaking the pipeline over a cleanup step.
     """
+    # Task 4.8 — the rewrite runs before every single search, on Groq's free
+    # plan, which is the exact rate limit a load test must not spend.
+    if settings.standin_providers:
+        return raw_query
+
     client = _get_groq()
     if client is None:
         return raw_query
@@ -550,6 +555,13 @@ async def query_context(
     log for 2026-09-13 said only "exceeded 3.5s budget", which left the slow
     step to guesswork.
     """
+    # Task 4.8 — guarded here rather than at the pipeline's two call sites so
+    # that every caller is covered, the per-call warm-up included. A bot with
+    # no documents still spends an OpenAI embedding and two Pinecone queries
+    # on every turn, which a load test would multiply by every simulated call.
+    if settings.standin_providers:
+        return "", []
+
     started = time.perf_counter()
     timings: dict[str, str] = {}
     # Each request inside a step, timed on its own. Live call 2026-09-14 logged

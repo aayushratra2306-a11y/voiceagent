@@ -197,6 +197,11 @@ async def report() -> dict:
             "breaker store health",
         ),
         "providers": _safe(provider_health.health, {}, "provider fallbacks"),
+        # Task 4.8 — true means this server is NOT answering callers for real:
+        # speech, model and voice are stand-ins and the knowledge base is off.
+        # Reported because every other field looks perfectly healthy while it
+        # is on, so nothing else here would give an operator any warning.
+        "standin_providers": settings.standin_providers,
     }
 
 

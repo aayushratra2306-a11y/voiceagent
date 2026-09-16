@@ -118,6 +118,14 @@ def get_stt_service(language: str = "en"):
     """Task 2.1/2.2 — speech-to-text factory. settings.stt_provider:
     'deepgram' (cloud, default) or 'whisper' (local, free, via faster-whisper).
     """
+    if settings.standin_providers:
+        from app.pipeline import standin_providers
+
+        standin_providers.announce()
+        return standin_providers.StandinSTTService(
+            transcript=standin_providers.STANDIN_TRANSCRIPT
+        )
+
     # Task 4.6 — if Deepgram's breaker is open, this call does not wait to
     # find that out for itself. fallback_for() returns None unless there is
     # a tripped breaker AND a backup that actually works on this machine.
@@ -245,6 +253,11 @@ def get_llm_service(llm_model: str):
     'groq', or 'openai'. llm_model is the bot's own stored OpenAI model name
     (per-bot config, not a global setting) — only used on the OpenAI path.
     """
+    if settings.standin_providers:
+        from app.pipeline import standin_providers
+
+        return standin_providers.StandinLLMService(reply=standin_providers.STANDIN_REPLY)
+
     from app.pipeline.provider_health import LLM_GROQ, fallback_for
 
     provider = settings.llm_provider
@@ -289,6 +302,11 @@ def get_tts_service(voice_id: str, language: str = "en"):
     fully out of their own codebase's license scope; swap to that if this
     project's distribution plans ever need it.
     """
+    if settings.standin_providers:
+        from app.pipeline import standin_providers
+
+        return standin_providers.StandinTTSService()
+
     from app.pipeline.provider_health import TTS_CARTESIA, fallback_for
 
     provider = settings.tts_provider

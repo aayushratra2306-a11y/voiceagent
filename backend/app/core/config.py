@@ -199,6 +199,21 @@ class Settings(BaseSettings):
     # scripts/prefetch_local_models.py to make the backups usable.
     provider_fallback_enabled: bool = True
 
+    # Task 4.8 — rehearsal mode, for the load test. Replaces Deepgram, Groq
+    # and Cartesia with local stand-ins and switches the knowledge base off,
+    # so many simultaneous calls can be run against the real server without
+    # spending a provider request (see app/pipeline/standin_providers.py).
+    #
+    # ONE switch rather than one per provider, deliberately: a half-rehearsal
+    # — stand-in speech recognition but the real Cartesia voice — still costs
+    # money, and the knowledge-base lookup is not one of the three provider
+    # settings but spends OpenAI, Pinecone and Groq on every turn regardless.
+    #
+    # A server left in this mode answers real callers with a tone and a canned
+    # sentence. It says so loudly in the log on every call, and /health reports
+    # it, because that is the only warning anyone gets.
+    standin_providers: bool = False
+
     # Task 4.9 — the Prometheus scrape endpoint at /metrics. Reports counts
     # and timings only: no transcripts, no caller data, no secrets.
     metrics_enabled: bool = True

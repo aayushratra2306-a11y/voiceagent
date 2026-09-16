@@ -32,6 +32,7 @@ from app.models.payment import PaymentSession
 from app.models.revoked_token import RevokedRefreshToken
 from app.models.user import User
 from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
+from app.pipeline import standin_providers
 from app.services.webhooks import webhook_delivery_loop
 
 # Task 2.7 — error tracking. A blank DSN (the default — see config.py) makes
@@ -46,6 +47,14 @@ sentry_sdk.init(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Task 4.8 — said once at startup as well as on every call. A server left
+    # in rehearsal mode answers real callers with a tone and a canned
+    # sentence while every health check still reports it as perfectly well
+    # (see health.py), so the moment right after a restart — when somebody is
+    # most likely to be reading the log — is worth spending a line on.
+    if settings.standin_providers:
+        standin_providers.announce()
+
     await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
                    RevokedRefreshToken, BotTool, PaymentSession,
                    WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
