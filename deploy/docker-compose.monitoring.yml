@@ -64,7 +64,9 @@ services:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       # The SMTP password, on this machine only — never in git. Create it
       # before bringing this up; see the note at the top of alertmanager.yml.
-      # Alertmanager will not start without it.
+      # It must be owned by uid 65534 (the `nobody` this container runs as),
+      # NOT by your own account — otherwise the container starts fine and
+      # every alert silently fails to send.
       - ./smtp_password:/etc/alertmanager/smtp_password:ro
       - alertmanager_data:/alertmanager
     ports:

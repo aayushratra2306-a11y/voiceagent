@@ -8,14 +8,47 @@
 # THE PASSWORD IS NOT IN THIS FILE. It is a real credential to a real
 # mailbox and this file is in git. Alertmanager reads it from a separate
 # file instead (auth_password_file, below), which lives only on the server
-# and is in .gitignore. Create it there with:
+# and is in .gitignore. Create it there, at the server's shell, with:
 #
-#     printf '%s' 'your-16-char-app-password' > ~/voiceagent/deploy/smtp_password
-#     chmod 600 ~/voiceagent/deploy/smtp_password
+#     read -s -p "App password: " P \
+#       && printf '%s' "${P// /}" > ~/voiceagent/deploy/smtp_password \
+#       && sudo chown 65534:65534 ~/voiceagent/deploy/smtp_password \
+#       && sudo chmod 600 ~/voiceagent/deploy/smtp_password \
+#       && unset P
+#
+# Each part earns its place, and the two easiest to skip are the two that
+# actually broke first:
+#
+#   read -s        keeps the password out of your shell history and off the
+#                  screen. Never pass it as an argument.
+#   ${P// /}       strips the spaces Google displays it with. Pasted
+#                  verbatim, those spaces travel into the file and Gmail
+#                  rejects the login.
+#   chown 65534    FOUND THE HARD WAY, 2026-09-16: the container runs as
+#                  `nobody` (uid 65534), not as you. Mode 600 owned by your
+#                  own account means Alertmanager cannot read its own
+#                  password, and the symptom is not a startup failure — the
+#                  container starts happily and every alert fails at send
+#                  time with "permission denied", which nobody sees, because
+#                  the thing that was supposed to tell you is the thing that
+#                  is broken. Only a real test alert surfaces it.
 #
 # Gmail needs an APP PASSWORD, not the account password: Google Account →
 # Security → 2-Step Verification → App passwords. Sixteen characters, shown
 # once. A normal password is rejected by Gmail's SMTP outright.
+#
+# To prove the whole chain works — routing, SMTP, delivery — without waiting
+# for something to actually break, post a synthetic alert and watch for
+# "Notify success" in `docker logs deploy-alertmanager-1`:
+#
+#     docker compose ... exec -T alertmanager wget -qO- \
+#       --post-data='[{"labels":{"alertname":"AlertRoutingTest"},
+#                      "annotations":{"summary":"test"}}]' \
+#       --header='Content-Type: application/json' \
+#       http://localhost:9093/api/v2/alerts </dev/null
+#
+# (The `</dev/null` matters: `docker compose exec -T` otherwise swallows the
+# rest of a piped script from stdin.)
 
 global:
   smtp_smarthost: smtp.gmail.com:587
