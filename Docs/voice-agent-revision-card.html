@@ -1,0 +1,301 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found]){display:none!important}</style></head><body>
+<title>Voice Agent Revision Card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+:root{
+  --ink:#14161B;
+  --paper:#F6F6F3;
+  --surface:#FFFFFF;
+  --surface-2:#EFEFEA;
+  --rule:#D9D9D2;
+  --rule-soft:#E7E7E1;
+  --text:#1B1E24;
+  --text-2:#4A4F58;
+  --text-3:#787E88;
+  --signal:#B4661A;
+  --signal-soft:#F2E3D2;
+  --teal:#26635F;
+  --teal-soft:#DFEAE8;
+  --crit:#96302B;
+  --crit-soft:#F5DFDD;
+  --display:'Archivo','Helvetica Neue',Arial,sans-serif;
+  --body:'Source Serif 4',Georgia,'Times New Roman',serif;
+  --mono:'JetBrains Mono','SF Mono',Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ink:#F2F2EE;--paper:#101216;--surface:#171A20;--surface-2:#1D2128;
+    --rule:#2C313A;--rule-soft:#242931;--text:#E6E7E3;--text-2:#A8AEB8;--text-3:#767D88;
+    --signal:#E09A4A;--signal-soft:#332616;--teal:#6FB5AE;--teal-soft:#172E2C;
+    --crit:#E08079;--crit-soft:#33201E;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#F2F2EE;--paper:#101216;--surface:#171A20;--surface-2:#1D2128;
+  --rule:#2C313A;--rule-soft:#242931;--text:#E6E7E3;--text-2:#A8AEB8;--text-3:#767D88;
+  --signal:#E09A4A;--signal-soft:#332616;--teal:#6FB5AE;--teal-soft:#172E2C;
+  --crit:#E08079;--crit-soft:#33201E;
+}
+
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px 64px}
+
+header{border-bottom:2px solid var(--ink);padding:44px 0 20px;margin-bottom:36px}
+.kicker{font-family:var(--display);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--signal);margin-bottom:14px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(30px,5vw,46px);line-height:1.03;letter-spacing:-.02em;margin:0 0 12px;color:var(--ink);text-wrap:balance}
+.sub{color:var(--text-2);font-size:17px;margin:0;max-width:58ch}
+
+h2{font-family:var(--display);font-weight:700;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid var(--rule)}
+section{margin-bottom:40px}
+
+/* one-liner rows */
+.rows{display:grid;gap:1px;background:var(--rule-soft);border:1px solid var(--rule-soft)}
+.row{background:var(--surface);display:grid;grid-template-columns:56px minmax(0,1fr);gap:14px;padding:10px 14px;align-items:baseline}
+@media (max-width:620px){.row{grid-template-columns:1fr;gap:3px}}
+.row .k{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--signal)}
+.row .v{line-height:1.45}
+.row .v b{font-weight:600;color:var(--ink)}
+
+/* two-col cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--rule-soft);padding:16px 18px}
+.card h3{font-family:var(--display);font-weight:600;font-size:15px;margin:0 0 7px;color:var(--ink);line-height:1.3}
+.card p{margin:0;font-size:14px;line-height:1.5;color:var(--text-2)}
+.card p + p{margin-top:7px}
+.card .mech{color:var(--crit);font-weight:600}
+
+/* numbers */
+.nums{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:var(--rule-soft);border:1px solid var(--rule-soft)}
+.num{background:var(--surface);padding:14px 16px}
+.num .n{font-family:var(--display);font-weight:700;font-size:24px;color:var(--ink);line-height:1;font-variant-numeric:tabular-nums}
+.num .l{font-family:var(--display);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-top:5px;line-height:1.3}
+
+/* headline block */
+.headline{background:var(--ink);color:var(--paper);padding:22px 26px;margin-bottom:36px}
+.headline p{margin:0;font-size:18px;line-height:1.5;max-width:66ch}
+.headline b{color:var(--signal)}
+
+/* choice list */
+.choice{display:grid;grid-template-columns:minmax(0,1fr);gap:1px;background:var(--rule-soft);border:1px solid var(--rule-soft)}
+.ch{background:var(--surface);padding:10px 14px;display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:baseline}
+@media (max-width:620px){.ch{grid-template-columns:1fr;gap:3px}}
+.ch .pick{font-family:var(--display);font-weight:600;font-size:14px;color:var(--teal)}
+.ch .why{font-size:14px;color:var(--text-2);line-height:1.45}
+
+code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);padding:1px 4px;border-radius:2px}
+
+.five{counter-reset:f;display:grid;gap:10px}
+.f{background:var(--signal-soft);border-left:3px solid var(--signal);padding:13px 16px;counter-increment:f;position:relative}
+.f::before{content:counter(f);font-family:var(--display);font-weight:700;font-size:11px;color:var(--signal);display:block;margin-bottom:3px}
+.f p{margin:0;font-size:15px;line-height:1.5;max-width:70ch}
+.f b{color:var(--ink)}
+
+footer{border-top:2px solid var(--ink);padding-top:18px;font-family:var(--display);font-size:12px;color:var(--text-3)}
+
+@media print{
+  body{background:#fff;font-size:10pt}
+  .headline{background:#eee;color:#000}
+  .headline b{color:#000}
+  section{page-break-inside:avoid;margin-bottom:22px}
+  .card,.row,.f{page-break-inside:avoid}
+  h1{font-size:24pt}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="kicker">Revision Card · Phases 1 &ndash; 4</div>
+  <h1>Voice Agent Revision Card</h1>
+  <p class="sub">Ten minutes before the interview. One line per topic — the full reasoning lives in the Build Log.</p>
+</header>
+
+<div class="headline">
+  <p>A real-time voice agent that answers from a customer's own documents, does real work through configurable tools, and holds up under load. WebRTC in, Pipecat orchestrating speech&nbsp;→&nbsp;retrieval&nbsp;→&nbsp;language&nbsp;→&nbsp;speech, and <b>every call in its own operating-system process</b> so one crash cannot take the server down.</p>
+</div>
+
+<section>
+  <h2>Numbers worth knowing</h2>
+  <div class="nums">
+    <div class="num"><div class="n">37</div><div class="l">Tasks shipped</div></div>
+    <div class="num"><div class="n">28/32</div><div class="l">Retrieval baseline</div></div>
+    <div class="num"><div class="n">0.9047</div><div class="l">Rerank score, correct chunk</div></div>
+    <div class="num"><div class="n">0.4s</div><div class="l">LLM first token</div></div>
+    <div class="num"><div class="n">$0.0005</div><div class="l">LLM cost per call</div></div>
+    <div class="num"><div class="n">6</div><div class="l">Max concurrent calls, tested</div></div>
+    <div class="num"><div class="n">$0</div><div class="l">Cost of the load test</div></div>
+    <div class="num"><div class="n">15min</div><div class="l">Access token life</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Phase 1 — Foundation quality</h2>
+  <div class="rows">
+    <div class="row"><span class="k">1.1</span><span class="v"><b>Turn detection.</b> Silero VAD hears speech; a separate Smart Turn ONNX model decides whether a pause means finished. VAD alone only hears silence.</span></div>
+    <div class="row"><span class="k">1.2</span><span class="v"><b>Groq for the LLM.</b> LPU inference, not GPU. ~0.4s to first token — in speech, a second of delay is a silence people talk into.</span></div>
+    <div class="row"><span class="k">1.3</span><span class="v"><b>Function calling.</b> JSON schemas, not prompt-parsed pseudo-tools. Makes intent structured data instead of text to guess at.</span></div>
+    <div class="row"><span class="k">1.4</span><span class="v"><b>Two real tools.</b> Order lookup and appointment booking, proving the framework end to end.</span></div>
+    <div class="row"><span class="k">1.5</span><span class="v"><b>Transcripts.</b> A pipeline processor, not logging bolted onto services — sees frames both directions, provider-independent.</span></div>
+    <div class="row"><span class="k">1.6</span><span class="v"><b>Query rewriting.</b> A small fast model cleans the spoken transcript before embedding. Side effect: "page fifty" → "page 50", which deleted a hand-written number parser.</span></div>
+    <div class="row"><span class="k">1.7</span><span class="v"><b>Reranking.</b> Cross-encoder over 20 candidates. Raw cosine clusters 0.60–0.65 for good <em>and</em> bad; reranked spreads 0.0–0.9. Spread is what makes a threshold possible.</span></div>
+    <div class="row"><span class="k">1.8</span><span class="v"><b>Hybrid search.</b> Sparse keyword index alongside dense. They fail in different directions — reranking after the merge means the two scales never need reconciling.</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Phase 2 — Swappable architecture</h2>
+  <div class="rows">
+    <div class="row"><span class="k">2.1</span><span class="v"><b>Provider layer.</b> Three factory functions. Deliberately thin — pipecat services already share base classes. Reused in Phase 4.8 to swap in free load-test stand-ins.</span></div>
+    <div class="row"><span class="k">2.2</span><span class="v"><b>Local speech.</b> faster-whisper + Piper. Piper beat Kyutai Pocket TTS because <em>Pocket has no Hindi voices</em>. Both became the circuit-breaker fallback in 4.6.</span></div>
+    <div class="row"><span class="k">2.3</span><span class="v"><b>Self-hosted calls.</b> GCP VM + Caddy + coturn. PaaS can't forward the UDP range TURN needs — the requirement dictates the infrastructure.</span></div>
+    <div class="row"><span class="k">2.4</span><span class="v"><b>Process per call.</b> Crash containment + GIL. Two queues for IPC because the SDP answer must return <em>live</em>, which a config file can't do.</span></div>
+    <div class="row"><span class="k">2.5</span><span class="v"><b>Auth hardening.</b> 15-min access, rotating httpOnly refresh, rate limit per-user then per-IP. Rotation makes theft <em>detectable</em>.</span></div>
+    <div class="row"><span class="k">2.6</span><span class="v"><b>Ownership + injection.</b> One reusable dependency. Returns <em>404 not 403</em> so IDs can't be probed — a 403 is an information leak.</span></div>
+    <div class="row"><span class="k">2.7</span><span class="v"><b>Monitoring.</b> Sentry ×2 (separate projects), Langfuse via plain OTLP — per-call cost. Phase 4.9 adds a second, non-overlapping system-level layer.</span></div>
+    <div class="row"><span class="k">2.8</span><span class="v"><b>Retrieval tests.</b> 32 questions, 28 baseline, guard asserts a <em>margin</em> of 24 — a test that chases natural variance gets disabled.</span></div>
+    <div class="row"><span class="k">2.9</span><span class="v"><b>CI + protection.</b> 5 jobs; 3 required. Retrieval excluded (paid calls), dependency audit excluded (continue-on-error, always green, protects nothing).</span></div>
+    <div class="row"><span class="k">2.10</span><span class="v"><b>Source citations.</b> Over the WebRTC data channel; PDFs in GridFS so a citation opens at its page. Empty list renders as "general knowledge", not as missing data.</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Phase 3 — Tasks and multi-tasking</h2>
+  <div class="rows">
+    <div class="row"><span class="k">3.1</span><span class="v"><b>Tool plug-ins.</b> Tools became database rows, not code. A generic HTTP tool with 4 auth modes covers most customer APIs with configuration alone.</span></div>
+    <div class="row"><span class="k">3.2</span><span class="v"><b>Parallel tools.</b> Pipecat already runs them concurrently — no <code>asyncio.gather</code> needed. What was missing was per-tool timing visibility.</span></div>
+    <div class="row"><span class="k">3.3</span><span class="v"><b>Background jobs.</b> Slow tools run async; the bot keeps talking and announces the result when it lands. In-flight jobs are never cancelled on hangup.</span></div>
+    <div class="row"><span class="k">3.4</span><span class="v"><b>Saga rollback.</b> Undo scoped to one caller <em>request</em>, not one model "batch" — because Groq's model splits multi-step asks into separate batches, proven live.</span></div>
+    <div class="row"><span class="k">3.5</span><span class="v"><b>Booking template.</b> The slot's own MongoDB <code>_id</code> is the lock — closes the double-booking race rather than narrowing it. UTC storage, spoken zone names.</span></div>
+    <div class="row"><span class="k">3.6</span><span class="v"><b>Lookup template.</b> Dotted-path field mapping + call-scoped cache. A 301 redirect once read as "not found" — now followed under the same SSRF allowlist.</span></div>
+    <div class="row"><span class="k">3.7</span><span class="v"><b>Payment links.</b> Sending is configuration through 3.1's tool; only the inbound HMAC-verified webhook is bespoke code. Never takes card numbers by voice.</span></div>
+    <div class="row"><span class="k">3.8</span><span class="v"><b>Webhooks.</b> MongoDB outbox, not Redis — survives a restart, one fewer service. Signed outbound, mirroring 3.7's inbound check exactly.</span></div>
+    <div class="row"><span class="k">3.9</span><span class="v"><b>Bot templates.</b> Plain code, not database seed data — ships and reviews like a feature. Applying one sets tools explicitly, not the unconfigured fallback.</span></div>
+    <div class="row"><span class="k">3.10</span><span class="v"><b>Human approval.</b> Held, never rolled back — nothing to undo if it never ran. Shipped complete and still failed live: nobody could tell one was waiting until a badge was added.</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Phase 4 — Scale foundations</h2>
+  <div class="rows">
+    <div class="row"><span class="k">4.1</span><span class="v"><b>Rate limiting.</b> Follows an optional <code>REDIS_URL</code>; stays in-memory until a second API replica actually exists. Not paid for today.</span></div>
+    <div class="row"><span class="k">4.2</span><span class="v"><b>Call queue.</b> Real Redis Streams mechanism, built and tested, <em>deliberately not wired in</em> — <code>/connect</code> is synchronous, a queue only pays off with multi-machine workers.</span></div>
+    <div class="row"><span class="k">4.3</span><span class="v"><b>Worker autoscale.</b> Grows on demand, shrinks after 4 quiet ticks. Found live: a still-starting worker looked like a full pool — 22s wait, zero autoscale signal — fixed by counting it as demand.</span></div>
+    <div class="row"><span class="k">4.4</span><span class="v"><b>DB pool sizing.</b> Sized from the real worst case, verified against production Atlas: 18/500 normal, 88 worst case.</span></div>
+    <div class="row"><span class="k">4.5</span><span class="v"><b>Concurrency cap.</b> Named slots in a Redis sorted set, not a bare counter — a bare counter would permanently burn capacity on every restart, since nothing releases it.</span></div>
+    <div class="row"><span class="k">4.6</span><span class="v"><b>Circuit breakers.</b> Trip to a local backup, but only if it's actually installed. Proven live: held Cartesia's breaker open 3 minutes, a real call spoke in Piper's voice.</span></div>
+    <div class="row"><span class="k">4.7</span><span class="v"><b>Health + restarts.</b> Two layers — plain Docker never restarts on an unhealthy label alone, proven directly on the server. A frozen loop can't watch itself.</span></div>
+    <div class="row"><span class="k">4.8</span><span class="v"><b>Free load test.</b> The same provider factories swap in local stand-ins for zero-cost testing. Found the real ceiling: not memory, the warm pool's cold-start under a simultaneous burst.</span></div>
+    <div class="row"><span class="k">4.9</span><span class="v"><b>Monitoring.</b> Self-hosted, localhost-only, email alerts. A test alert found the alerting itself silently broken — wrong file owner, permission denied, container reported healthy throughout.</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Bugs — the mechanism in one line</h2>
+  <div class="cards">
+    <div class="card">
+      <h3>fork vs spawn</h3>
+      <p><span class="mech">Linux forks, Windows spawns.</span> A forked child inherited an already-connected DB client bound to a dead event loop, so every write failed on the server only.</p>
+      <p>Sequel: the regression test for it was <em>itself</em> forking, and failed in CI months later.</p>
+    </div>
+    <div class="card">
+      <h3>Config that swallowed settings</h3>
+      <p><span class="mech">Accepted unknown fields silently.</span> Settings on the wrong object did nothing — no error, no warning. Bit four times across the project before it stopped being a one-off.</p>
+    </div>
+    <div class="card">
+      <h3>Unreachable TURN relay</h3>
+      <p><span class="mech">coturn allocated relay sockets on Docker bridges.</span> The browser got a candidate that looked correct, sent audio, and packets landed where nothing listened. Nothing logged an error.</p>
+    </div>
+    <div class="card">
+      <h3>The data channel nobody opened</h3>
+      <p><span class="mech">The server only listens; it never creates one.</span> After 10s it permanently disables the channel and discards every message. The browser had to call <code>createDataChannel()</code> before the offer.</p>
+    </div>
+    <div class="card">
+      <h3>A CI check that could never pass</h3>
+      <p><span class="mech">Demanded 32/32; baseline is 28.</span> Failed on every run since written. A check that can't pass teaches you that red is normal.</p>
+    </div>
+    <div class="card">
+      <h3>10GB of GPU libraries, no GPU</h3>
+      <p><span class="mech">pip resolves torch to the CUDA build on Linux.</span> Pinned by <code>pip freeze</code> on Windows, needed by nothing — <code>Required-by</code> was empty.</p>
+    </div>
+    <div class="card">
+      <h3>Monitoring pinned to a version that couldn't</h3>
+      <p><span class="mech">OTLP ingestion only exists from v3.</span> The config said v2. Labelled "unverified" — but it was checkable from docs the whole time.</p>
+    </div>
+    <div class="card">
+      <h3>The tempting insecure fix — twice</h3>
+      <p><span class="mech">CI couldn't reach Atlas.</span> Opening it to <code>0.0.0.0/0</code> would work instantly and expose production. Gave CI its own container instead — and that exact mistake happened for real later, from a local test run pointed at production by accident. The DB login is now permanently restricted so it can't drop a database at all.</p>
+    </div>
+    <div class="card">
+      <h3>Deploy said "Running", changed nothing</h3>
+      <p><span class="mech">Bringing a container up compares only its definition.</span> An edited env file or mounted config isn't re-read if nothing else changed. "Running" looks identical to "Recreated" unless you read closely.</p>
+    </div>
+    <div class="card">
+      <h3>Three days of fixes never reached the server</h3>
+      <p><span class="mech">The build's own type-check failed on new test files.</span> <code>git pull && npm run build</code> never installed the new dev dependency, so <code>&amp;&amp;</code> stopped and the old bundle kept serving as if nothing happened.</p>
+    </div>
+    <div class="card">
+      <h3>One symptom, three stacked search failures</h3>
+      <p><span class="mech">Wrong fragment searched, quota exhausted twice, then a 17s synchronous freeze.</span> Each fix looked like it did nothing until the third one actually landed — "still broken" didn't mean "wrong fix".</p>
+    </div>
+    <div class="card">
+      <h3>The caller's own words were never saved</h3>
+      <p><span class="mech">Pipecat's own aggregator consumes the frame the recorder was reading.</span> Every transcript had the bot's reply and an empty string for the caller, since the feature shipped.</p>
+    </div>
+    <div class="card">
+      <h3>A backup voice never actually on the server</h3>
+      <p><span class="mech">The download script had never been run there.</span> The breaker tripped correctly and had nowhere to fail over to — proven only by running the real outage live, not by reading the code.</p>
+    </div>
+    <div class="card">
+      <h3>Alerting that was silently broken</h3>
+      <p><span class="mech">Wrong file owner on the SMTP credential.</span> The container started healthy, loaded its config, and every alert failed with "permission denied" — found only by sending a real test alert, not by reading the config.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Choices — pick and reason</h2>
+  <div class="choice">
+    <div class="ch"><span class="pick">Groq</span><span class="why">LPU inference; ~0.4s first token. Self-hosting needs a GPU box the project doesn't have</span></div>
+    <div class="ch"><span class="pick">Piper</span><span class="why">Kyutai Pocket TTS has no Hindi voices — a capability gap beats a quality comparison</span></div>
+    <div class="ch"><span class="pick">faster-whisper</span><span class="why">CTranslate2, not PyTorch — avoids a 10GB dependency entirely</span></div>
+    <div class="ch"><span class="pick">GCP VM</span><span class="why">PaaS terminates HTTP and won't forward the UDP range TURN requires</span></div>
+    <div class="ch"><span class="pick">Process per call</span><span class="why">GIL makes threads pointless for audio; a thread can't contain a native crash</span></div>
+    <div class="ch"><span class="pick">mp.Queue</span><span class="why">The SDP answer must come back live — a config file can't hand something back</span></div>
+    <div class="ch"><span class="pick">Langfuse Cloud</span><span class="why">Phoenix can't parse <code>gen_ai.*</code>; self-hosted v3 wants 16GB against a 4GB VM</span></div>
+    <div class="ch"><span class="pick">EU region</span><span class="why">Export is async so latency is irrelevant — GDPR is the better answer to "where's our data"</span></div>
+    <div class="ch"><span class="pick">CI container</span><span class="why">Never widen production database access to make a test pass</span></div>
+    <div class="ch"><span class="pick">GridFS</span><span class="why">16MB document cap; local disk is invisible across workers and gone on deploy</span></div>
+    <div class="ch"><span class="pick">404 not 403</span><span class="why">Identical responses mean IDs can't be probed to learn which are real</span></div>
+    <div class="ch"><span class="pick">Margin, not baseline</span><span class="why">Retrieval varies day to day; a brittle test gets switched off within a week</span></div>
+    <div class="ch"><span class="pick">MongoDB outbox</span><span class="why">One fewer service than a Redis queue; survives a restart the same way</span></div>
+    <div class="ch"><span class="pick">Slot as the lock</span><span class="why">A unique database key closes a booking race outright; checking first only narrows it</span></div>
+    <div class="ch"><span class="pick">Queue built, not wired</span><span class="why">/connect is a synchronous handshake; a queue pays off only with multi-machine workers</span></div>
+    <div class="ch"><span class="pick">Named capacity slots</span><span class="why">A bare counter can't be released after a restart kills the call that held it</span></div>
+    <div class="ch"><span class="pick">Free load-test stand-ins</span><span class="why">Real provider traffic hits Groq's free-tier limit around 2 callers — far below the real ceiling</span></div>
+    <div class="ch"><span class="pick">Two-layer restarts</span><span class="why">Plain Docker never restarts on an unhealthy label alone — proven directly on the server</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>If you remember only five things</h2>
+  <div class="five">
+    <div class="f"><p><b>Every call is its own OS process.</b> Crash containment and GIL. It shapes the deployment, the tests, and several of the bugs — including one four phases later, in the same worker's own exit path.</p></div>
+    <div class="f"><p><b>Reranking, with the measurement.</b> The correct chunk wasn't in the raw top five. Cosine clusters 0.60–0.65 for good and bad alike; reranked spreads 0.0–0.9, and that spread is what makes a threshold work.</p></div>
+    <div class="f"><p><b>"Still broken" doesn't mean "wrong fix".</b> The page-50 search bug and the wrong-time bug each took three independent, stacked faults before they actually cleared — each fix was correct and each one looked like it had failed.</p></div>
+    <div class="f"><p><b>Proving beats reading the code.</b> A written claim that Docker restarts an unhealthy container was false on the real platform. A circuit breaker with a fallback that was never actually installed tripped correctly and failed over to nothing. Both found only by testing the real thing, not the documentation of it.</p></div>
+    <div class="f"><p><b>Vendor decisions made cheap to reverse.</b> Plain OTLP and a thin provider layer mean switching is config, not a rewrite — and that same layer later made a zero-cost load test possible with no changes to the real call path.</p></div>
+  </div>
+</section>
+
+<footer>
+  Voice Agent Revision Card · companion to the Build Log · 16 September 2026
+</footer>
+
+</div>
+
+</body></html>

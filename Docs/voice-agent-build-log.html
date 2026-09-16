@@ -1,0 +1,838 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found]){display:none!important}</style></head><body>
+<title>Voice Agent Build Log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+:root{
+  --ink:#14161B;
+  --paper:#F6F6F3;
+  --surface:#FFFFFF;
+  --surface-2:#EFEFEA;
+  --rule:#D9D9D2;
+  --rule-soft:#E7E7E1;
+  --text:#1B1E24;
+  --text-2:#4A4F58;
+  --text-3:#787E88;
+  --signal:#B4661A;
+  --signal-soft:#F2E3D2;
+  --teal:#26635F;
+  --teal-soft:#DFEAE8;
+  --crit:#96302B;
+  --crit-soft:#F5DFDD;
+  --display:'Archivo','Helvetica Neue',Arial,sans-serif;
+  --body:'Source Serif 4',Georgia,'Times New Roman',serif;
+  --mono:'JetBrains Mono','SF Mono',Consolas,monospace;
+  --measure:68ch;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ink:#F2F2EE;
+    --paper:#101216;
+    --surface:#171A20;
+    --surface-2:#1D2128;
+    --rule:#2C313A;
+    --rule-soft:#242931;
+    --text:#E6E7E3;
+    --text-2:#A8AEB8;
+    --text-3:#767D88;
+    --signal:#E09A4A;
+    --signal-soft:#332616;
+    --teal:#6FB5AE;
+    --teal-soft:#172E2C;
+    --crit:#E08079;
+    --crit-soft:#33201E;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#F2F2EE;
+  --paper:#101216;
+  --surface:#171A20;
+  --surface-2:#1D2128;
+  --rule:#2C313A;
+  --rule-soft:#242931;
+  --text:#E6E7E3;
+  --text-2:#A8AEB8;
+  --text-3:#767D88;
+  --signal:#E09A4A;
+  --signal-soft:#332616;
+  --teal:#6FB5AE;
+  --teal-soft:#172E2C;
+  --crit:#E08079;
+  --crit-soft:#33201E;
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--paper);
+  color:var(--text);
+  font-family:var(--body);
+  font-size:17px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:56px;align-items:start}
+@media (max-width:1000px){.layout{grid-template-columns:1fr;gap:0}}
+
+/* ---- masthead ---- */
+.masthead{border-bottom:2px solid var(--ink);padding:56px 0 26px;margin-bottom:44px}
+.kicker{
+  font-family:var(--display);font-size:11px;font-weight:600;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--signal);margin-bottom:18px;
+}
+h1{
+  font-family:var(--display);font-weight:700;font-size:clamp(38px,6vw,62px);
+  line-height:1.02;letter-spacing:-.022em;margin:0 0 18px;text-wrap:balance;color:var(--ink);
+}
+.standfirst{font-size:20px;line-height:1.5;color:var(--text-2);max-width:60ch;margin:0}
+.meta-row{
+  display:flex;flex-wrap:wrap;gap:26px;margin-top:28px;
+  font-family:var(--display);font-size:12px;letter-spacing:.04em;color:var(--text-3);
+}
+.meta-row b{color:var(--text);font-weight:600}
+
+/* ---- contents rail ---- */
+.rail{position:sticky;top:24px;font-family:var(--display);font-size:13px}
+@media (max-width:1000px){
+  .rail{position:static;margin-bottom:44px;padding-bottom:28px;border-bottom:1px solid var(--rule)}
+}
+.rail h2{
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);
+  margin:0 0 14px;font-weight:600;
+}
+.rail a{
+  display:block;padding:5px 0;color:var(--text-2);text-decoration:none;
+  border-left:2px solid transparent;padding-left:11px;margin-left:-11px;line-height:1.35;
+}
+.rail a:hover{color:var(--signal);border-left-color:var(--signal)}
+.rail a:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+.rail .sub{font-size:12px;color:var(--text-3);padding-left:22px}
+
+/* ---- sections ---- */
+section{margin-bottom:72px;scroll-margin-top:20px}
+h2.sec{
+  font-family:var(--display);font-weight:700;font-size:13px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink);margin:0 0 6px;
+}
+.sec-note{color:var(--text-3);font-size:15px;margin:0 0 28px;padding-bottom:18px;border-bottom:1px solid var(--rule);max-width:var(--measure)}
+h3{
+  font-family:var(--display);font-weight:600;font-size:26px;letter-spacing:-.012em;
+  line-height:1.2;margin:0 0 4px;color:var(--ink);text-wrap:balance;
+}
+p{max-width:var(--measure);margin:0 0 16px}
+a{color:var(--signal)}
+
+/* ---- task block ---- */
+.task{
+  background:var(--surface);border:1px solid var(--rule-soft);
+  padding:26px 28px;margin-bottom:20px;
+}
+.task-head{display:flex;align-items:baseline;gap:14px;margin-bottom:16px;flex-wrap:wrap}
+.tid{
+  font-family:var(--mono);font-size:13px;font-weight:600;color:var(--signal);
+  background:var(--signal-soft);padding:3px 9px;white-space:nowrap;
+}
+.qa{margin:0 0 14px;max-width:var(--measure)}
+.qa:last-child{margin-bottom:0}
+.qa-label{
+  font-family:var(--display);font-size:10px;font-weight:600;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--text-3);display:block;margin-bottom:3px;
+}
+.qa p{margin:0 0 8px}
+.qa p:last-child{margin-bottom:0}
+
+/* ---- case file (bugs) ---- */
+.case{
+  background:var(--surface);border:1px solid var(--rule-soft);
+  border-left:3px solid var(--crit);padding:26px 28px;margin-bottom:20px;
+}
+.case h3{font-size:22px}
+.case-tag{
+  font-family:var(--display);font-size:10px;font-weight:600;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--crit);background:var(--crit-soft);
+  padding:3px 9px;white-space:nowrap;
+}
+
+/* ---- code ---- */
+code{font-family:var(--mono);font-size:.87em;background:var(--surface-2);padding:1px 5px;border-radius:2px}
+pre{
+  font-family:var(--mono);font-size:13px;line-height:1.6;background:var(--ink);color:var(--paper);
+  padding:16px 18px;overflow-x:auto;margin:0 0 16px;max-width:var(--measure);
+}
+pre code{background:none;padding:0;color:inherit;font-size:13px}
+
+/* ---- tables ---- */
+.tbl-wrap{overflow-x:auto;margin:0 0 20px;border:1px solid var(--rule-soft)}
+table{border-collapse:collapse;width:100%;font-size:15px;background:var(--surface)}
+th{
+  font-family:var(--display);font-size:10px;font-weight:600;letter-spacing:.11em;
+  text-transform:uppercase;text-align:left;padding:11px 14px;color:var(--text-3);
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+td{padding:11px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:top;line-height:1.45}
+tr:last-child td{border-bottom:none}
+.pick{color:var(--teal);font-weight:600}
+.no{color:var(--text-3)}
+
+/* ---- callout ---- */
+.note{
+  background:var(--teal-soft);border-left:3px solid var(--teal);
+  padding:16px 20px;margin:0 0 20px;max-width:var(--measure);font-size:16px;
+}
+.note strong{color:var(--teal)}
+.note p:last-child{margin-bottom:0}
+
+/* ---- interview Q ---- */
+.iq{border-top:1px solid var(--rule-soft);padding:20px 0;max-width:var(--measure)}
+.iq:first-of-type{border-top:none}
+.iq h4{
+  font-family:var(--display);font-weight:600;font-size:17px;margin:0 0 10px;
+  color:var(--ink);line-height:1.35;
+}
+.iq h4::before{content:"Q  ";color:var(--signal);font-family:var(--mono);font-size:14px}
+
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--rule-soft);border:1px solid var(--rule-soft);margin-bottom:28px}
+.stat{background:var(--surface);padding:16px 18px}
+.stat .n{font-family:var(--display);font-weight:700;font-size:27px;color:var(--ink);line-height:1;font-variant-numeric:tabular-nums}
+.stat .l{font-family:var(--display);font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--text-3);margin-top:6px}
+
+footer{border-top:2px solid var(--ink);padding:26px 0 60px;font-family:var(--display);font-size:13px;color:var(--text-3)}
+
+@media print{
+  body{background:#fff;font-size:11pt}
+  .rail{display:none}
+  .layout{grid-template-columns:1fr}
+  section{page-break-inside:auto;margin-bottom:32px}
+  .task,.case{page-break-inside:avoid;border:1px solid #ccc}
+  pre{background:#f4f4f4;color:#000;border:1px solid #ddd}
+  h1{font-size:30pt}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="kicker">Interview Preparation · Phases 1 &ndash; 4</div>
+  <h1>Voice Agent Build Log</h1>
+  <p class="standfirst">Every decision in this build, with the reasoning behind it — what problem it solved, how it works, what else was on the table, and why this option won.</p>
+  <div class="meta-row">
+    <span><b>37</b> tasks completed</span>
+    <span><b>90+</b> commits</span>
+    <span><b>~11,000</b> lines</span>
+    <span><b>2026-09-16</b></span>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="rail">
+    <h2>Contents</h2>
+    <a href="#how">How to use this</a>
+    <a href="#stack">The stack</a>
+    <a href="#p1">Phase 1 — Foundation</a>
+    <a href="#p2">Phase 2 — Architecture</a>
+    <a href="#p3">Phase 3 — Tasks</a>
+    <a href="#p4">Phase 4 — Scale</a>
+    <a href="#bugs">Bugs, root-caused</a>
+    <a href="#choices">Tool decisions</a>
+    <a href="#questions">Likely questions</a>
+  </nav>
+
+  <main>
+
+  <!-- ============ HOW TO USE ============ -->
+  <section id="how">
+    <h2 class="sec">How to use this</h2>
+    <p class="sec-note">Read once end to end; revisit the case files before an interview.</p>
+
+    <p>Every task below answers the same four questions, because those are the four an interviewer actually asks: <strong>why did you do it</strong>, <strong>how does it work</strong>, <strong>what else could you have used</strong>, and <strong>why this one</strong>.</p>
+
+    <p>The strongest section is <a href="#bugs">Bugs, root-caused</a>. Anyone can list tools they used. Explaining how you found a fault that only appears on Linux, or a check that could never pass, demonstrates that you actually built the thing. Spend your preparation time there.</p>
+
+    <div class="note">
+      <p><strong>A note on honesty.</strong> Where something is incomplete or was rejected, this document says so. "We chose Langfuse Cloud because self-hosting v3 needs 16&nbsp;GB and our VM has 4" is a far better answer than pretending the decision was free. Interviewers probe for the trade-off; having it ready is the point.</p>
+    </div>
+  </section>
+
+  <!-- ============ STACK ============ -->
+  <section id="stack">
+    <h2 class="sec">The stack</h2>
+    <p class="sec-note">What runs, and what each piece is responsible for.</p>
+
+    <div class="stat-grid">
+      <div class="stat"><div class="n">37</div><div class="l">Tasks shipped</div></div>
+      <div class="stat"><div class="n">790+</div><div class="l">Tests passing</div></div>
+      <div class="stat"><div class="n">28/32</div><div class="l">RAG baseline</div></div>
+      <div class="stat"><div class="n">5</div><div class="l">CI jobs green</div></div>
+    </div>
+
+    <div class="tbl-wrap"><table>
+      <tr><th>Layer</th><th>Choice</th><th>Role</th></tr>
+      <tr><td>Orchestration</td><td>Pipecat 1.7</td><td>Frame-based pipeline joining every audio stage</td></tr>
+      <tr><td>Transport</td><td>WebRTC (SmallWebRTC)</td><td>Real-time audio, browser to server</td></tr>
+      <tr><td>Speech in</td><td>Deepgram <span class="no">/ faster-whisper</span></td><td>Cloud default, local fallback</td></tr>
+      <tr><td>Language</td><td>Groq <code>gpt-oss-120b</code></td><td>Conversation; LPU inference for latency</td></tr>
+      <tr><td>Speech out</td><td>Cartesia <span class="no">/ Piper</span></td><td>Cloud default, local fallback</td></tr>
+      <tr><td>Retrieval</td><td>Pinecone, dense + sparse</td><td>Hybrid search over uploaded PDFs</td></tr>
+      <tr><td>Reranking</td><td>bge-reranker-v2-m3</td><td>Cross-encoder over a widened candidate pool</td></tr>
+      <tr><td>API</td><td>FastAPI + Beanie</td><td>Async HTTP, MongoDB ODM</td></tr>
+      <tr><td>Store</td><td>MongoDB Atlas + GridFS</td><td>Records, and original PDFs for citations</td></tr>
+      <tr><td>Frontend</td><td>React 19 + Vite 8 + Tailwind</td><td>Dashboard and the live call page</td></tr>
+      <tr><td>Host</td><td>GCP e2-medium, Docker Compose</td><td>Backend, Caddy (TLS), coturn (TURN)</td></tr>
+      <tr><td>Monitoring</td><td>Sentry ×2, Langfuse Cloud, Prometheus + Grafana + Alertmanager (self-hosted)</td><td>Crashes; per-call cost and latency; system health and email alerts</td></tr>
+      <tr><td>Resilience</td><td>Circuit breakers (SQLite-backed)</td><td>Provider outages fail over to local models; per-host tool breakers</td></tr>
+      <tr><td>Concurrency</td><td>Redis-backed capacity + warm worker pool</td><td>Caps simultaneous calls, autoscales idle workers, survives a Redis blink</td></tr>
+    </table></div>
+
+    <p><strong>The one architectural fact worth leading with:</strong> every call runs in its own operating-system process, not as a coroutine in a shared server. That single decision shapes the deployment, the tests, and several of the bugs below — including one four phases later, when the worker still wasn't exiting cleanly after the call ended.</p>
+  </section>
+
+  <!-- ============ PHASE 1 ============ -->
+  <section id="p1">
+    <h2 class="sec">Phase 1 — Foundation quality</h2>
+    <p class="sec-note">Eight tasks making the conversation feel like a conversation, and the document search actually find things.</p>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">1.1</span><h3>Smart turn detection and interruptions</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>A bot that talks over you, or waits three seconds after you stop, is unusable regardless of how good its answers are. Turn-taking <em>is</em> the product in voice.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Silero VAD detects speech energy; a separate Smart Turn v3 ONNX model decides whether a pause means "finished" or "still thinking". VAD alone can't tell those apart — it only hears silence.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>Fixed silence timeout (simplest, always wrong for someone who pauses mid-sentence); VAD only; a cloud turn-detection service (latency and cost per call).</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>The Smart Turn model runs locally on CPU via ONNX — no network hop in the most latency-sensitive path in the system. It ships inside pipecat, so there was no model to host.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">1.2</span><h3>Move the language model to Groq</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>In text chat, a second of latency is invisible. In speech it is a silence the caller notices and starts talking into.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p><code>GroqLLMService</code> running <code>openai/gpt-oss-120b</code>, with <code>reasoning_effort=low</code> to stop the model thinking longer than the conversation can tolerate.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>OpenAI GPT-4o (kept as fallback), Anthropic, self-hosted Llama on a GPU.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Groq runs on LPUs rather than GPUs and returns first tokens markedly faster at comparable quality. Measured time-to-first-byte in production sits around <strong>0.39–0.44&nbsp;s</strong>. Self-hosting would have meant a GPU instance the project doesn't have and doesn't need.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">1.3–1.4</span><h3>Function calling, and two real tools</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>A bot that can only talk is a demo. A bot that can look up an order or book an appointment is a product.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Tools are declared as JSON schemas and registered with the LLM service; pipecat auto-registers the handlers. Three exist: <code>get_current_datetime</code>, <code>get_order_status</code>, <code>book_appointment</code>.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>Prompt-engineered pseudo-tools parsed out of the reply text — brittle, and fails silently when the model phrases things differently.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Native function calling makes the model's intent structured data rather than text to be guessed at. Phase 3 turns this into a configuration-driven plug-in system, which only works because the foundation is structured.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">1.5</span><h3>Save conversation transcripts</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Without transcripts you cannot debug a complaint, measure quality, or show a customer what their bot said.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A <code>TranscriptRecorder</code> frame processor sits in the pipeline and writes a <code>ConversationTurn</code> per exchange, carrying per-stage timings — time to first token, time to speech.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Implemented as a pipeline processor rather than logging bolted onto the service classes, so it sees frames flowing in both directions and stays independent of which provider is in use.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">1.6</span><h3>Rewrite spoken questions before searching</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>People speak in false starts. <em>"Um, can you tell me, uh, what's on page fifty?"</em> embeds badly — the filler words carry as much vector weight as the real question.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A small fast model (<code>gpt-oss-20b</code>, deliberately not the conversational one) rewrites the transcript into a clean search query before it is embedded. It falls back to the raw query on any failure.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>It sits directly in the latency path of every lookup, so model size matters more than model quality here. It also <strong>replaced a hand-written number-word parser</strong>: the rewriter turns "page fifty" into "page 50" as a side effect, so the page-extraction regex now only handles digits. A whole class of parsing code deleted.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">1.7</span><h3>Rerank the search results</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>This is the most quantified decision in the build. For the query <em>"what avoids mistakes when using claude code"</em>, the genuinely correct chunk — page 40 — <strong>did not appear in the raw top five at all.</strong></p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Retrieve a wide pool of 20 candidates on raw vector similarity, then pass query and candidates together to a cross-encoder (<code>bge-reranker-v2-m3</code>, hosted by Pinecone) which reads them as a pair and scores real relevance. Keep what clears the threshold.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>The measurement tells the whole story. Raw cosine scores cluster tightly — <strong>0.60 to 0.65 for good and irrelevant matches alike</strong> — so no threshold can separate them. Reranked scores spread out: 0.0 for genuinely unrelated, 0.4–0.9 for real matches. The correct page 40 chunk ranked first at <strong>0.9047</strong>, with clear air to the next at 0.7582. Spread is what makes a threshold possible at all.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">1.8</span><h3>Add keyword search alongside meaning search</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Dense vectors are excellent at meaning and poor at exact tokens. Ask for a specific product code or an unusual proper noun and semantic search drifts to things that are merely <em>about</em> the same topic.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A second sparse (keyword) Pinecone index runs alongside the dense one. Results merge, deduplicate by id, and the combined pool goes to the reranker.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>The two methods fail in different directions, which is exactly when combining helps. Reranking after the merge means the two score scales never have to be reconciled — the cross-encoder rescores everything on one scale of its own.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ PHASE 2 ============ -->
+  <section id="p2">
+    <h2 class="sec">Phase 2 — Swappable architecture</h2>
+    <p class="sec-note">Ten tasks turning a working prototype into something that can be deployed, operated, and trusted.</p>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.1</span><h3>The provider switching layer</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Being locked to one speech vendor is a commercial risk as much as a technical one — the day their pricing changes or a customer demands on-premise, you rewrite the pipeline.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Three factory functions in <code>providers.py</code>. The pipeline calls those instead of constructing services directly, so switching cloud to local is one settings value.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Deliberately <em>thin</em>. Pipecat's services already share base classes, so this is plumbing, not a new abstraction. The failure mode to name in an interview: provider-specific special cases creeping into the <em>callers</em> rather than the factories — that is exactly how this kind of layer quietly stops working. It paid for itself again in Phase 4.8: a fourth branch in the same three factories swaps in local stand-in services for a free load test, at no cost to the real code paths.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.2</span><h3>Local speech recognition and voice</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Two reasons, and the second is the one that mattered. Data residency for enterprise customers — and being blocked mid-development when a free tier runs out, which happened with Cartesia credits.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>faster-whisper for recognition, Piper for speech. Both verified with real audio, including Hindi.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>OpenAI Whisper (reference implementation, needs PyTorch); Kyutai Pocket TTS; Coqui.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p><strong>Piper beat Kyutai Pocket TTS on one disqualifying fact: Pocket has no Hindi voices, and this bot is bilingual.</strong> A capability gap beats a quality comparison. faster-whisper runs on CTranslate2 rather than PyTorch — which later turned out to matter a great deal (see the torch case file). Both became load-bearing again in Phase 4.6, as the circuit breaker's local fallback when the cloud providers trip.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.3</span><h3>Self-host the call connection server</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>WebRTC needs UDP and a TURN relay. Roughly one connection in five — symmetric NAT, corporate firewalls, many mobile carriers — cannot connect peer-to-peer at all and must be relayed.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A GCP e2-medium running Docker Compose: the backend, Caddy for automatic HTTPS, and coturn as the TURN relay. The browser fetches ICE configuration from the server rather than hardcoding it.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>Render, Railway, Vercel; a managed TURN service such as Twilio.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Platform-as-a-service hosts terminate HTTP and do not forward arbitrary UDP port ranges, so TURN cannot run on them at all. This is a case where the requirement dictates the infrastructure. <strong>Deploying found three real bugs that no amount of local testing would have.</strong></p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.4</span><h3>One operating-system process per call</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Every call ran as an asyncio task in one uvicorn process. A native fault in onnxruntime or CTranslate2 — both in the local speech path — would take down the server and <em>every other live call</em> with it. Simultaneous calls also competed for one GIL.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Each call gets its own <code>multiprocessing.Process</code>, spawned at connect and torn down at hangup, with two queues for inter-process communication: one carrying the WebRTC answer back to the parent, one carrying trickled ICE candidates forward. Phase 4 added a pre-warmed pool of idle workers that autoscales, so the caller claims one already running rather than waiting for a cold start.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>Passing configuration by environment variable or a config file; threads instead of processes.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Queues rather than a file because the WebRTC handshake needs the SDP answer handed back <em>live</em> — a one-shot file cannot do that. Processes rather than threads because the GIL makes threads pointless for CPU-bound audio work, and a thread cannot contain a native crash. This decision resurfaced twice more in Phase 4: once when a database model wasn't registered inside the worker process (see the case files), and once when a worker's own cleanup threads turned out to block process exit, silently leaking capacity.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.5</span><h3>Harden login security</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>A stolen 60-minute token is valid for 60 minutes and cannot be cancelled. That is not acceptable once real customer conversations are behind it.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Access tokens live 15 minutes. A revocable refresh token sits in an httpOnly cookie and rotates on every use. The frontend refreshes transparently on a 401, with a single in-flight refresh shared across concurrent requests. Rate limiting is per-user where a token exists, per-IP otherwise.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Three details worth being able to defend. <strong>httpOnly</strong> means JavaScript cannot read the refresh token, so an XSS flaw cannot steal it. <strong>Rotation on use</strong> means a stolen token stops working the moment the real user refreshes — theft becomes detectable. <strong>Per-user before per-IP</strong> because IP-only limiting punishes everyone in a shared office along with the one person misbehaving. The revocation list is MongoDB rather than Redis simply because no Redis was deployed; functionally equivalent at this scale.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.6</span><h3>Ownership checks and prompt-injection defence</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>The risk was never that a written check was wrong. It was that a <em>new route would ship without one</em>.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>One reusable FastAPI dependency per owned resource replaces the repeated inline checks. A route either declares it and is safe, or obviously does not. Plus a prompt-injection blocklist and a length cap on bot instructions. Thirteen tests cover cross-user isolation and prompt validation.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>The detail interviewers like: it returns <strong>404, not 403</strong>, for both "does not exist" and "exists but is not yours". Identical responses mean an attacker cannot probe IDs to learn which ones are real. A 403 is an information leak dressed up as good manners.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.7</span><h3>Error tracking and AI monitoring</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>When the bot broke for someone at 2am nobody found out. And with no cost-per-conversation figure, pricing the product later would be guesswork.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Sentry on backend and browser as <em>separate projects</em>. Pipecat already emits OpenTelemetry spans per stage; Langfuse ingests OTLP, so tracing is an exporter and credentials rather than hand-instrumentation. An error-spike monitor fires above 20 errors per hour.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>Self-hosted Langfuse v3; Arize Phoenix; deferring the whole thing.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Two rejections worth explaining, both in the case files below. Self-hosting needs 16&nbsp;GB against a 4&nbsp;GB VM. Phoenix is one container instead of six but <strong>cannot parse the <code>gen_ai.*</code> attributes pipecat emits</strong>, so traces would arrive with no model, tokens or cost. Separate Sentry projects because mixing a browser and a Python service breaks per-platform issue grouping. Phase 4.9 added a second, deliberately non-overlapping monitoring layer on top — see that task for why per-call cost tracing and system-level dashboards are not the same job.</p></div>
+      <div class="qa"><span class="qa-label">The honest gap</span><p>Speech-to-text and text-to-speech bill per audio-second and per character, not tokens, so they arrive under <code>metrics.*</code> and Langfuse records the usage without pricing it. <strong>Language-model cost is exact; the audio legs need their own rates applied.</strong> Real calls measure at $0.0003–$0.0006 each.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.8</span><h3>A test suite for document search</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Search settings were being tuned by feel, which means you genuinely cannot tell whether a change helped or quietly broke something else.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Thirty-two questions with known correct pages, run through the real retrieval path. Baseline 28/32.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>The regression guard asserts a <strong>margin (24/32), not the exact baseline</strong>. Retrieval has genuine day-to-day variance — model updates, index state — and a test that chases every point of natural fluctuation gets disabled within a week. The four known misses are understood: two land on a page adjacent to the right one, two paraphrases score under threshold.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.9</span><h3>Automated testing and branch protection</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Catch a break before it merges, and a leaked key before it reaches a public repository.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Five GitHub Actions jobs — lint, tests, dependency audit, secret scan, retrieval quality. <code>main</code> requires a pull request and three passing checks.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Two deliberate exclusions from the required set. <strong>Retrieval quality is excluded</strong> because it makes real paid API calls and one network hiccup would block an unrelated merge. <strong>Dependency audit is excluded</strong> because it runs with <code>continue-on-error</code>, so it always reports success and would protect nothing. Required approvals are set to zero — with a single developer, requiring one makes <code>main</code> permanently unmergeable.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">2.10</span><h3>Show which document an answer came from</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>"The AI said so" is not something a business customer will accept. Showing the source turns a black box into something auditable.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Retrieval returns citations alongside the text — one entry per document and page, deduplicated, best first. The backend publishes them over the WebRTC data channel. Original PDFs are kept in GridFS so a citation opens at the page it came from.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Three defensible details. Citations are keyed by chunk <em>text</em> internally because the reranker returns documents by text and discards the ids sent to it. The score is deliberately <strong>null on the fallback path</strong> — raw cosine sits on a different scale and showing one beside a reranked score would misrepresent confidence. And an empty source list renders as <em>"General knowledge — not from your documents"</em> rather than as missing data, because being able to see that distinction is most of the feature's value.</p></div>
+      <div class="qa"><span class="qa-label">Storage choice</span><p>GridFS rather than a document field, because MongoDB caps a document at 16&nbsp;MB. GridFS rather than local disk, because the backend runs one process per call inside a container — a file on local disk is invisible to other workers and gone on the next deploy.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ PHASE 3 ============ -->
+  <section id="p3">
+    <h2 class="sec">Phase 3 — Tasks and multi-tasking</h2>
+    <p class="sec-note">Ten tasks turning the bot from something that talks into something that does work. Every task here was verified on a real call, and six of the corrections below came directly from that testing.</p>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.1</span><h3>The tool plug-in system</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Every customer wants different tools. If each one needs code written and deployed, the business never scales past a handful of customers.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A bot's tools became rows in MongoDB (<code>BotTool</code>) rather than Python functions. A generic HTTP tool can call almost any REST API — method, headers, query and body all templated from what the model supplied — with four authentication modes (bearer token, custom header, query parameter, username/password). The <code>FunctionSchema</code> pipecat hands the model is built at call time from the database row, with the handler closure attached to it.</p></div>
+      <div class="qa"><span class="qa-label">Options</span><p>A fixed plugin registry, each integration its own code module and deploy.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>The plan called for a plug-in registry; what actually decides whether a new customer integration is a form or a development project is the generic HTTP tool sitting inside it. A bot with nothing configured falls back to every built-in tool, which matters for the bots nobody has configured yet.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.2</span><h3>Running several tools at once</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>"Book the cab and text me the receipt" run one after another doubles the wait, and in a voice conversation that delay is very noticeable.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>No <code>asyncio.gather</code> was written. Pipecat already runs a turn's tool calls concurrently on its own; the actual gap was visibility — a per-tool timer that logs how long each call took and how many ran together.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Adding a second scheduler on top of pipecat's own would have been more code for the same behaviour, with new failure modes of its own. The genuinely missing piece was being able to see a slow tool <em>by name</em> instead of "the bot felt slow" — and that visibility caught the partial-failure case directly: one call succeeding and one failing in the same turn is the normal case at volume, and the model needs telling explicitly, or it summarises both as done.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.3</span><h3>Slow jobs run in the background</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Some real APIs take five or ten seconds. Silence that long on a phone call is unbearable, and callers hang up.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p><code>asyncio.create_task</code> starts the job; the bot says it is working on it and keeps talking. When the job finishes, an <code>LLMMessagesAppendFrame</code> drops the result into the conversation and asks the model to respond — so the bot phrases the news itself, not a canned sentence. Only tools marked <code>long_running</code> get this treatment.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>A job already in flight is deliberately <strong>not</strong> cancelled when the caller hangs up. Cancelling a request that may already have booked something makes the other system's state genuinely unknowable, so it is allowed to finish and the outcome is logged loudly — that log line is the only record anybody has that it happened.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.4</span><h3>Undoing earlier steps when a later one fails</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>"Book the cab and text me the receipt" is one request. If the receipt fails, the caller should not be left paying for half a job.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A saga: each tool optionally declares how to undo itself. Every completed step in a workflow is recorded as it happens; on failure, the recorded steps are walked backwards, running each undo.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and the correction that mattered</span><p>The unit of work was originally one <em>batch</em> of tool calls issued together in a single model response — and a real call on 5 September proved the model this project runs never issues them that way. Asked to book a slot and send a receipt in one breath, the model called <code>book_slot</code>, read the answer, then called <code>send_receipt</code> 1.5 seconds later as a second, separate batch of one. No batch ever held both the success and the failure, so nothing ever qualified for rollback. Rescoped to accumulate across one <strong>caller request</strong> instead — reset on the frame marking the caller stopped speaking — so it survives however many batches the model happens to split a request into.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.5</span><h3>The booking tool template</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Booking is the single most requested capability across almost every industry. A solid template turns most new customers into configuration rather than development.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Slots live in MongoDB, and the slot's own <code>_id</code> is the lock: two callers told 3&nbsp;PM is free both try to book it, and MongoDB refuses the second insert outright. Times are stored in UTC and converted with <code>zoneinfo</code> for display and speech, which always names the zone — "three PM India time", never a bare "three PM".</p></div>
+      <div class="qa"><span class="qa-label">Why this — and two live corrections</span><p>No external calendar API: the hard part of booking was never storing an event, it was two callers claiming the same slot at the same instant, and the unique-id insert closes that gap completely rather than merely narrowing it. Live testing then found two real gaps: the timezone and hours settings existed in the database with no screen to set them, and opening hours were offered to the caller but never actually enforced against a direct request — a caller could push past the offered times and book 2&nbsp;AM. Both fixed; see the case files.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.6</span><h3>The lookup tool template</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>"Where is my order" is the most common support question there is. A reusable template turns each new customer into a configuration exercise.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Built on 3.1's generic HTTP tool, with dotted-path field mapping (<code>data.order.status</code>) so it can point at whatever shape a customer's API actually returns, plus a call-scoped cache — asking the same thing twice in one call never repeats the request, and it dies with the call so nothing stale can leak into the next one.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and a live correction</span><p>A real GitHub repository that had been renamed answered with an HTTP 301 and an empty body. The tool didn't follow redirects by default, every mapped field came back empty, and the existing "everything is empty" rule — built to catch a 200 with no real content — reported the record as not found. Fixed deliberately <em>not</em> with a blanket <code>follow_redirects=True</code>: each hop is now re-checked against the same SSRF allowlist as the original request, the auth header is dropped the moment a redirect crosses to a different host, and only GET/HEAD are followed, so a redirected POST is refused rather than silently replayed — which could otherwise charge a payment twice.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.7</span><h3>The payment link tool</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Turning a conversation into a collected payment is the clearest return on investment a customer can be shown, and the easiest thing to justify paying for.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Sending the link is configuration through 3.1's generic HTTP tool — no provider-specific code needed there. The only code written is the inbound webhook: HMAC-SHA256 with <code>compare_digest</code> verifies a payment callback actually came from the provider, and a <code>PaymentSession</code> record ties the reference back to the call, recorded whether or not anyone is still listening; announcing it into a live call is best-effort on top.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Razorpay's own account was still behind identity checks at test time, so the live test ran against a stub echoing back whatever it was sent — which turned out to be the stronger test: it let a <em>forged</em> signature be sent, something a real provider can never produce, and confirming that gets rejected is exactly the check that stops a stranger telling a caller their money went through. Never taking card numbers by voice was a fixed rule from the start; the compliance burden of handling card data directly is enormous and entirely avoidable by always sending a link instead.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.8</span><h3>The webhook system</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Customers want events flowing into their own tools without a bespoke integration for each one.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>An outbox in MongoDB, not Redis — the notification is written first and a separate loop sends it, so a process restart mid-send never loses the event. Every outbound request is signed with HMAC-SHA256, the exact mirror of 3.7's inbound check, and retried with increasing delays. Every attempt, successful or not, is kept in a delivery log.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>No Redis: the queue lives in the database that is already running, which is one fewer service to operate, back up and pay for, and it survives a restart the same way a database record does. Signing every webhook is not optional — without a signature, the receiving system cannot tell a real notification from a forged one, and any competent customer will refuse to accept unsigned events at all.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.9</span><h3>Bot starting templates</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>A blank instruction box is intimidating and produces bad bots. Templates dramatically shorten the time from signing up to seeing something impressive.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Plain Python data, not database seed rows — templates are content that ships with the product, not a customer's own data, so they change through a code review rather than a migration. A React picker offers them; applying one also creates the matching tool rows explicitly, one row per named tool.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>The fallback for an unconfigured bot is <em>every</em> built-in tool — and a tutoring bot offered an appointment booker is exactly the irrelevance templates exist to avoid, so applying a template has to set tools explicitly rather than leaving the fallback in place.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">3.10</span><h3>Human approval for high-value actions</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>No company will let an AI approve a large refund unsupervised. Having a gate is what makes them comfortable letting it handle everything below the threshold — which is where the call volume actually is.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A <code>PendingApproval</code> record per tool crossing its configured threshold, held before the action is sent — not undone afterwards, held. Authenticated approve and deny, and a count endpoint feeding an amber badge in the app header, polled every twelve seconds.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and a live correction</span><p>Held, not rolled back, is deliberately stronger than any undo: there is nothing to reverse if the action never ran. The mechanism shipped complete — threshold check, held action, authenticated decision, queue — and still failed its own purpose on a real call: nothing told anyone something was waiting except opening the Approvals page and looking. The whole thing had been designed from what the system must guarantee, never once from the position of a person who has seconds to act while a caller holds the line. Fixed with the badge; amber rather than red, because a waiting decision is a normal request, not a failure.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ PHASE 4 ============ -->
+  <section id="p4">
+    <h2 class="sec">Phase 4 — Scale foundations</h2>
+    <p class="sec-note">Nine tasks for handling many calls at once instead of one at a time, and for finding out — honestly, and at no cost where possible — where the real ceiling actually is.</p>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.1</span><h3>Rate limiting that survives more than one replica</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>An in-memory rate limiter only knows about requests that hit the same process. The moment there is more than one API replica, each one enforces its own separate limit and the real ceiling is never what it claims to be.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>The limiter now follows a <code>REDIS_URL</code> setting: unset, it keeps the exact pre-Phase-4 in-memory behaviour; set, it shares counts through Redis. A self-hosted Redis container exists in the compose file, inert until that variable is actually filled in.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Deliberately optional rather than switched on outright. This deployment is a single VM with one API process, so Redis-backed limiting buys nothing yet and only earns its keep the day a second replica exists. Turning it on today would be paying an operational cost — another service to run, back up and watch — for a problem this deployment does not have.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.2</span><h3>The call queue and worker pool mechanism</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Accepting a call and having capacity to run it are two different things. A queue decouples them, so a spike waits politely on a queue rather than collapsing everything at once.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A real Redis Streams consumer-group mechanism — claim-once semantics, dead-worker recovery via <code>XAUTOCLAIM</code> — built and proven against a fake Redis in tests.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and why it is deliberately not wired in</span><p>The one honest gap in Phase 4, stated plainly rather than glossed over: <code>POST /connect</code> does a <em>synchronous</em> WebRTC handshake — the SDP answer <strong>is</strong> the HTTP response — so a queue only pays off once workers can run on a different machine from the one that accepted the call. That needs either an asynchronous signalling flow (the browser polling for an answer instead of getting one inline, a client-side change) or a second machine to route work to, and this deployment has neither. Wiring the mechanism in now would move four multiprocessing channels and the live-call registry onto Redis for no operational benefit — an architecture decision, not a coding task, deliberately left for the day multi-machine workers are actually needed.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.3</span><h3>The worker pool grows and shrinks with demand</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>A fixed number of warm workers is either wasted memory overnight or a cold-start tax at the worst possible moment. Following real demand avoids both.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>The pool grows on a cold-spawn demand signal if free memory allows, and shrinks by one after four consecutive quiet ticks — a step function, not a sudden collapse. <code>call_worker_pool_min</code>/<code>max</code> bound it.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and a live correction</span><p>The scaling decision itself was a clean, well-tested pure function: given "exhausted", grow. What it was fed was wrong. The only demand signal was the idle-worker <em>list</em> being empty — but a claimed worker is replaced immediately, and the replacement enters the list the moment its process starts, about eight seconds before it can actually take a call. Under a real burst the list is almost never empty, so callers were handed a still-starting worker, sat through the exact cold start the pool exists to prevent, and the autoscaler reported a perfectly healthy pool throughout — measured live at a 22-second wait with zero autoscale signal. Fixed by counting a still-starting claim as demand too, the same as an empty pool.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.4</span><h3>Sizing database connections for the worst case</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Every call-handling process opening its own connections can exhaust the database's connection limit outright, and the failure mode is every call failing at once, not gracefully.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Motor's pool is sized per-process — task 2.4 means one process serves at most one call — from the real worst case: warm pool at its maximum, every slot holding a live call, each opening its own small pool.</p></div>
+      <div class="qa"><span class="qa-label">Why this</span><p>Verified against the real production cluster rather than assumed: 18 of 500 available connections in normal use, 88 in the calculated worst case — comfortable headroom on Atlas's free-tier ceiline without needing to touch it. Read-replica routing exists in the code but stays off until an actual replica is provisioned; reading from a replica that lags behind a very recent write is a genuinely confusing bug to chase, and there is no replica yet to make that trade worthwhile.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.5</span><h3>Capping simultaneous calls</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Without a ceiling, a spike degrades every live call at once. With one, existing calls stay perfect and new ones are refused cleanly instead.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A Redis sorted set of named slots, not a bare counter — checked and claimed atomically before the database lookup in <code>connect()</code>, ahead of any other work a new call would otherwise start. <code>max_concurrent_calls</code> defaults to 6, sized from real load-test numbers.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and why named slots, not a counter</span><p>A bare Redis <code>INCR</code>/<code>DECR</code> has no memory of <em>which</em> calls hold a slot, so a process restart mid-call — exactly what task 4.7's watchdog does on purpose — would have permanently burned that call's capacity with nothing to release it. Named members in a sorted set let a node clear its own leftovers at boot, plus a TTL sweep as a backstop for a node that never comes back at all. The capacity check running <em>before</em> the database lookup was a deliberate, test-encoded decision — reversed once, then reinstated after review, and the trade is recorded rather than hidden: a call over capacity is refused before spending a database round trip on a caller who is going to be turned away regardless.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.6</span><h3>Circuit breakers on external providers</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>A slow provider is worse than a dead one. Without protection, every call waits out the same timeout at once and the whole system freezes together.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A SQLite-backed breaker (shared state across every per-call process, task 2.4's own architecture made this free) wired into two places: the customer-configured HTTP tool caller, per host, and the cloud voice providers via a pipeline observer. A tripped provider breaker switches to the matching local backup from task 2.2 — but only if that backup's model files are actually installed on the machine; downloading several hundred megabytes mid-call would be worse than the outage it's meant to fix.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and a two-layer live correction</span><p>Proven the way the task demands: the provider was broken on purpose, held open for three minutes, and a real call was built on the backup and spoke in its voice with no key changed and no restart. Getting there took two real fixes first. The refusal-guard logic was right and the model files were simply never installed on the server — the download script had never been run there. Installing them revealed a second gap: the speech-recognition backup landed in a machine-learning library's default cache, <em>inside</em> the container's own filesystem, which the very next routine rebuild would have deleted — quietly returning to "not ready" until the next real outage found out. Fixed by pointing that cache into the same persistent volume as the rest of the local models.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.7</span><h3>Health checks and automatic restarts</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Processes get stuck. Without detection, a frozen worker silently stops taking calls and the first sign of it is a complaint.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Two layers, deliberately not one. An in-process watchdog restarts after three <em>consecutive</em> unhealthy readings — and defers while real calls are in progress, bounded so a genuinely wedged process still recovers. Docker's own <code>HEALTHCHECK</code> covers the case the watchdog structurally cannot: a probe forces the app to answer within 5 seconds and the healthcheck itself waits 8; after 3 checks in a row with <strong>no answer at all</strong>, it force-stops the app process (<code>init: true</code> in the compose file, because the kernel ignores a kill sent to a namespace's own pid&nbsp;1) and the restart policy brings it back.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and a live correction</span><p>A written claim that a frozen app was "covered by the container's health check, and Docker restarting on repeated failure" turned out to be false on the actual platform: plain Docker, without Swarm or Kubernetes, <strong>never restarts a container for being unhealthy</strong> — it only sets a label. Proven directly on the production server with two throwaway containers: one alive but failing its check sat at <code>restarts=0</code> after 40 seconds; one that actually exited restarted four times. The first version of the force-stop fix had its own trap, caught by independent review before it shipped: its timeout equalled the database ping's own timeout, so a genuinely working app suffering a real database outage would have answered honestly with a 503 that arrived as "no answer at all" and been killed mid-call. Fixed by bounding every health reading to well under the probe's own window.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.8</span><h3>Load testing the system</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>Capacity you have never tested is capacity you cannot honestly claim. A real number, found before a customer does, is the whole point of the task.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>A real aiortc-based harness that mirrors the frontend's own connect flow — a genuine WebRTC handshake per simulated call, not a synthetic request. It ramps through concurrency steps, measures connect latency, ICE-connected time and time to first <em>audible</em> bot frame, and stops itself the moment a step has a call that fails to connect.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and the free path that made it possible at all</span><p>Real Deepgram/Groq/Cartesia traffic hits Groq's free-tier limit at roughly two simultaneous callers — nowhere near this server's own ceiling. A rehearsal mode (one setting, <code>STANDIN_PROVIDERS</code>) swaps the same three provider factories from task 2.1 to local stand-in services and switches off the knowledge-base lookup, so the exact same harness can run a real concurrency ramp against the real server for zero cost, as many times as needed. The ramp found the real ceiling directly: 1, 2 and 3 simultaneous calls all connected and answered cleanly; at 5, three calls needing a cold-started worker at the same moment — competing for two vCPUs to import the whole pipecat stack — took over a minute, past the point any caller would wait. The server's memory was never the constraint; the warm-worker pool's cold-start behaviour under a simultaneous burst was.</p></div>
+    </div>
+
+    <div class="task">
+      <div class="task-head"><span class="tid">4.9</span><h3>Monitoring dashboards</h3></div>
+      <div class="qa"><span class="qa-label">Why</span><p>You cannot fix what you cannot see, and an alert that never reaches anyone is the same as no alert at all.</p></div>
+      <div class="qa"><span class="qa-label">How</span><p>Self-hosted Prometheus, Grafana and Alertmanager, all bound to <code>127.0.0.1</code> only — reachable by SSH tunnel, never the public internet. A bearer token protects the <code>/metrics</code> scrape itself, since it names which customer APIs have tripped a breaker and how many calls are live. Alertmanager routes firing rules to email, with grouping and a repeat interval so a flapping problem cannot fill an inbox.</p></div>
+      <div class="qa"><span class="qa-label">Why this — and two things proven, not assumed</span><p>System-level numbers only — live calls, warm-pool size, breaker state, database sizing — deliberately not duplicating task 2.7's Langfuse, which already owns per-call cost and latency from inside each call's own process; the two cover different halves on purpose. Two gaps were found and closed only by actually testing the chain rather than trusting the config. First: a provider breaker only gets a row in its store once it has misbehaved, so a freshly started container exported <em>no</em> provider breakers at all and the dashboard panel read "No data" — indistinguishable from a broken exporter, the same ambiguity the health endpoint's own <code>breaker_store</code> field exists to remove elsewhere. Fixed by seeding the known providers closed before the real snapshot overlays them, verified by deliberately reversing the seeding order and confirming the regression test catches it. Second, and worse: a synthetic test alert sent through the real chain failed silently — the Alertmanager container started, loaded its config and reported perfectly healthy, while every send failed with a permission error, because it runs as a different user than the one that created the credential file. The one thing meant to say "something is broken" was the thing that was broken, and only sending a real alert — not reading the config — surfaced it.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ BUGS ============ -->
+  <section id="bugs">
+    <h2 class="sec">Bugs, root-caused</h2>
+    <p class="sec-note">The strongest interview material here. Each one is a specific mechanism, not a vague "we had some issues".</p>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Silent</span><h3>A config object that silently swallowed settings</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Voice activity detection tuning appeared to have no effect. Later, audio configuration on the same object also did nothing.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p><code>PipelineParams</code> accepts arbitrary keyword arguments and discards ones it does not recognise. The fields belonged on <code>TransportParams</code>. No error, no warning — the code read perfectly and did nothing.</p></div>
+      <div class="qa"><span class="qa-label">How it was found</span><p>Reading the installed library source rather than the documentation, and confirming with <code>hasattr()</code> on a constructed instance. It bit <strong>twice</strong>, which is the interesting part: the same silent-drop pattern in the same class, months apart. It bit a <strong>third and fourth</strong> time later — Deepgram's language/endpointing settings and Cartesia's voice/language both being passed as bare constructor kwargs instead of the documented <code>settings=</code> object, discovered while chasing a Hindi caller being transcribed and spoken back to entirely in English.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>A library that accepts unknown fields without complaint will let you write confident code that has no effect. When a setting appears not to work, verify the field exists before assuming the value is wrong — and after the third occurrence of the same pattern in one codebase, it stops being a one-off and starts being a thing to check for by default.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Platform</span><h3>fork versus spawn — every database write failing on Linux</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Worked perfectly on Windows. On the deployed Linux server, every database write inside a call failed silently — transcripts, order lookups, bookings.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p><code>multiprocessing</code> defaults to <strong>spawn on Windows and fork on Linux</strong>. A spawned child is a fresh interpreter that re-imports and re-initialises everything. A forked child inherits the parent's memory — including an already-connected Mongo client bound to an event loop that does not exist in the child.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>Force spawn on every platform, and have the worker call database initialisation itself rather than assuming it inherited it.</p></div>
+      <div class="qa"><span class="qa-label">The sequel</span><p>Months later CI failed on the one test written to prove this fix. The test had been left on the platform default — so on Linux it forked, and was exercising a code path production never takes. <strong>The regression test for a fork bug was itself forking.</strong> Pinning the test's context to spawn fixed it. A related, later gap in the same area: a worker's own database model list simply never included <code>Bot</code>, because nothing had ever needed to read a bot document mid-call until the booking feature did — every call silently fell back to hardcoded defaults, caught only by a structural test that parses every file that runs inside a call and asserts every model it queries is registered.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Network</span><h3>A TURN relay handing out addresses nobody could reach</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Calls from restrictive networks failed. ICE went from checking straight to disconnected. No error appeared in any log.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>With no relay address pinned, coturn auto-discovered <em>every</em> local interface and allocated relay sockets on Docker's bridge networks as well as the real one. A bare external-IP flag then labelled all of them with the public address. The browser received a relay candidate that looked perfectly correct, sent audio to it, and the packets arrived on an interface where nothing was listening.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>Pin the relay address to the real network interface and use the public/private form of the external-IP flag so coturn knows which local address the public one maps to.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>The hardest faults are the ones where every component reports success. Nothing here logged an error — the audio simply went somewhere real and was ignored.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Protocol</span><h3>A data channel that nobody opened</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Source citations never reached the browser. The backend logged <code>Data channel not ready, queuing message</code> indefinitely.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>Reading pipecat's transport source showed the server only ever <em>listens</em> for a data channel — it never creates one. After a ten-second timeout it permanently disables the channel and silently discards every message. The browser had never called <code>createDataChannel()</code>.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>Create the channel in the browser <em>before</em> generating the offer, so it lands in the SDP.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>In a client/server protocol, "who initiates" is a real design decision and is often documented nowhere. The log line had been sitting in production for days looking like an unimportant warning.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Async</span><h3>Awaiting something that was never asynchronous</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>A warning logged on every single conversational turn, even though the feature worked.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p><code>send_app_message</code> is a plain synchronous method. Awaiting it raises <code>TypeError</code> — but the call sat inside a broad exception handler, so the message went out and a failure that had not happened was logged anyway.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>A broad <code>except</code> around an operation that must never break a live call is correct — but it will also hide your own mistakes. Worth pairing with checking the log actually stays quiet.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Process</span><h3>A continuous integration check that could never pass</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>The retrieval-quality job failed on every run since it was written.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>It ran a command-line tool that exits non-zero unless <em>all 32</em> questions pass. The documented baseline is 28/32. It was mathematically incapable of succeeding.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>Point the job at the pytest guard that already existed, which asserts a margin of 24/32.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>A check that cannot pass reports nothing. Worse, it teaches the team that red is normal — which is how a real failure gets ignored later. Green has to mean something. The same lesson recurred in Phase 4: a home internet connection's rotating IP blocked the test suite from reaching the database for a day, a fix was verified by hand with a standalone script instead of the suite, and the moment the suite could run again it found two regressions that fix had actually caused. The rule that stuck: if the suite cannot run, the commit is unverified — say so, and go back to it once it can.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Supply chain</span><h3>Ten gigabytes of GPU libraries on a machine with no GPU</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>A routine rebuild was about to fill a 30&nbsp;GB disk with 7.3&nbsp;GB free.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p><code>torch</code> and <code>torchaudio</code> were pinned in requirements — captured by <code>pip freeze</code> on a Windows machine, never chosen. On Linux, pip resolves torch to the <strong>CUDA build</strong>: roughly 10&nbsp;GB of GPU libraries destined for a 4&nbsp;GB virtual machine that has no GPU.</p></div>
+      <div class="qa"><span class="qa-label">How it was proven unnecessary</span><p>Not by assuming. Pip reported <code>Required-by:</code> as empty; faster-whisper runs on CTranslate2; the VAD in use is onnxruntime-based. A dependency scan showed every package mentioning torch does so behind an <em>optional extra</em> that was never installed.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p><code>pip freeze</code> captures what happens to be installed, not what is needed, and it captures it with the current platform's assumptions baked in. Verify before removing — and verify before keeping.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Vendor</span><h3>A monitoring stack pinned to a version that could not do the job</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>The prepared Langfuse deployment specified version 2. The tracing code exports OpenTelemetry.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p><strong>OTLP ingestion only exists from version 3.</strong> The configuration had been written without an environment to test in and honestly labelled "unverified" — but nobody checked whether the chosen version could perform the task at all.</p></div>
+      <div class="qa"><span class="qa-label">What it exposed</span><p>Upgrading revealed the real constraint: version 3 needs ClickHouse, Redis and object storage as well as Postgres — six containers, 16&nbsp;GB recommended, against a 4&nbsp;GB machine already running three services.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>"Unverified" can hide a fault that was checkable from documentation the whole time. A version pin is a capability claim.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Standards</span><h3>The lighter alternative that could not read our data</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Arize Phoenix looked ideal — one container instead of six, no usage caps, self-hostable on the existing machine.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>Checking what pipecat actually emits — <code>gen_ai.*</code>, the official OpenTelemetry GenAI conventions — showed Phoenix only understands Arize's own OpenInference convention. Their paid product added GenAI support; the free self-hosted one has an open issue for it.</p></div>
+      <div class="qa"><span class="qa-label">Consequence</span><p>Traces would have arrived and rendered as anonymous spans with <strong>no model, no tokens and no cost</strong> — precisely what the task exists to produce.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>"Supports OpenTelemetry" is not one capability. Check which <em>semantic conventions</em> both ends speak, not just the wire protocol. This one was caught before any code was written for it.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Reliability</span><h3>A first connection with no retry</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Intermittent total silence at the start of a session — hit four separate times in one day.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>Reading the library source showed the speech service connects its websocket exactly once at startup with no retry. Pipecat's own reconnect logic covers a connection that drops <em>after</em> being established, not the first attempt. Direct timing tests confirmed the network path was genuinely variable — usually 0.15&nbsp;s, occasionally over 6.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>A subclass wrapping the initial connect with retry and backoff. Since the greeting is the first thing every session does, one slow attempt previously meant silence with no recovery.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>Retry logic often covers steady state and not startup. Startup is where a cold connection is slowest and most likely to fail.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Security</span><h3>The tempting fix that would have exposed production</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>The test job could not reach MongoDB Atlas. Atlas allowlists specific addresses; CI runners get a random one every run.</p></div>
+      <div class="qa"><span class="qa-label">The wrong fix</span><p>Add <code>0.0.0.0/0</code> to the allowlist. One line, works instantly, and <strong>exposes the production database to the entire internet to make a test pass.</strong></p></div>
+      <div class="qa"><span class="qa-label">The right fix</span><p>Give CI its own throwaway MongoDB service container. It also removed a second risk nobody had noticed: the test teardown drops the entire database, and it had been pointed at a real cluster.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>When a security control blocks you, the question is what the control is protecting — not how to switch it off. This is worth rehearsing; interviewers ask it deliberately. The same lesson recurred fatally: a local test run, pointed at production by mistake, actually dropped the live database. Recovery meant restoring from the server's own automatic snapshots and rebuilding several bots from what could be reconstructed — the incident that led directly to the server's database login being permanently restricted to a role that cannot drop a database at all, regardless of what any future test does.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Deployment</span><h3>The same deploy command reported success and changed nothing</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Two unrelated incidents, hours apart, identical underneath: a rotated API key the running service kept ignoring, and a fixed reverse-proxy route that stayed broken after the fix was deployed. Both times the deploy command printed success.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>Bringing a container up compares its <strong>service definition</strong> — image, ports, declared environment — and does nothing if that is unchanged. Neither incident changed it: one was a value inside an env <em>file</em>, the other a config file mounted into the container. Both were correct on disk and neither was re-read, because from the orchestrator's point of view there was nothing to do.</p></div>
+      <div class="qa"><span class="qa-label">Why it stayed hidden</span><p>The output says <strong>"Running"</strong> or <strong>"Started"</strong> where a real change says <strong>"Recreated"</strong> — one word, easy to read straight past, with no warning that the file you just edited is not the one in effect.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p><code>--force-recreate</code> for an env change, a restart for a mounted config file, and — the habit worth keeping — verifying from <em>inside</em> the running container rather than trusting the deploy: reading the value back out of the process's own environment, and making a real authenticated request through the exact client the application uses. A convenience check gave a misleading answer here too: a bare <code>curl</code> reported a 403 that had nothing to do with the credential, because the provider's edge network rejects unfamiliar user-agents.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Deployment</span><h3>Three days of fixes that never reached the server</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>A new frontend feature was committed, pulled and built on the server. The page loaded without it, even after a hard refresh, while <code>git log</code> on the server showed the correct commit.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>The build is <code>tsc -b && vite build</code> — a type-check of every file under <code>src</code>, then the bundle only if that passes. The frontend had gained its first tests three days earlier, and with them two new dev dependencies. The server's update routine was <code>git pull && npm run build</code>, never an install, so the type-check failed on the test files, <code>&amp;&amp;</code> stopped, and the old bundle stayed on disk and was served as if nothing had happened.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>Diagnosed by checking the <strong>artifact</strong> rather than the process — grepping the built bundle for a string only the new code contained, which came back <code>0</code> and pointed straight at <code>Cannot find module 'vitest'</code>. <code>npm ci</code> before every build, and the deploy guide gained an actual update procedure — it had only ever documented first-time setup, which is exactly how the missing install became the habit.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>A test suite verifies the code; it has no opinion on whether the artifact on the server was actually built from it. Two real fixes had been silently unshipped for three days on a server everyone believed was current.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Frontend</span><h3>Every validation error said "[object Object]"</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Creating a test account with a short password failed with a red box reading <code>[object Object]</code> — no way to tell what was actually wrong.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>FastAPI reports validation failures as a <strong>list of objects</strong>, and the API client wrapped it directly in <code>new Error(err.detail)</code>. <code>Error()</code> stringifies its argument, and an array of objects stringifies to exactly that string.</p></div>
+      <div class="qa"><span class="qa-label">The trap in the obvious fix</span><p>FastAPI echoes the submitted value back in its error response — printing the raw error "to be safe" would have put the user's own password on the screen.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>One helper builds the message from the field name and the message text only, used at every error site, with a test asserting the password can never appear in the output.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>No test had ever sent the frontend a real validation failure. Backend tests correctly asserted the 422 was returned and stopped at the boundary — nothing checked what a person actually saw on the other side of it.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">RAG search</span><h3>One symptom, three stacked search failures</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>A caller asked what was on page 50 of an uploaded PDF. The bot said it had no access to the file — fixed, deployed, retested, <strong>same failure, a different log line underneath it</strong>, twice more.</p></div>
+      <div class="qa"><span class="qa-label">Layer one</span><p>The caller spoke in three short sentences with pauses between them; the search read only the <em>last</em> fragment, which had no page number in it.</p></div>
+      <div class="qa"><span class="qa-label">Layer two</span><p>Pinecone's monthly rerank allowance was exhausted, and a full search — rerank included — ran on the words "warm up" at the start of every single call, spending the same exhausted allowance a second time before the caller had said a word. The fix's own retry logic then made things worse: the SDK retried a refused request three times with sleeps in between, inside a thread nothing could cancel, so the retrieval budget was spent entirely on a request that was never going to succeed.</p></div>
+      <div class="qa"><span class="qa-label">Layer three</span><p>Looking a Pinecone index up by name is a real network round trip to its control plane, and it ran as a plain synchronous call directly on the event loop — measured on the server at 0.5 to 17.3 seconds, freezing the greeting and the caller's own turn alike.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>Search the whole unanswered turn, not just the last fragment. A rerank-only client with retries off and its own short timeout, recorded in the same worker thread as the request so an outcome is never lost even after the caller stops waiting. Index setup moved into a worker thread under a lock, with idle connections kept open just under Pinecone's own timeout.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>Three genuinely independent faults produced one identical symptom, stacked, so every fix in turn looked like it had done nothing — the interesting part of this one is not any single bug, it's that "still broken after the fix" does not mean the fix was wrong.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Data integrity</span><h3>The caller's own side of every conversation was never saved</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>A saved conversation record showed the bot's reply in full and an empty string for what the caller had actually said — every one of 145 turns in the latest backup, going back to the day the feature was written.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>The recorder read <code>TranscriptionFrame</code>, but it sits — correctly, for other reasons — <em>after</em> pipecat's user-turn aggregator, which consumes transcription frames itself rather than passing them downstream. The finished text of a caller's turn only ever arrives through a separate event nothing in the project was listening for.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>A small function forwards that event straight to the recorder. Independent review found one more: the pending turn used to be cleared only <em>after</em> the database write returned, so a caller speaking again while the previous turn was still saving had those words silently erased on the reset.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>No test had ever run the recorder behind the real aggregator — existing tests either constructed frames by hand or inspected service ordering. A test exercising the real event, not a shape that merely resembles it, is what finally caught a bug that had been live since the feature shipped.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Observability</span><h3>The logs that would have explained the bug were being thrown away</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>Trying to diagnose a live defect from the container logs: 213 pipeline lines in the window, and not one tool-call line, on calls that demonstrably made tool calls.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>Python block-buffers its output when it isn't writing to a terminal — exactly the case inside a container. Every call runs in its own worker process ended with <code>terminate()</code>, so a call's last log lines weren't delayed, they were discarded with the buffer.</p></div>
+      <div class="qa"><span class="qa-label">Fix</span><p>One line, <code>PYTHONUNBUFFERED=1</code>, in the container image, with a test asserting it stays there.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>Nothing was broken for a caller, so nothing could fail a behavioural test — this is a class of defect a test suite has no opinion about at all. It only becomes visible on the day you actually need the logs and they aren't there, which is the worst possible day to find out.</p></div>
+    </div>
+
+    <div class="case">
+      <div class="task-head"><span class="case-tag">Resilience</span><h3>A backup voice that was designed, tested, and never actually on the server</h3></div>
+      <div class="qa"><span class="qa-label">Symptom</span><p>The text-to-speech provider ran out of credits mid-testing and every call went silent — on a system with a circuit breaker and a local backup voice built for exactly this. The breaker did its job, tripped correctly, logged every step. No call ever switched to the backup.</p></div>
+      <div class="qa"><span class="qa-label">Cause</span><p>The fallback deliberately refuses a backup whose model files aren't already on disk — starting a several-hundred-megabyte download while a caller waits to be greeted would be worse than the outage. That check was right; the model files were simply never on that machine, because the one-time download script had never been run there.</p></div>
+      <div class="qa"><span class="qa-label">The second gap it exposed</span><p>Running the download revealed the speech-recognition backup was landing in a machine-learning library's <em>default</em> cache, inside the container's own filesystem — the next routine rebuild would have deleted it and silently returned readiness to "not ready" until the next real outage found out.</p></div>
+      <div class="qa"><span class="qa-label">Lesson</span><p>Every piece of code here was tested and every test was correct — none of them can see that the machine it runs on was never given the model files at all. That is a deployment step, not code, and no test knew where a third-party library caches by default, which is what actually decides whether a file survives a rebuild.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ CHOICES ============ -->
+  <section id="choices">
+    <h2 class="sec">Tool decisions, compared</h2>
+    <p class="sec-note">Each row is a decision with a named reason. Teal marks what was chosen.</p>
+
+    <div class="tbl-wrap"><table>
+      <tr><th>Decision</th><th>Chosen</th><th>Rejected</th><th>Deciding reason</th></tr>
+      <tr><td>Language model</td><td class="pick">Groq gpt-oss-120b</td><td>OpenAI, self-hosted Llama</td><td>LPU inference; 0.39–0.44&nbsp;s to first token. Self-hosting needs a GPU box</td></tr>
+      <tr><td>Local speech out</td><td class="pick">Piper</td><td>Kyutai Pocket TTS</td><td>Pocket has no Hindi voices; the bot is bilingual</td></tr>
+      <tr><td>Local speech in</td><td class="pick">faster-whisper</td><td>OpenAI Whisper</td><td>CTranslate2, not PyTorch — no 10&nbsp;GB dependency</td></tr>
+      <tr><td>Hosting</td><td class="pick">GCP VM</td><td>Render, Railway, Vercel</td><td>PaaS cannot forward the UDP range TURN needs</td></tr>
+      <tr><td>Call isolation</td><td class="pick">Process per call</td><td>Threads, asyncio tasks</td><td>GIL; and a thread cannot contain a native crash</td></tr>
+      <tr><td>Worker IPC</td><td class="pick">multiprocessing.Queue</td><td>Env vars, config file</td><td>The SDP answer must return live, not as static startup config</td></tr>
+      <tr><td>AI monitoring</td><td class="pick">Langfuse Cloud</td><td>Phoenix; self-hosted v3</td><td>Phoenix cannot parse <code>gen_ai.*</code>; v3 needs 16&nbsp;GB, VM has 4</td></tr>
+      <tr><td>Langfuse region</td><td class="pick">EU (Ireland)</td><td>US, Japan</td><td>Export is async so latency is irrelevant; GDPR is the better answer</td></tr>
+      <tr><td>CI database</td><td class="pick">Service container</td><td>Open Atlas to 0.0.0.0/0</td><td>Never widen production access to make a test pass</td></tr>
+      <tr><td>PDF storage</td><td class="pick">GridFS</td><td>Document field, local disk</td><td>16&nbsp;MB document cap; disk is invisible across workers and containers</td></tr>
+      <tr><td>Token revocation</td><td class="pick">MongoDB</td><td>Redis</td><td>No Redis deployed; equivalent at this scale</td></tr>
+      <tr><td>Rate limiting</td><td class="pick">Per-user, then per-IP</td><td>Per-IP only</td><td>IP-only punishes everyone on a shared connection</td></tr>
+      <tr><td>Sentry projects</td><td class="pick">Two, separate</td><td>One combined</td><td>Mixing browser and Python breaks per-platform grouping</td></tr>
+      <tr><td>Retrieval guard</td><td class="pick">Margin, 24/32</td><td>Exact baseline 28/32</td><td>Retrieval varies day to day; a brittle test gets disabled</td></tr>
+      <tr><td>Webhook queue</td><td class="pick">MongoDB outbox</td><td>Redis queue</td><td>One fewer service to run; survives a restart the same way</td></tr>
+      <tr><td>Booking concurrency</td><td class="pick">Unique <code>_id</code> as the lock</td><td>Check-then-book</td><td>Checking first only narrows the race; the unique key closes it</td></tr>
+      <tr><td>Call queue wiring</td><td class="pick">Built, deliberately not wired in</td><td>Wire into /connect now</td><td>/connect is a synchronous handshake; a queue pays off only with multi-machine workers</td></tr>
+      <tr><td>Capacity tracking</td><td class="pick">Named slots in a Redis sorted set</td><td>Bare INCR/DECR counter</td><td>A restart with a bare counter permanently burns capacity nothing releases</td></tr>
+      <tr><td>Provider fallback trigger</td><td class="pick">Circuit breaker + installed-backup check</td><td>Always fail over on error</td><td>Failing to an uninstalled backup mid-call is worse than the outage</td></tr>
+      <tr><td>Load-test traffic</td><td class="pick">Local stand-in providers</td><td>Real Deepgram/Groq/Cartesia traffic</td><td>Groq's free tier caps out around 2 callers, far below the server's real ceiling</td></tr>
+      <tr><td>Restart policy</td><td class="pick">Two layers: in-process watchdog + Docker HEALTHCHECK</td><td>Either alone</td><td>Plain Docker never restarts on an unhealthy label by itself; a frozen loop can't watch itself</td></tr>
+      <tr><td>Monitoring stack</td><td class="pick">Self-hosted Prometheus + Grafana + Alertmanager</td><td>A paid cloud APM</td><td>Zero cost; same self-hosted pattern already used for coturn and Langfuse's alternative</td></tr>
+    </table></div>
+  </section>
+
+  <!-- ============ QUESTIONS ============ -->
+  <section id="questions">
+    <h2 class="sec">Likely questions</h2>
+    <p class="sec-note">Answers in your own voice, each anchored to something specific you actually did.</p>
+
+    <div class="iq">
+      <h4>Walk me through the architecture.</h4>
+      <p>Audio comes in over WebRTC to a FastAPI backend. Pipecat orchestrates the stages as a frame pipeline: speech to text, then a retrieval step that searches the customer's uploaded documents, then the language model, then text to speech back over the same connection. The part worth knowing is that <strong>each call runs in its own operating-system process</strong> — so a crash in one call cannot take down the server or anyone else's call. On top of that, a warm pool of pre-started worker processes autoscales with demand, a Redis-backed capacity cap refuses new calls cleanly once the system is full, and circuit breakers fail cloud providers over to local models when they trip.</p>
+    </div>
+
+    <div class="iq">
+      <h4>What was the hardest bug?</h4>
+      <p>Database writes failing on Linux but working on Windows. The cause was that <code>multiprocessing</code> defaults to spawn on Windows and fork on Linux — a forked child inherits the parent's already-connected database client, bound to an event loop that does not exist in the child. What makes it a good story is the sequel: months later the regression test for that fix failed in CI, because <em>the test itself</em> had been left on the platform default and was forking.</p>
+    </div>
+
+    <div class="iq">
+      <h4>How do you know your document search is any good?</h4>
+      <p>I built a suite of 32 questions with known correct pages and run them through the real retrieval path. Baseline is 28/32. The guard asserts a <em>margin</em> of 24/32 rather than the exact number, because retrieval has genuine day-to-day variance and a test that chases noise gets switched off. Before that suite existed I was tuning search thresholds by feel, which means I could not tell whether a change helped.</p>
+    </div>
+
+    <div class="iq">
+      <h4>Why reranking? Isn't vector search enough?</h4>
+      <p>No, and I can show why. For one query, the correct chunk did not appear in the raw top five at all. Raw cosine scores clustered between 0.60 and 0.65 for good and irrelevant results alike, so no threshold could separate them. The reranker is a cross-encoder — it reads the query and candidate <em>together</em> rather than comparing two independent embeddings. Its scores spread from 0.0 to 0.9, and that spread is what makes a threshold possible.</p>
+    </div>
+
+    <div class="iq">
+      <h4>Your CI couldn't reach the database. How did you fix it?</h4>
+      <p>Atlas allowlists specific addresses and CI runners get a random one each time. The tempting fix is to allow all addresses — one line, works immediately, and exposes the production database to the internet to make a test pass. I gave CI its own throwaway database container instead. That also closed a risk nobody had spotted: the test teardown drops the whole database, and it had been pointed at a real cluster. That exact class of mistake actually happened for real later, from a local test run against production by accident — recovered from a snapshot, and it's why the production login is now permanently restricted to a role that cannot drop a database regardless of what any future test does.</p>
+    </div>
+
+    <div class="iq">
+      <h4>How do you keep from being locked into one vendor?</h4>
+      <p>Provider selection lives behind three factory functions, so switching speech or language providers is a settings change rather than a pipeline rewrite. The same principle covers monitoring: the tracing code speaks plain OpenTelemetry, so moving from hosted to self-hosted is three environment variables and no code. I try to make vendor decisions <em>cheap to reverse</em> — that is what makes them not lock-in. The same three factories paid for themselves a second time in the load-testing task: a fourth branch swaps in free local stand-in services for a full concurrency test, with zero changes to the real call path.</p>
+    </div>
+
+    <div class="iq">
+      <h4>What does a conversation cost you?</h4>
+      <p>Between $0.0003 and $0.0006 in language-model spend, measured from live traces. I should be precise about the limit: that figure is exact for the language model, because token counts arrive as standard OpenTelemetry attributes and get priced automatically. Speech recognition and synthesis bill per audio-second and per character, which are not token usage, so their consumption is recorded but not yet priced. An all-in figure needs those two rates applied.</p>
+    </div>
+
+    <div class="iq">
+      <h4>How do you handle a provider outage mid-call?</h4>
+      <p>A circuit breaker per provider trips after a run of failures inside a short window, and switches that request to a local backup — faster-whisper for speech recognition, Piper for the voice — but only if the backup's model files are actually installed on that machine. I proved this live rather than trusting the code: held the real Cartesia breaker open for three minutes and a real call was built on Piper, in its voice, with no restart. Getting there found a real gap first — the backup files existed in the repo but had never actually been downloaded onto the production server, so every earlier outage had failed over to nothing.</p>
+    </div>
+
+    <div class="iq">
+      <h4>How would you load-test a system that costs money per call?</h4>
+      <p>The three cloud providers already sit behind factory functions for a completely different reason — vendor swapping. A fourth branch on those same factories swaps in local stand-in services that behave like the real ones — same timing shape, same audible output the client checks for — so the exact same load-test harness can run a full concurrency ramp against the real server for free. That's how I found the real ceiling without spending anything: not memory, but the warm-worker pool's cold-start behaviour when several calls need a new process at the same instant.</p>
+    </div>
+
+    <div class="iq">
+      <h4>Tell me about a defect that took more than one fix to actually solve.</h4>
+      <p>A caller asking for the time got an answer 5.5 hours out. I fixed the clock to know the bot's timezone — same wrong answer. The clock's fix had shipped to a function nothing was calling, because a bot with its own configured tools drops every built-in, including the clock. Offered the clock unconditionally — the model then invented an argument the function doesn't take, because it read the name out of the docstring instead of the schema, and the framework crashed rather than filtering it. Three unrelated faults, one identical symptom, each fix looking like it had done nothing until the third one actually landed. The lesson I lead with: "still broken after the fix" does not mean the fix was wrong.</p>
+    </div>
+
+    <div class="iq">
+      <h4>What would you do differently?</h4>
+      <p>Deploy sooner, and test the actual platform's behaviour rather than trust what's documented about it. Deploying early found three bugs no amount of local testing would have — the fork issue, the browser never being told about the relay, and the relay handing out unreachable addresses. Later, a written claim that Docker restarts an unhealthy container turned out to be flatly false on plain Docker without an orchestrator — proven by running two throwaway containers on the real server and watching one sit at zero restarts for forty seconds. I'd check platform behaviour directly earlier, rather than after building a whole recovery mechanism on top of an assumption.</p>
+    </div>
+
+    <div class="iq">
+      <h4>What's not finished?</h4>
+      <p>Phase 5 onward — organisations and roles, billing, the commercial layer that lets a company actually pay for this. Within what is built, two deliberate architecture decisions are stated rather than hidden: a real Redis Streams call queue exists and is fully tested, but not wired into the live connect path, because that path does a synchronous WebRTC handshake and a queue only pays off once workers can run on a second machine. And Redis-backed rate limiting is built and optional, switched on the day a second API replica actually exists rather than paid for today against a single-VM deployment that doesn't need it.</p>
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<footer>
+  Voice Agent Build Log · Phases 1 through 4 complete · 37 tasks · Compiled 16 September 2026
+</footer>
+
+</div>
+
+</body></html>
