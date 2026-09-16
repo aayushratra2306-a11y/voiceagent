@@ -56,6 +56,40 @@ async def test_a_reset_breaker_does_not_linger_in_the_next_scrape():
     assert "tool:acme.test" not in body.decode()
 
 
+async def test_a_provider_breaker_is_exported_before_it_has_ever_tripped():
+    """A breaker gets a row in the store only once it records something, so
+    on a freshly started container the export carried no provider breakers at
+    all — and the Grafana panel rendered as "No data".
+
+    An empty panel is exactly as ambiguous as the empty circuit_breakers dict
+    that /health's breaker_store field was added to disentangle: "nothing has
+    tripped" and "the metrics are broken" look identical, and the second is
+    the one you need to know about. /health/detail has always listed these
+    providers by name (provider_health.health() enumerates them); this is the
+    export catching up.
+    """
+    body, _ = await metrics.render()
+    text = body.decode()
+
+    assert 'voiceagent_circuit_breaker_state{name="provider:tts:cartesia"} 0.0' in text, text
+    assert 'voiceagent_circuit_breaker_trips{name="provider:tts:cartesia"} 0.0' in text, text
+
+
+async def test_seeding_does_not_hide_a_provider_that_really_is_open():
+    """The seeded value must be a floor, not an overwrite. If a closed
+    default could win over real stored state, this change would replace a
+    panel that says nothing with a panel that lies."""
+    from app.pipeline import provider_health
+
+    for _ in range(provider_health.PROVIDER_BREAKER.failure_threshold):
+        breaker.record_failure(provider_health.TTS_CARTESIA, "connection timed out")
+
+    body, _ = await metrics.render()
+    text = body.decode()
+
+    assert 'voiceagent_circuit_breaker_state{name="provider:tts:cartesia"} 2.0' in text, text
+
+
 async def test_no_caller_data_is_ever_exported():
     """A metrics endpoint is typically unauthenticated (a Prometheus
     scraper is not a logged-in user) — nothing here may be a transcript,

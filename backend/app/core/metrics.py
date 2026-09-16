@@ -138,6 +138,29 @@ async def _build_registry() -> CollectorRegistry:
              expected_max_connections)
 
     try:
+        # The providers this deployment always talks to are reported whether
+        # or not they have ever misbehaved. A breaker earns a row in the store
+        # only once it records something, so without this a freshly started
+        # container exported no provider breakers at all and the Grafana panel
+        # read "No data" — indistinguishable from a broken exporter, which is
+        # the same ambiguity /health's breaker_store field exists to remove.
+        # /health/detail has always listed them (provider_health.health()
+        # enumerates them by name); this is the export agreeing with it.
+        #
+        # Seeded BEFORE the snapshot, never after: these are a floor for
+        # breakers with no history, and must never overwrite real state. A
+        # panel that says nothing is bad; a panel that says "closed" about an
+        # open breaker is worse.
+        #
+        # Only the providers. The per-customer tool breakers (`tool:<host>`)
+        # are created from whatever URLs customers configure, cannot be
+        # enumerated in advance, and appearing on first use is right for them.
+        from app.pipeline.provider_health import PROVIDER_BREAKER_NAMES
+
+        for name in PROVIDER_BREAKER_NAMES:
+            breaker_state.labels(name=name).set(_BREAKER_STATE_VALUE["closed"])
+            breaker_trips.labels(name=name).set(0)
+
         # Review finding #8 — snapshot_async(), not snapshot(). This is
         # blocking sqlite3 I/O, Prometheus scrapes this endpoint every 15s
         # (see deploy/prometheus.yml), and the loop it would block is the one

@@ -76,7 +76,12 @@ PROVIDER_BREAKER = breaker.BreakerConfig(
     cooldown_seconds=30.0,
 )
 
-for _name in (STT_DEEPGRAM, TTS_CARTESIA, LLM_GROQ, LLM_OPENAI):
+# Every cloud provider breaker this deployment has, named in one place so
+# the metrics export can report them all as healthy rather than reporting
+# nothing until one of them first misbehaves (see app/core/metrics.py).
+PROVIDER_BREAKER_NAMES = (STT_DEEPGRAM, TTS_CARTESIA, LLM_GROQ, LLM_OPENAI)
+
+for _name in PROVIDER_BREAKER_NAMES:
     breaker.configure(_name, PROVIDER_BREAKER)
 
 
