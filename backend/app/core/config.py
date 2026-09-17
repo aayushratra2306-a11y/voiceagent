@@ -174,8 +174,14 @@ class Settings(BaseSettings):
     # the machine's memory with idle workers. Setting max equal to min turns
     # autoscaling off and pins the pool at call_worker_pool_size, which is
     # the pre-Phase-4 behaviour.
+    # Max matches max_concurrent_calls deliberately: task 4.8's load test
+    # found a pool ceiling BELOW the call cap means the last few callers of
+    # a simultaneous burst each wait out a cold start (over a minute on 2
+    # vCPUs), which is what failed its 5-call step. The pool still boots at
+    # call_worker_pool_size and only grows on demand, so the higher ceiling
+    # costs no idle memory until a burst actually arrives.
     call_worker_pool_min: int = 2
-    call_worker_pool_max: int = 4
+    call_worker_pool_max: int = 6
     # Below this much free memory, the pool refuses to grow no matter how
     # long the queue is. An out-of-memory kill during live calls costs far
     # more than a caller waiting a few extra seconds for a cold worker.
