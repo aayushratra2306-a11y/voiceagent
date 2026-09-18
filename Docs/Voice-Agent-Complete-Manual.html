@@ -186,7 +186,7 @@ table{font-size:11.5px}
       <tr><td class="mono">3</td><td><b>Zero Budget Strategy</b></td><td>Build free, client upgrades with four settings</td></tr>
       <tr><td class="mono">4</td><td><b>Complete Costing</b></td><td>Every service, free tiers, and two full monthly budgets</td></tr>
       <tr><td class="mono">5</td><td><b>The Flowchart</b></td><td>Eight phases, what each gives you, in order</td></tr>
-      <tr><td class="mono">6</td><td><b>Every Task in Detail</b></td><td>68 tasks — plain explanation, tools, steps, pitfalls, done-criteria. Tickable.</td></tr>
+      <tr><td class="mono">6</td><td><b>Every Task in Detail</b></td><td>69 tasks — plain explanation, tools, steps, pitfalls, done-criteria. Tickable.</td></tr>
       <tr><td class="mono">7</td><td><b>What's Missing</b></td><td>Every gap between demo and purchasable product</td></tr>
       <tr><td class="mono">8</td><td><b>88 Buyer Questions</b></td><td>Grouped by who asks, what they check, what you need. Tickable.</td></tr>
       <tr><td class="mono">9</td><td><b>Automation Catalog</b></td><td>Every task the bot could do — booking, payments, lookups, and more</td></tr>
@@ -201,7 +201,7 @@ table{font-size:11.5px}
   </table></div>
 
   <div class="callout ok">
-    <strong>Two trackers run at the top of this page.</strong> <b>BUILD</b> counts the 68 tasks you have
+    <strong>Two trackers run at the top of this page.</strong> <b>BUILD</b> counts the 69 tasks you have
     completed. <b>READY</b> counts how many of the 88 buyer questions you can already answer confidently.
     Both save automatically and follow you to any device where you open this link.
   </div>
@@ -649,7 +649,7 @@ pipeline_steps += [context_aggregator.<span class="fn">user</span>(), llm, tts,
   <div class="sec-eyebrow">Part 5</div>
   <h2>The Build Flowchart</h2>
   <p class="sec-desc">
-    Eight phases, roughly 360 hours. What each one gives you, and why the order matters. Already built
+    Eight phases, roughly 384 hours. What each one gives you, and why the order matters. Already built
     and not counted here: login, bot creation, the voice pipeline, and PDF knowledge.
   </p>
   <div class="card" style="padding:22px;overflow-x:auto">
@@ -664,7 +664,7 @@ flowchart TB
     P5 --> M1{{"★ FIRST PAYING CUSTOMER POSSIBLE — 166 hours in"}}
     M1 --> P6["PHASE 6 · Trust and Compliance · 46h<br/>Guardrails · PII removal · consent · audit log · SSO<br/><b>Gain: bigger companies can legally sign</b>"]
     P6 --> M2{{"★ MID-MARKET AND ENTERPRISE UNLOCKED"}}
-    M2 --> P7["PHASE 7 · Integration Surface · 64h<br/>Public API · widget · phone numbers · CRM · more sources<br/><b>Gain: fits how companies already work</b>"]
+    M2 --> P7["PHASE 7 · Integration Surface · 88h<br/>Public API · widget · phone numbers · CRM · more sources · WhatsApp · callbacks<br/><b>Gain: fits how companies already work</b>"]
     P7 --> P8["PHASE 8 · Hyperscale · 84h<br/>Cells · Kubernetes · multi-region · sharding · caching<br/><b>Gain: 10 lakh users, 20,000 concurrent calls</b>"]
     P8 --> End(["Scales linearly beyond — add more cells, no rewrite"])
 </pre>
@@ -693,7 +693,7 @@ flowchart TB
   </table></div>
 
   <div class="callout">
-    <strong>You do not need all 360 hours before your first sale.</strong> Phases 1–5 give you a product a
+    <strong>You do not need all 384 hours before your first sale.</strong> Phases 1–5 give you a product a
     small business can buy and you can charge for. Phase 6 unlocks mid-market and enterprise. Phases 7–8
     are what you build once paying customers pull you there. What matters at the sales table is that the
     architecture makes those phases <em>additive</em> rather than a rewrite — and it does.
@@ -704,7 +704,7 @@ flowchart TB
   <div class="sec-eyebrow">Part 6</div>
   <h2>Every Task, In Full Detail</h2>
   <p class="sec-desc">
-    All 68 tasks. Each opens to show a plain explanation, why it matters, the exact tools to use, the
+    All 69 tasks. Each opens to show a plain explanation, why it matters, the exact tools to use, the
     steps in order, the mistake that will bite you, and how to know you are finished. Tick the box when
     a task is done — it saves automatically.
   </p>
@@ -1471,6 +1471,16 @@ flowchart TB
     </tbody>
   </table></div>
 
+  <h3>Calling back and WhatsApp</h3>
+  <div class="tw"><table>
+    <thead><tr><th style="width:52%">Your exact words</th><th style="width:130px">Where answered</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>"before we proceed i need to know do we have calling feture anywhere plan in our project in future if i tell my bot to call me after 20 mins or so or tomorrow will he able to do that?"</td><td>Part 6 · task 7.8</td><td><span class="badge high">Planned</span></td></tr>
+      <tr><td>"is it feasible if you can integare that in the project for future is it feasible or not? just tell me first about this and secondly do we have whatsapp integration in our project planned any where down the line"</td><td>Part 6 · tasks 7.7, 7.8</td><td><span class="badge ready">Yes, feasible</span></td></tr>
+      <tr><td>"yes please do the thorough research on this and please do add this for future tasks"</td><td>Part 6 · tasks 7.7, 7.8</td><td><span class="badge high">Planned</span></td></tr>
+    </tbody>
+  </table></div>
+
   <div class="callout ok">
     <strong>Nothing from the conversation has been left out.</strong> Every request above is answered
     somewhere in this document, and the four separate documents produced earlier have all been folded into
@@ -1925,7 +1935,7 @@ steps:["Confirm automatic backups are running.","Set retention to match your com
 tip:"Genuinely perform the restore, do not just read the documentation. Nearly everyone who assumes their backups work discovers a problem the first time they actually try — a missing permission, a wrong region, an incomplete snapshot.",
 d:"You have personally restored from backup and know exactly how long it takes."}
 ]},
-{n:7,name:"Integration Surface",sub:"Fitting into how companies work",hrs:64,c:"var(--teal)",tasks:[
+{n:7,name:"Integration Surface",sub:"Fitting into how companies work",hrs:88,c:"var(--teal)",tasks:[
 {id:"7.1",t:"Build the public API and keys",h:10,
 s:"A documented interface with API keys so customers' developers can create bots, pull transcripts and start calls from their own systems.",
 w:"This turns your product from a standalone app into a platform others build on, which massively deepens how far a customer can adopt it.",
@@ -1943,7 +1953,7 @@ d:"Pasting one line into a plain HTML page produces a working voice agent."},
 {id:"7.3",t:"Add real phone numbers",h:14,
 s:"Callers dial a normal phone number instead of opening a browser. Includes keypad input and transferring to a human.",
 w:"Browser-only limits you to web use cases. Call centres run on phone lines, and that is where most of the money in this market is.",
-tools:["Twilio","SIP trunking","Pipecat telephony"],
+tools:["Twilio","Exotel (India)","SIP trunking","Pipecat telephony"],
 steps:["Integrate a telephony provider for inbound calls.","Wire the phone audio into your existing pipeline.","Add keypad input handling.","Add warm transfer that passes conversation context to the human.","Add outbound calling.","Add answering machine detection for outbound."],
 tip:"Phone audio is 8kHz and much lower quality than browser audio. Test speech recognition specifically over a real phone line — accuracy drops noticeably and you may need different settings or a different provider for telephony.",
 d:"You can dial a number, hold a conversation, press keys, and be transferred to a person with context."},
@@ -1967,7 +1977,21 @@ w:"Customers need to justify the spend internally. Good analytics is what makes 
 tools:["Recharts","MongoDB aggregation"],
 steps:["Define the metrics customers actually care about.","Build efficient aggregation queries.","Build the dashboard with date filtering.","Add topic clustering to show common questions.","Add export to CSV and PDF."],
 tip:"Include cost per resolved conversation, and compare it against what a human agent costs. That single number is what gets your invoice approved by whoever signs it, and most competitors do not surface it.",
-d:"A customer can open a dashboard and immediately see the value they are getting."}
+d:"A customer can open a dashboard and immediately see the value they are getting."},
+{id:"7.7",t:"Add WhatsApp as a channel",h:14,
+s:"Customers reach the same bot on WhatsApp, by text chat and by WhatsApp voice call, and the bot can send confirmations and links there.",
+w:"In India WhatsApp is where customers already are. A WhatsApp call needs no +91 phone number, no DLT registration and costs nothing when the customer calls in, so it is also the cheapest way to make the bot callable at all.",
+tools:["WhatsApp Cloud API (Meta)","Pipecat WhatsAppTransport","Message templates","Webhooks"],
+steps:["Set up a Meta Business account, verify the business, and register a number on the Cloud API (not the WhatsApp Business app).","Receive messages by webhook, check Meta's signature on every one, and answer by text with the same bot, knowledge base and tools a voice call uses.","Add WhatsApp voice calls with Pipecat's WhatsAppTransport. It is built on the same SmallWebRTC transport the browser calls already use, so the pipeline carries over.","Get message templates approved for anything sent more than 24 hours after the customer's last message: confirmations, reminders, payment links.","Keep chats and calls under the same caller record, so a chat and a later call share history.","Handle opt-out and record the customer's consent to be messaged."],
+tip:"Learn the 24-hour rule before designing anything. Free-form replies are only allowed within 24 hours of the customer's last message; after that only a pre-approved template can be sent, and templates are charged per message (a utility template is roughly ₹0.12 in India as of September 2026, so check Meta's current rate card). Calls the customer places are free. Calls the business places are billed per minute in six-second pulses, and need the customer's permission first.",
+d:"A customer can message the bot on WhatsApp and get correct answers, call it from WhatsApp and hold a normal conversation, and receive a template confirmation after the 24-hour window has closed."},
+{id:"7.8",t:"Add scheduled callbacks",h:10,
+s:"A caller says 'call me back in 20 minutes' or 'call me tomorrow at 6' and the bot really does. Needs a way to dial out first: a phone line (7.3) or WhatsApp (7.7).",
+w:"Callers are often busy when they first ring. A promised callback that actually happens turns a lost call into a finished one, and the same machinery powers reminders and follow-ups, the outbound uses with the clearest return.",
+tools:["Function calling","MongoDB callback queue","Background worker","Exotel / Twilio outbound API","WhatsApp business-initiated calls"],
+steps:["Give the bot a schedule-callback tool that turns 'in 20 minutes' or 'tomorrow evening' into an exact time in the caller's time zone, and reads it back to confirm.","Confirm the number and channel, then save the callback in MongoDB with who asked, why, and the conversation so far. Never use an in-memory timer that a restart wipes out.","Run a worker that claims each due callback atomically before dialling, so two workers or a restart can never call the same person twice.","Place the call through the phone provider or WhatsApp and start the bot with the earlier context, opening with why it is calling.","Handle no answer, busy and voicemail: retry a limited number of times with a gap, then stop and send a message instead.","Refuse times outside permitted calling hours and numbers on the Do-Not-Disturb list, and let the caller cancel or move the callback."],
+tip:"In India the law decides which number you may call from. Service calls must come from a registered 1600-series number (promotional calls use 140), and any promotion mixed into a call makes the whole call promotional. Record that the caller asked for the callback: that is your consent. On WhatsApp, a customer who calls you can grant seven days' permission to be called back (if callback permission is switched on), but four unanswered calls in a row revoke it. Published guides disagree on the permitted calling hours, so check the current TCCCPR text before launch.",
+d:"You say 'call me back in 20 minutes', hang up, the server restarts in between, and the bot still calls exactly once, knows what you were discussing, and refuses a time outside permitted hours."}
 ]},
 {n:8,name:"Hyperscale",sub:"Ten lakh users without falling over",hrs:84,c:"var(--red)",tasks:[
 {id:"8.1",t:"Move to cell-based architecture",h:15,
