@@ -128,6 +128,7 @@ footer{border-top:2px solid var(--ink);padding-top:18px;font-family:var(--displa
     <div class="num"><div class="n">0.4s</div><div class="l">LLM first token</div></div>
     <div class="num"><div class="n">$0.0005</div><div class="l">LLM cost per call</div></div>
     <div class="num"><div class="n">6</div><div class="l">Max concurrent calls, tested</div></div>
+    <div class="num"><div class="n">2&ndash;3</div><div class="l">Concurrent calls, real ceiling (CPU-bound)</div></div>
     <div class="num"><div class="n">$0</div><div class="l">Cost of the load test</div></div>
     <div class="num"><div class="n">15min</div><div class="l">Access token life</div></div>
   </div>
@@ -189,7 +190,7 @@ footer{border-top:2px solid var(--ink);padding-top:18px;font-family:var(--displa
     <div class="row"><span class="k">4.5</span><span class="v"><b>Concurrency cap.</b> Named slots in a Redis sorted set, not a bare counter — a bare counter would permanently burn capacity on every restart, since nothing releases it.</span></div>
     <div class="row"><span class="k">4.6</span><span class="v"><b>Circuit breakers.</b> Trip to a local backup, but only if it's actually installed. Proven live: held Cartesia's breaker open 3 minutes, a real call spoke in Piper's voice.</span></div>
     <div class="row"><span class="k">4.7</span><span class="v"><b>Health + restarts.</b> Two layers — plain Docker never restarts on an unhealthy label alone, proven directly on the server. A frozen loop can't watch itself.</span></div>
-    <div class="row"><span class="k">4.8</span><span class="v"><b>Free load test.</b> The same provider factories swap in local stand-ins for zero-cost testing. Found the real ceiling: not memory, the warm pool's cold-start under a simultaneous burst.</span></div>
+    <div class="row"><span class="k">4.8</span><span class="v"><b>Free load test, twice.</b> Same zero-cost stand-ins both runs. Run 1: not memory, the warm pool's cold-start under a burst. Run 2 disproved the obvious fix &mdash; raising <code>pool_max</code> did nothing, because the pool never even reached the old ceiling; <code>pool_min</code> binds, and 2 vCPUs saturating is the second wall.</span></div>
     <div class="row"><span class="k">4.9</span><span class="v"><b>Monitoring.</b> Self-hosted, localhost-only, email alerts. A test alert found the alerting itself silently broken — wrong file owner, permission denied, container reported healthy throughout.</span></div>
   </div>
 </section>
@@ -254,6 +255,10 @@ footer{border-top:2px solid var(--ink);padding-top:18px;font-family:var(--displa
       <h3>Alerting that was silently broken</h3>
       <p><span class="mech">Wrong file owner on the SMTP credential.</span> The container started healthy, loaded its config, and every alert failed with "permission denied" — found only by sending a real test alert, not by reading the config.</p>
     </div>
+    <div class="card">
+      <h3>A test failure printed eight live secrets</h3>
+      <p><span class="mech">Settings had no <code>__repr__</code>; pytest printed the object in full.</span> Every key rotated at the provider regardless — nothing left the machine, but the exposure couldn't be un-seen. Rotation itself cost 40 minutes down: two separate Atlas users, one that silently drops a new password unless "Update User" is clicked, and a ping check that passes with zero privileges.</p>
+    </div>
   </div>
 </section>
 
@@ -293,7 +298,7 @@ footer{border-top:2px solid var(--ink);padding-top:18px;font-family:var(--displa
 </section>
 
 <footer>
-  Voice Agent Revision Card · companion to the Build Log · 16 September 2026
+  Voice Agent Revision Card · companion to the Build Log · 18 September 2026
 </footer>
 
 </div>
