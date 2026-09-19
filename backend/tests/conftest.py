@@ -56,21 +56,9 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 @pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
 async def _test_db():
     from app.db.mongo import database, init_db
-    from app.models.appointment import Appointment
-    from app.models.approval import PendingApproval
-    from app.models.bot import Bot
-    from app.models.bot_tool import BotTool
-    from app.models.conversation import ConversationTurn
-    from app.models.document import Document
-    from app.models.order import Order
-    from app.models.payment import PaymentSession
-    from app.models.revoked_token import RevokedRefreshToken
-    from app.models.user import User
-    from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
+    from app.models.registry import ALL_MODELS
 
-    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
-                   RevokedRefreshToken, BotTool, PaymentSession,
-                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
+    await init_db(ALL_MODELS)
     yield
     # Checked again at the moment it matters, not only at import: the name
     # that reaches this line is the one actually connected to, and it is the

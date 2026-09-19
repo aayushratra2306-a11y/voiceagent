@@ -25,6 +25,7 @@ from typing import Literal
 
 from beanie import Document
 from pydantic import Field
+from pymongo import ASCENDING, IndexModel
 
 # The event types this system can emit. A closed set rather than a free
 # string: a customer choosing what to subscribe to needs to see the real
@@ -53,6 +54,9 @@ EVENT_TYPES = frozenset({
 
 class WebhookSubscription(Document):
     user_id: str  # whose platform account this belongs to (the bot's owner)
+    # Task 5.1 — the owning organisation. user_id stays as "who created it"
+    # and is no longer used for access. Blank = not yet migrated = invisible.
+    org_id: str = ""
     event: str  # one of EVENT_TYPES
     url: str
     secret_encrypted: str
@@ -61,6 +65,12 @@ class WebhookSubscription(Document):
 
     class Settings:
         name = "webhook_subscriptions"
+        indexes = [
+            IndexModel(
+                [("org_id", ASCENDING), ("event", ASCENDING), ("enabled", ASCENDING)],
+                name="webhooks_by_org_event",
+            ),
+        ]
 
 
 class WebhookDelivery(Document):

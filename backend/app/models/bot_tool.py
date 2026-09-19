@@ -27,6 +27,7 @@ from typing import Any, Literal
 
 from beanie import Document
 from pydantic import BaseModel, Field, field_validator
+from pymongo import ASCENDING, IndexModel
 
 # What the AI is allowed to be asked for. Deliberately the JSON Schema
 # primitives and nothing more: these are values a language model produces
@@ -175,6 +176,9 @@ class BotTool(Document):
     """One configured tool belonging to one bot."""
 
     bot_id: str
+    # Task 5.1 — the owning organisation. user_id stays as "who created it"
+    # and is no longer used for access. Blank = not yet migrated = invisible.
+    org_id: str = ""
     # What the model calls it. Must be a valid identifier because it becomes
     # a function name in the schema sent to the provider.
     name: str
@@ -234,6 +238,11 @@ class BotTool(Document):
 
     class Settings:
         name = "bot_tools"
+        indexes = [
+            IndexModel(
+                [("org_id", ASCENDING), ("bot_id", ASCENDING)], name="tools_by_org_bot"
+            ),
+        ]
 
     def as_undo_tool(self) -> "BotTool":
         """This tool's undo, shaped as a tool the HTTP caller can run.

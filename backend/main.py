@@ -21,17 +21,8 @@ from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.db.mongo import init_db
 from app.db.seed import seed_fake_orders
-from app.models.appointment import Appointment
-from app.models.approval import PendingApproval
-from app.models.bot import Bot
-from app.models.bot_tool import BotTool
-from app.models.conversation import ConversationTurn
-from app.models.document import Document
-from app.models.order import Order
-from app.models.payment import PaymentSession
-from app.models.revoked_token import RevokedRefreshToken
+from app.models.registry import ALL_MODELS
 from app.models.user import User
-from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
 from app.pipeline import standin_providers
 from app.services.webhooks import webhook_delivery_loop
 
@@ -55,9 +46,7 @@ async def lifespan(app: FastAPI):
     if settings.standin_providers:
         standin_providers.announce()
 
-    await init_db([User, Bot, Document, Order, Appointment, ConversationTurn,
-                   RevokedRefreshToken, BotTool, PaymentSession,
-                   WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval])
+    await init_db(ALL_MODELS)
     await seed_fake_orders()
     # Task 4.5 — hand back any capacity slots this node was still holding
     # when it last stopped. Nothing is running yet, so anything tagged with

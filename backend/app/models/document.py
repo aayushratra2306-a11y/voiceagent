@@ -1,11 +1,15 @@
 from datetime import UTC, datetime
 
 from beanie import Document as BeanieDocument
+from pymongo import ASCENDING, IndexModel
 
 
 class Document(BeanieDocument):
     bot_id: str
     user_id: str
+    # Task 5.1 — the owning organisation. user_id stays as "who created it"
+    # and is no longer used for access. Blank = not yet migrated = invisible.
+    org_id: str = ""
     filename: str
     chunk_count: int = 0
     created_at: datetime = datetime.now(UTC)
@@ -19,3 +23,8 @@ class Document(BeanieDocument):
 
     class Settings:
         name = "documents"
+        indexes = [
+            IndexModel(
+                [("org_id", ASCENDING), ("bot_id", ASCENDING)], name="docs_by_org_bot"
+            ),
+        ]

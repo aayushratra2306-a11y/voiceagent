@@ -21,6 +21,7 @@ from typing import Literal
 
 from beanie import Document
 from pydantic import Field
+from pymongo import ASCENDING, IndexModel
 
 
 class PaymentSession(Document):
@@ -37,6 +38,8 @@ class PaymentSession(Document):
     # it, a payment landing after the caller hung up is recorded here and
     # nowhere else, which is the case a customer most needs told about.
     user_id: str = ""
+    # from the TOOL's org — two writers run outside a call (spec, Part 1)
+    org_id: str = ""
 
     amount: str = ""
     currency: str = ""
@@ -51,3 +54,6 @@ class PaymentSession(Document):
 
     class Settings:
         name = "payment_sessions"
+        indexes = [
+            IndexModel([("org_id", ASCENDING)], name="payments_by_org"),
+        ]

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from beanie import Document
 from pydantic import Field
+from pymongo import ASCENDING, IndexModel
 
 
 class Appointment(Document):
@@ -45,6 +46,9 @@ class Appointment(Document):
     status: str = "booked"  # booked | cancelled
     # Which bot took it. Blank for rows written before 3.5.
     bot_id: str = ""
+    # Task 5.1 — the owning organisation. user_id stays as "who created it"
+    # and is no longer used for access. Blank = not yet migrated = invisible.
+    org_id: str = ""
     caller_name: str = ""
     # The key held in the booking_slots collection while this is live. Kept
     # so cancelling can release exactly the slot this booking took, rather
@@ -53,3 +57,9 @@ class Appointment(Document):
 
     class Settings:
         name = "appointments"
+        indexes = [
+            IndexModel(
+                [("org_id", ASCENDING), ("bot_id", ASCENDING), ("starts_at_utc", ASCENDING)],
+                name="appointments_by_org_bot_time",
+            ),
+        ]

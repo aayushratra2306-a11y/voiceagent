@@ -159,12 +159,13 @@ async def delete(confirmed: bool) -> None:
     from app.db.mongo import init_db
     from app.models.bot import Bot
     from app.models.conversation import ConversationTurn
+    from app.models.registry import ALL_MODELS
     from app.models.user import User
 
-    # Only the three collections this touches. init_db registers whatever it
-    # is given and nothing else, and a cleanup has no business knowing about
-    # payments, webhooks or approvals.
-    await init_db([User, Bot, ConversationTurn])
+    # Task 5.1 — the shared model list, so this script's init_db stays in
+    # step with what the app actually registers instead of a fourth
+    # hand-maintained copy.
+    await init_db(ALL_MODELS)
 
     users = await User.find_all().to_list()
     bots = await Bot.find_all().to_list()

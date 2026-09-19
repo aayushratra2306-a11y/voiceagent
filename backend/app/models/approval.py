@@ -19,12 +19,15 @@ from typing import Any, Literal
 
 from beanie import Document
 from pydantic import Field
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 
 class PendingApproval(Document):
     tool_id: str
     bot_id: str
     user_id: str  # the bot's owner — who is allowed to decide this
+    # from the TOOL's org — two writers run outside a call (spec, Part 1)
+    org_id: str = ""
     # The live call this came from, if any. Almost always long gone by the
     # time a person actually approves something (see the module docstring
     # below on notification) — kept anyway because a call that happens to
@@ -58,3 +61,9 @@ class PendingApproval(Document):
 
     class Settings:
         name = "pending_approvals"
+        indexes = [
+            IndexModel(
+                [("org_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)],
+                name="approvals_by_org_status_time",
+            ),
+        ]

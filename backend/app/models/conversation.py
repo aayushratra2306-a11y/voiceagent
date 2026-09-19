@@ -3,6 +3,7 @@ from typing import Any
 
 from beanie import Document, Indexed
 from pydantic import Field
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 
 class ConversationTurn(Document):
@@ -18,6 +19,9 @@ class ConversationTurn(Document):
 
     session_id: str  # groups every turn from one voice session together
     bot_id: str | None = None
+    # Task 5.1 — the owning organisation. user_id stays as "who created it"
+    # and is no longer used for access. Blank = not yet migrated = invisible.
+    org_id: str = ""
     bot_name: str = ""
 
     user_transcript: str = ""
@@ -41,4 +45,11 @@ class ConversationTurn(Document):
 
     class Settings:
         name = "conversation_turns"
-        indexes = ["bot_id", "session_id"]
+        indexes = [
+            "bot_id",
+            "session_id",
+            IndexModel(
+                [("org_id", ASCENDING), ("bot_id", ASCENDING), ("created_at", DESCENDING)],
+                name="turns_by_org_bot_time",
+            ),
+        ]

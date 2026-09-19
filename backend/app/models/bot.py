@@ -1,8 +1,12 @@
 from beanie import Document
+from pymongo import ASCENDING, IndexModel
 
 
 class Bot(Document):
     user_id: str
+    # Task 5.1 — the owning organisation. user_id stays as "who created it"
+    # and is no longer used for access. Blank = not yet migrated = invisible.
+    org_id: str = ""
     name: str
     system_prompt: str = "You are a helpful voice assistant."
     voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091"  # Cartesia default voice
@@ -30,3 +34,6 @@ class Bot(Document):
 
     class Settings:
         name = "bots"
+        indexes = [
+            IndexModel([("org_id", ASCENDING)], name="bots_by_org"),
+        ]
