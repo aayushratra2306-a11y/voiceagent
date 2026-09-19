@@ -186,7 +186,7 @@ table{font-size:11.5px}
       <tr><td class="mono">3</td><td><b>Zero Budget Strategy</b></td><td>Build free, client upgrades with four settings</td></tr>
       <tr><td class="mono">4</td><td><b>Complete Costing</b></td><td>Every service, free tiers, and two full monthly budgets</td></tr>
       <tr><td class="mono">5</td><td><b>The Flowchart</b></td><td>Eight phases, what each gives you, in order</td></tr>
-      <tr><td class="mono">6</td><td><b>Every Task in Detail</b></td><td>69 tasks — plain explanation, tools, steps, pitfalls, done-criteria. Tickable.</td></tr>
+      <tr><td class="mono">6</td><td><b>Every Task in Detail</b></td><td>72 tasks — plain explanation, tools, steps, pitfalls, done-criteria. Tickable.</td></tr>
       <tr><td class="mono">7</td><td><b>What's Missing</b></td><td>Every gap between demo and purchasable product</td></tr>
       <tr><td class="mono">8</td><td><b>88 Buyer Questions</b></td><td>Grouped by who asks, what they check, what you need. Tickable.</td></tr>
       <tr><td class="mono">9</td><td><b>Automation Catalog</b></td><td>Every task the bot could do — booking, payments, lookups, and more</td></tr>
@@ -201,7 +201,7 @@ table{font-size:11.5px}
   </table></div>
 
   <div class="callout ok">
-    <strong>Two trackers run at the top of this page.</strong> <b>BUILD</b> counts the 69 tasks you have
+    <strong>Two trackers run at the top of this page.</strong> <b>BUILD</b> counts the 72 tasks you have
     completed. <b>READY</b> counts how many of the 88 buyer questions you can already answer confidently.
     Both save automatically and follow you to any device where you open this link.
   </div>
@@ -649,7 +649,7 @@ pipeline_steps += [context_aggregator.<span class="fn">user</span>(), llm, tts,
   <div class="sec-eyebrow">Part 5</div>
   <h2>The Build Flowchart</h2>
   <p class="sec-desc">
-    Eight phases, roughly 384 hours. What each one gives you, and why the order matters. Already built
+    Eight phases, roughly 401 hours. What each one gives you, and why the order matters. Already built
     and not counted here: login, bot creation, the voice pipeline, and PDF knowledge.
   </p>
   <div class="card" style="padding:22px;overflow-x:auto">
@@ -664,7 +664,7 @@ flowchart TB
     P5 --> M1{{"★ FIRST PAYING CUSTOMER POSSIBLE — 166 hours in"}}
     M1 --> P6["PHASE 6 · Trust and Compliance · 46h<br/>Guardrails · PII removal · consent · audit log · SSO<br/><b>Gain: bigger companies can legally sign</b>"]
     P6 --> M2{{"★ MID-MARKET AND ENTERPRISE UNLOCKED"}}
-    M2 --> P7["PHASE 7 · Integration Surface · 88h<br/>Public API · widget · phone numbers · CRM · more sources · WhatsApp · callbacks<br/><b>Gain: fits how companies already work</b>"]
+    M2 --> P7["PHASE 7 · Integration Surface · 105h<br/>Public API · widget · phone numbers · CRM · more sources · WhatsApp · callbacks · email · invites<br/><b>Gain: fits how companies already work</b>"]
     P7 --> P8["PHASE 8 · Hyperscale · 84h<br/>Cells · Kubernetes · multi-region · sharding · caching<br/><b>Gain: 10 lakh users, 20,000 concurrent calls</b>"]
     P8 --> End(["Scales linearly beyond — add more cells, no rewrite"])
 </pre>
@@ -674,10 +674,10 @@ flowchart TB
   <div class="tw"><table>
     <thead><tr><th>If you work</th><th>Phases 1–5 (sellable)</th><th>All eight phases</th></tr></thead>
     <tbody>
-      <tr><td><b>2 hours a day</b></td><td>~3 months</td><td>~6 months</td></tr>
-      <tr><td><b>3 hours a day</b></td><td>~2 months</td><td>~4 months</td></tr>
-      <tr><td><b>5 hours a day</b></td><td>~5 weeks</td><td>~2.5 months</td></tr>
-      <tr><td><b>Weekends only</b></td><td>~6 months</td><td>~14 months</td></tr>
+      <tr><td><b>2 hours a day</b></td><td>~3 months</td><td>~6.5 months</td></tr>
+      <tr><td><b>3 hours a day</b></td><td>~2 months</td><td>~4.5 months</td></tr>
+      <tr><td><b>5 hours a day</b></td><td>~5 weeks</td><td>~2.7 months</td></tr>
+      <tr><td><b>Weekends only</b></td><td>~6 months</td><td>~16 months</td></tr>
     </tbody>
   </table></div>
 
@@ -693,7 +693,7 @@ flowchart TB
   </table></div>
 
   <div class="callout">
-    <strong>You do not need all 384 hours before your first sale.</strong> Phases 1–5 give you a product a
+    <strong>You do not need all 401 hours before your first sale.</strong> Phases 1–5 give you a product a
     small business can buy and you can charge for. Phase 6 unlocks mid-market and enterprise. Phases 7–8
     are what you build once paying customers pull you there. What matters at the sales table is that the
     architecture makes those phases <em>additive</em> rather than a rewrite — and it does.
@@ -704,7 +704,7 @@ flowchart TB
   <div class="sec-eyebrow">Part 6</div>
   <h2>Every Task, In Full Detail</h2>
   <p class="sec-desc">
-    All 69 tasks. Each opens to show a plain explanation, why it matters, the exact tools to use, the
+    All 72 tasks. Each opens to show a plain explanation, why it matters, the exact tools to use, the
     steps in order, the mistake that will bite you, and how to know you are finished. Tick the box when
     a task is done — it saves automatically.
   </p>
@@ -1481,6 +1481,17 @@ flowchart TB
     </tbody>
   </table></div>
 
+  <h3>Email and calendar invites</h3>
+  <div class="tw"><table>
+    <thead><tr><th style="width:52%">Your exact words</th><th style="width:130px">Where answered</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>"why its so difficult for the bot too catch my email address when i am spelling it right and multiple times"</td><td>Part 6 · task 7.9</td><td><span class="badge high">Planned</span></td></tr>
+      <tr><td>"secondly is there a feture planned for future where if i say bot to book an appointment for me it books the same and moreover it will send the invitation request to my calender"</td><td>Part 6 · task 7.11</td><td><span class="badge high">Planned</span></td></tr>
+      <tr><td>"yes do the research and add both to future tasks"</td><td>Part 6 · tasks 7.9, 7.11</td><td><span class="badge high">Planned</span></td></tr>
+      <tr><td>"and coming to the point i will like to work on this as well where we can give the bot email address and he can drop a mail to given email"</td><td>Part 6 · task 7.10</td><td><span class="badge med">Requested early</span></td></tr>
+    </tbody>
+  </table></div>
+
   <div class="callout ok">
     <strong>Nothing from the conversation has been left out.</strong> Every request above is answered
     somewhere in this document, and the four separate documents produced earlier have all been folded into
@@ -1935,7 +1946,7 @@ steps:["Confirm automatic backups are running.","Set retention to match your com
 tip:"Genuinely perform the restore, do not just read the documentation. Nearly everyone who assumes their backups work discovers a problem the first time they actually try — a missing permission, a wrong region, an incomplete snapshot.",
 d:"You have personally restored from backup and know exactly how long it takes."}
 ]},
-{n:7,name:"Integration Surface",sub:"Fitting into how companies work",hrs:88,c:"var(--teal)",tasks:[
+{n:7,name:"Integration Surface",sub:"Fitting into how companies work",hrs:105,c:"var(--teal)",tasks:[
 {id:"7.1",t:"Build the public API and keys",h:10,
 s:"A documented interface with API keys so customers' developers can create bots, pull transcripts and start calls from their own systems.",
 w:"This turns your product from a standalone app into a platform others build on, which massively deepens how far a customer can adopt it.",
@@ -1991,7 +2002,28 @@ w:"Callers are often busy when they first ring. A promised callback that actuall
 tools:["Function calling","MongoDB callback queue","Background worker","Exotel / Twilio outbound API","WhatsApp business-initiated calls"],
 steps:["Give the bot a schedule-callback tool that turns 'in 20 minutes' or 'tomorrow evening' into an exact time in the caller's time zone, and reads it back to confirm.","Confirm the number and channel, then save the callback in MongoDB with who asked, why, and the conversation so far. Never use an in-memory timer that a restart wipes out.","Run a worker that claims each due callback atomically before dialling, so two workers or a restart can never call the same person twice.","Place the call through the phone provider or WhatsApp and start the bot with the earlier context, opening with why it is calling.","Handle no answer, busy and voicemail: retry a limited number of times with a gap, then stop and send a message instead.","Refuse times outside permitted calling hours and numbers on the Do-Not-Disturb list, and let the caller cancel or move the callback."],
 tip:"In India the law decides which number you may call from. Service calls must come from a registered 1600-series number (promotional calls use 140), and any promotion mixed into a call makes the whole call promotional. Record that the caller asked for the callback: that is your consent. On WhatsApp, a customer who calls you can grant seven days' permission to be called back (if callback permission is switched on), but four unanswered calls in a row revoke it. Published guides disagree on the permitted calling hours, so check the current TCCCPR text before launch.",
-d:"You say 'call me back in 20 minutes', hang up, the server restarts in between, and the bot still calls exactly once, knows what you were discussing, and refuses a time outside permitted hours."}
+d:"You say 'call me back in 20 minutes', hang up, the server restarts in between, and the bot still calls exactly once, knows what you were discussing, and refuses a time outside permitted hours."},
+{id:"7.9",t:"Capture spelled emails and details reliably",h:6,
+s:"When a caller spells an email address, a name or a booking reference, the bot gets it right, reads it back letter by letter, and uses it only after the caller confirms it.",
+w:"Speech-to-text is built for sentences, not letters. Spelled letters come out as words ('a', 'why', 'you'), and a short pause between letters ends the turn, so the bot answers half an address. Anything that needs an email, from sending one (7.10) to a calendar invite (7.11), fails at the first step without this.",
+tools:["Deepgram smart_format","Deepgram keyterm prompting","Function calling","Email validation","Phonetic readback"],
+steps:["Start from evidence: pull the transcript lines from a real call where an email was missed and see which failure it was: letters turned into words, the turn split mid-spelling, or a Hindi bot mishearing English letters.","Turn on smart formatting and add keyterms for email words and common domains (gmail, outlook, yahoo, 'dot com', 'at the rate'). Both work on the Deepgram model English bots already use; check Hindi support before relying on either there.","Give the bot a capture-email tool that takes the address as heard, turns spoken forms into symbols ('at the rate' into @, 'dot' into a full stop), checks the shape, and returns it spelled out for reading back.","Always read the address back with phonetic anchors ('A for apple, Y for yellow') and act only on a clear yes. On a no, ask again only for the part that was wrong.","Stop pauses splitting a spelling: give the caller longer to pause while an address is being collected, or keep an unfinished address open instead of answering it.","After two failed attempts, stop trying by voice and offer a link to type it in instead, over WhatsApp (7.7) or SMS."],
+tip:"Two traps. Deepgram's smart formatting can hold an email back for up to 3 seconds of silence before formatting it, which fights the 500 ms pause cutoff the bot uses to end a turn, so test the two together on a real call. And changing Deepgram's settings mid-call reconnects it (Pipecat reconnects whenever an update actually changes a value), so a switch into a 'spelling mode' can lose the first letter; prefer settings that stay on for the whole call. Smart formatting of emails is English-only, so a Hindi bot needs the readback and the link fallback even more.",
+d:"Across ten real calls, including a Hindi bot, a spelled email address is captured and confirmed correctly within two attempts every time, or handed off to a link."},
+{id:"7.10",t:"Add a send-email tool",h:6,
+s:"The caller gives the bot an email address and asks for something to be sent: a summary of the call, a quote, a document, a confirmation. The bot sends it during the call and says truthfully whether it went.",
+w:"Emailing something to the caller is one of the most common follow-ups a caller asks for. It is also the first outbound channel the product runs itself, since the payment link (3.7) is sent through whatever SMS or WhatsApp service the customer points its HTTP tool at. Calendar invites (7.11) are built on top of it.",
+tools:["Transactional email API (Brevo, Resend or Amazon SES)","SMTP","Function calling","Human approval (3.10)"],
+steps:["Choose a provider and put it behind the same kind of switch as the other providers, so a customer can bring their own.","Buy a real domain for sending and set up SPF, DKIM and DMARC on it. The current duckdns address cannot: DuckDNS allows only one TXT record, of at most 255 characters.","Build send-email as a built-in tool taking recipient, subject and body, with the recipient read back letter by letter and confirmed before sending (7.9 makes that capture robust; until it exists, a simple readback and a clear yes is the minimum).","Limit what the bot may send: templates the bot owner wrote, or a summary of the call. Never arbitrary text dictated to someone else. Rate-limit per call and per bot.","Record every send against the call it came from, and tell the caller the provider's real answer: accepted, or failed and why.","Listen for bounces and complaints from the provider and stop sending to addresses that bounce."],
+tip:"A bot that emails any address it hears is an open relay: anyone can phone it and make it send mail to a stranger in your name, and your domain's reputation pays for it. Default to sending only to the caller's own confirmed address, allow other recipients per bot and behind approval (3.10), and cap the volume. The Gmail account that already sends the monitoring alerts is fine for a demo only: it allows about 500 recipients a day and puts a personal address in the From line. Free tiers as of September 2026: Brevo about 300 a day, Resend 3,000 a month; check current rates.",
+d:"A caller asks for a summary by email, the bot confirms the address, the email lands in a Gmail inbox rather than spam with the right content, and an attempt to send to a stranger's address is refused."},
+{id:"7.11",t:"Send calendar invites for bookings",h:5,
+s:"When the bot books an appointment (3.5), the caller also receives a calendar invitation they can add to Google Calendar or Outlook in one tap. Needs the send-email tool (7.10) and a confirmed address (7.9).",
+w:"A booking the caller forgets becomes a no-show. An invite puts it in the calendar they already check, with a reminder, and a voice reschedule or cancel updates it there too.",
+tools:["iCalendar (.ics), RFC 5545","Email invitations (iTIP)","Google Calendar API","Cal.com / CalDAV"],
+steps:["Start with an invitation email: when a booking succeeds, send a calendar file marked as a request, with the business as organiser and the caller as attendee, through 7.10's email tool.","Give each booking a permanent event ID. On reschedule send an update with the same ID and a higher sequence number; on cancel send a cancellation. The entry then moves or disappears instead of duplicating.","Write times in the file as UTC (the form ending in Z), which is how 3.5 already stores them, and let each calendar app show them in the caller's own zone.","Only later, and only if a customer needs it: sync bookings into the business's own Google Calendar, so their existing calendar shows when they are busy.","Test how the invite actually shows up in Gmail, Outlook and Apple Calendar, not just that the file is valid."],
+tip:"The invitation email needs no approval from Google; syncing into Google Calendar does. Its event scopes (calendar.events, calendar.events.owned) are classed as sensitive: until Google verifies the app, users see an 'unverified app' warning and the project is capped at 100 users for its whole life, a cap that cannot be reset. Gmail has been reported to show only 'Add to calendar' rather than Yes/No/Maybe when the invite is not built exactly right, so do not promise RSVPs until tested.",
+d:"A booking made by voice arrives as an invite that adds to Google Calendar and Outlook in one tap, a voice reschedule moves the same entry, and a voice cancel removes it."}
 ]},
 {n:8,name:"Hyperscale",sub:"Ten lakh users without falling over",hrs:84,c:"var(--red)",tasks:[
 {id:"8.1",t:"Move to cell-based architecture",h:15,
