@@ -118,7 +118,7 @@ export default function AppShell() {
           <button
             onClick={() => navigate('/dashboard')}
             className="flex items-center gap-2 shrink-0"
-            aria-label="Auris home"
+            aria-label="Voix home"
           >
             {/* Logomark */}
             <svg width="18" height="18" viewBox="0 0 26 26" fill="none">
@@ -128,7 +128,7 @@ export default function AppShell() {
               <rect x="21" y="9"  width="5" height="17" rx="2.5" fill="#00D4FF" opacity="0.6"/>
             </svg>
             <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 900, fontSize: '1.45rem', letterSpacing: '0.07em', color: '#00D4FF', lineHeight: 1, textShadow: '0 0 16px rgba(0,212,255,0.22)' }}>
-              AURIS
+              VOIX
             </span>
           </button>
 

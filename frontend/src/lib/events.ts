@@ -6,4 +6,4 @@
  * Deliberately not a context: the count already has an owner (the shell)
  * and a source of truth (the API). This only says "ask again now".
  */
-export const APPROVALS_CHANGED = 'auris:approvals-changed'
+export const APPROVALS_CHANGED = 'voix:approvals-changed'

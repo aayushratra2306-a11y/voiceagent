@@ -54,7 +54,7 @@ export default function LoginPage() {
               <rect x="21" y="9"  width="5" height="17" rx="2.5" fill="#00D4FF" opacity="0.6"/>
             </svg>
             <span style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 900, fontSize: '2.4rem', letterSpacing: '0.07em', color: '#00D4FF', lineHeight: 1, textShadow: '0 0 28px rgba(0,212,255,0.28)' }}>
-              AURIS
+              VOIX
             </span>
           </div>
 
