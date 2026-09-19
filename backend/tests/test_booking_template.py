@@ -327,13 +327,54 @@ def test_the_reference_alphabet_has_nothing_that_sounds_alike():
         assert confusable not in booking._REF_ALPHABET, confusable
 
 
-async def test_a_reference_is_issued_and_can_be_used_again(_a_bot_on_a_call):  # noqa: ARG001
+async def test_a_reference_is_issued_and_can_be_used_again(_a_bot_on_a_call):
     date = _future_date()
     made = await _call(booking.book_appointment, date=date, time="10:00", purpose="one")
 
     assert len(made["reference"]) == booking._REF_LENGTH
-    found = await booking._find_booking(made["reference"], "")
+    found = await booking._find_booking(made["reference"], str(_a_bot_on_a_call.id))
     assert found is not None
+
+
+# --- a reference only works on the bot that issued it -------------------------
+#
+# Found in the 5.1 design review, 2026-09-19: _find_booking took bot_id and
+# never used it, so the lookup spanned every bot on the platform. A caller of
+# any bot who said a live reference code could cancel or move another bot's
+# appointment — another customer's, once organisations exist.
+
+async def _switch_to_another_bot() -> Bot:
+    other = Bot(user_id="someone-else", name="Another customer's bot", timezone="Asia/Kolkata")
+    await other.insert()
+    call_context.set_call(bot_id=str(other.id), session_id="s2")
+    return other
+
+
+async def test_another_bots_caller_cannot_cancel_this_bots_booking(_a_bot_on_a_call):  # noqa: ARG001
+    made = await _call(booking.book_appointment, date=_future_date(), time="10:00", purpose="one")
+    other = await _switch_to_another_bot()
+
+    result = await _call(booking.cancel_appointment, reference=made["reference"])
+    await other.delete()
+
+    assert result["cancelled"] is False, result
+    still = await Appointment.find_one(Appointment.reference == made["reference"])
+    assert still.status == "booked"
+
+
+async def test_another_bots_caller_cannot_reschedule_this_bots_booking(_a_bot_on_a_call):  # noqa: ARG001
+    made = await _call(booking.book_appointment, date=_future_date(), time="10:00", purpose="one")
+    other = await _switch_to_another_bot()
+
+    result = await _call(
+        booking.reschedule_appointment,
+        reference=made["reference"], date=_future_date(4), time="11:00",
+    )
+    await other.delete()
+
+    assert result["rescheduled"] is False, result
+    still = await Appointment.find_one(Appointment.reference == made["reference"])
+    assert (still.date, still.time, still.status) == (made["date"], "10:00", "booked")
 
 
 async def test_a_reference_is_matched_however_the_model_spaces_it(_a_bot_on_a_call):  # noqa: ARG001

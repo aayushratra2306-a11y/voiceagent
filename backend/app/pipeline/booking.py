@@ -501,12 +501,22 @@ async def _next_free(after: datetime, config: BookingConfig, bot_id: str, limit:
 
 
 async def _find_booking(reference: str, bot_id: str) -> Appointment | None:
+    """A live booking made through THIS bot, or None.
+
+    bot_id is part of the lookup, not decoration. Until 2026-09-19 it was
+    accepted and ignored, so a reference said to any bot on the platform
+    found — and could cancel or move — any other bot's appointment. A
+    four-character code is a small space to guess in, and "another bot" is
+    another customer. A blank bot_id matches only bookings made with no bot
+    in context, which a real call never produces.
+    """
     ref = (reference or "").strip().upper().replace(" ", "").replace("-", "")
     if not ref:
         return None
     return await Appointment.find_one(
         Appointment.reference == ref,
         Appointment.status == "booked",
+        Appointment.bot_id == bot_id,
     )
 
 
