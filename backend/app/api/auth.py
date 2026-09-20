@@ -13,6 +13,7 @@ from app.core.auth import (
 from app.core.rate_limit import limiter
 from app.core.security import hash_password, needs_rehash, verify_password
 from app.models.user import User
+from app.services.orgs import ensure_personal_org
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -83,6 +84,13 @@ async def register(request: Request, body: RegisterRequest):
         await user.insert()
     except DuplicateKeyError as e:
         raise HTTPException(status_code=400, detail="Email already registered") from e
+
+    # Task 5.1 — every account starts with its own organisation. If this
+    # fails, GET /orgs heals it on first use; registration still succeeds.
+    try:
+        await ensure_personal_org(user)
+    except Exception as e:
+        logger.warning(f"[ORGS] Personal org not created at sign-up for {user.id}: {type(e).__name__}: {e}")
     return {"message": "User created successfully"}
 
 

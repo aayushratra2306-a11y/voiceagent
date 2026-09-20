@@ -165,3 +165,31 @@ async def user_b_token(_session_client):
 
 def auth_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+# Task 5.1 — token -> that user's personal organisation, so auth_headers(token)
+# can mean "this user, in their own workspace" (see Task 5).
+_org_of_token: dict[str, str] = {}
+
+
+async def make_user(email: str) -> str:
+    """A user, their personal organisation and an access token, without
+    going through the rate-limited /auth routes. Returns the token."""
+    from app.core.auth import create_access_token
+    from app.models.user import User
+    from app.services.orgs import ensure_personal_org
+
+    user = await User.find_one(User.email == email)
+    if user is None:
+        user = User(email=email, password_hash="not-used-by-this-helper")
+        await user.insert()
+    org = await ensure_personal_org(user)
+    token = create_access_token({"sub": email})
+    if org is not None:
+        _org_of_token[token] = str(org.id)
+    else:
+        from app.models.organisation import Membership
+
+        m = await Membership.find_one(Membership.user_id == str(user.id))
+        _org_of_token[token] = m.org_id
+    return token
