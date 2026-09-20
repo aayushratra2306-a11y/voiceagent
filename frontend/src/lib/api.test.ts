@@ -24,6 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { logout, trySilentRefresh } from './api'
+import { setActiveOrg, listBots, uploadDocument, fetchDocumentBlobUrl, listOrgs, addMember } from './api'
 
 /** A promise whose settlement this test controls, to hold a fetch open. */
 function deferred<T>() {
@@ -132,5 +133,61 @@ describe('signing out while a token refresh is in flight', () => {
       .filter(c => String(c[0]).endsWith('/auth/refresh')).length
 
     expect(refreshCallsAfter).toBeGreaterThan(refreshCallsBefore)
+  })
+})
+
+function mockFetch(impl: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+  const spy = vi.fn(impl)
+  vi.stubGlobal('fetch', spy)
+  return spy
+}
+const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+function headerOf(spy: ReturnType<typeof mockFetch>, call = 0): Record<string, string> {
+  const init = spy.mock.calls[call][1] as RequestInit
+  return Object.fromEntries(new Headers(init.headers).entries())
+}
+
+describe('X-Org-Id', () => {
+  beforeEach(() => { localStorage.setItem('token', 't'); setActiveOrg('org-1') })
+  afterEach(() => { setActiveOrg(null); localStorage.clear(); vi.unstubAllGlobals() })
+
+  it('rides on every ordinary request', async () => {
+    const spy = mockFetch(() => json([]))
+    await listBots()
+    expect(headerOf(spy)['x-org-id']).toBe('org-1')
+  })
+
+  it('rides on a document upload, which builds its own headers', async () => {
+    const spy = mockFetch(() => json({ id: 'd1', filename: 'a.pdf', chunk_count: 1, created_at: 'now' }))
+    await uploadDocument('bot-1', new File(['x'], 'a.pdf'))
+    expect(headerOf(spy)['x-org-id']).toBe('org-1')
+  })
+
+  it('rides on a blob fetch, which builds its own headers', async () => {
+    const spy = mockFetch(() => new Response(new Blob(['x']), { status: 200 }))
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x' })
+    await fetchDocumentBlobUrl('doc-1')
+    expect(headerOf(spy)['x-org-id']).toBe('org-1')
+  })
+
+  it('is left off /orgs, where the path or nothing decides the organisation', async () => {
+    const spy = mockFetch(() => json([]))
+    await listOrgs()
+    expect(headerOf(spy)['x-org-id']).toBeUndefined()
+  })
+
+  it('is left off the members endpoints, whose path names the organisation', async () => {
+    const spy = mockFetch(() => json({ user_id: 'u2', email: 'b@x.com', role: 'member', joined: 'now' }))
+    await addMember('org-2', 'b@x.com', 'member')
+    expect(headerOf(spy)['x-org-id']).toBeUndefined()
+    expect(spy.mock.calls[0][0]).toBe('/orgs/org-2/members')
+  })
+
+  it('sends no header at all when no organisation is active', async () => {
+    setActiveOrg(null)
+    const spy = mockFetch(() => json([]))
+    await listBots()
+    expect(headerOf(spy)['x-org-id']).toBeUndefined()
   })
 })

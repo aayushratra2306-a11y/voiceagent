@@ -1,8 +1,26 @@
+import type { Role } from './orgs'
+
 const BASE = ''  // proxied through Vite to localhost:8080
 
 function authHeaders(): HeadersInit {
   const token = localStorage.getItem('token')
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+// Task 5.1 — which organisation the current page is showing.
+//
+// Held in memory, not in storage: the organisation comes from the address
+// (/o/:orgId/…), so two tabs open on two organisations must not share it.
+// OrgProvider sets it while rendering, before any child effect fires a
+// request.
+let activeOrgId: string | null = null
+
+export function setActiveOrg(orgId: string | null): void {
+  activeOrgId = orgId
+}
+
+function orgHeaders(): HeadersInit {
+  return activeOrgId ? { 'X-Org-Id': activeOrgId } : {}
 }
 
 // Task 2.5 — the access token now lives 15 minutes (was 60), so a session
@@ -97,9 +115,19 @@ function describeValidationError(item: unknown): string {
 }
 
 async function request<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
+  // /orgs and /orgs/{id}/… decide the organisation from the path (or need
+  // none at all). The backend 404s a header that disagrees with the path,
+  // so sending one here would break switching organisations from a page
+  // belonging to a different one.
+  const orgScoped = !path.startsWith('/orgs')
   const res = await fetch(BASE + path, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...options.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+      ...(orgScoped ? orgHeaders() : {}),
+      ...options.headers,
+    },
   })
   if (res.status === 401 && !_retried) {
     // The access token expired mid-session (routine, not an error the user
@@ -356,7 +384,9 @@ export async function uploadDocument(botId: string, file: File): Promise<BotDocu
   const token = localStorage.getItem('token')
   const res = await fetch(`/bots/${botId}/documents`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    // Not request(): the body is FormData, so Content-Type must be left to
+    // the browser. The organisation header still has to be here by hand.
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...orgHeaders() },
     body: formData,
   })
   if (!res.ok) {
@@ -382,7 +412,9 @@ export async function deleteDocument(docId: string): Promise<void> {
 // but it repeats the same 401-refresh-once behavior so a citation clicked
 // after the 15-minute access token expires still opens.
 export async function fetchDocumentBlobUrl(docId: string, _retried = false): Promise<string> {
-  const res = await fetch(`${BASE}/documents/${docId}/file`, { headers: authHeaders() })
+  const res = await fetch(`${BASE}/documents/${docId}/file`, {
+    headers: { ...authHeaders(), ...orgHeaders() },
+  })
 
   if (res.status === 401 && !_retried) {
     await refreshAccessToken()
@@ -551,4 +583,51 @@ export async function approveAction(id: string): Promise<PendingApproval> {
 
 export async function denyAction(id: string): Promise<PendingApproval> {
   return request(`/approvals/${id}/deny`, { method: 'POST' })
+}
+
+// ── Organisations ───────────────────────────────────────────────────────────
+export interface Org {
+  id: string
+  name: string
+  personal: boolean
+  role: Role
+}
+
+export interface Member {
+  user_id: string
+  email: string
+  role: Role
+  joined: string
+}
+
+export async function listOrgs(): Promise<Org[]> {
+  return request('/orgs')
+}
+
+export async function createOrg(name: string): Promise<Org> {
+  return request('/orgs', { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+export async function renameOrg(orgId: string, name: string): Promise<Org> {
+  return request(`/orgs/${orgId}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+}
+
+export async function deleteOrg(orgId: string): Promise<void> {
+  return request(`/orgs/${orgId}`, { method: 'DELETE' })
+}
+
+export async function listMembers(orgId: string): Promise<Member[]> {
+  return request(`/orgs/${orgId}/members`)
+}
+
+export async function addMember(orgId: string, email: string, role: Role): Promise<Member> {
+  return request(`/orgs/${orgId}/members`, { method: 'POST', body: JSON.stringify({ email, role }) })
+}
+
+export async function setMemberRole(orgId: string, userId: string, role: Role): Promise<Member> {
+  return request(`/orgs/${orgId}/members/${userId}`, { method: 'PATCH', body: JSON.stringify({ role }) })
+}
+
+export async function removeMember(orgId: string, userId: string): Promise<void> {
+  return request(`/orgs/${orgId}/members/${userId}`, { method: 'DELETE' })
 }
