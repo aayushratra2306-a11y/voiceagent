@@ -70,28 +70,18 @@ async def test_user_cannot_list_documents_of_another_users_bot(client, user_a_to
     assert resp.status_code == 404
 
 
-async def test_connect_rejects_another_users_bot_id(client, user_a_token, user_b_token, monkeypatch):
-    # Task 5.1: connect.py's fetch_owned_bot is now an alias for
-    # app/core/org.py's fetch_org_bot, which takes an OrgContext rather than
-    # a User — /connect itself doesn't build one yet (Task 7 wires that up),
-    # so the real call site can't be exercised end-to-end here. This
-    # monkeypatches the same rejection connect() would eventually get from
-    # the real check, so the thing this test actually cares about — that a
-    # 404 there is faithfully returned to the caller rather than swallowed
-    # or turned into something else — still holds.
-    from fastapi import HTTPException
-
-    from app.api import connect as connect_module
-
+@pytest.mark.xfail(
+    reason="Task 7 wires /connect's call site to OrgContext; until then "
+    "fetch_owned_bot (aliased to fetch_org_bot) is called with a User where "
+    "an OrgContext is required, so EVERY /connect request raises "
+    "AttributeError instead of running the real check. See task-5-report.md.",
+    strict=False,
+)
+async def test_connect_rejects_another_users_bot_id(client, user_a_token, user_b_token):
     resp = await client.post(
         "/bots/", json={"name": "A's Voice Bot"}, headers=auth_headers(user_a_token)
     )
     bot_id = resp.json()["id"]
-
-    async def reject(bid, user):
-        raise HTTPException(status_code=404, detail="Bot not found")
-
-    monkeypatch.setattr(connect_module, "fetch_owned_bot", reject)
 
     # A minimal (invalid-as-WebRTC, but that's fine — ownership is checked
     # before the SDP is ever touched) offer, from user B.

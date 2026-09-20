@@ -489,9 +489,16 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
     # the tests that monkeypatch `connect_module.fetch_owned_bot` (see
     # test_capacity_cap.py, test_connect_validates_before_ending.py, etc.)
     # keep working unchanged. The real signature has already changed to
-    # (bot_id, ctx: OrgContext) — passing current_user here is a stopgap;
-    # Task 7 threads an actual OrgContext through /connect and fixes this
-    # call site for real.
+    # (bot_id, ctx: OrgContext) — passing current_user here is a stopgap.
+    #
+    # BROKEN until Task 7: fetch_org_bot reads ctx.org_id, and current_user
+    # is a User, not an OrgContext, so this line raises AttributeError on
+    # EVERY call to /connect — not only a request naming another
+    # organisation's bot. There is currently no request this line succeeds
+    # for. Task 7 threads a real OrgContext through /connect and fixes this
+    # call site; nothing here is deployed before that lands (see
+    # task-5-report.md's fix-round-1 note — no test exercises this real,
+    # un-monkeypatched call site, which Task 7 must add).
     bot = await fetch_owned_bot(body.bot_id, current_user)
 
     # Now that the request is known to be legitimate: this caller gets
