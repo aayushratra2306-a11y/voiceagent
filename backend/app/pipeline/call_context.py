@@ -44,6 +44,9 @@ class CallContext:
     # provider's webhook arriving later can find this exact call and speak
     # into it while it is still live.
     pc_id: str | None = None
+    # Task 5.1 — the bot's organisation. Booking and the transcript stamp it;
+    # webhooks.emit() fires to this organisation's subscriptions.
+    org_id: str | None = None
     language: str = "en"
     # Task 3.3's background runner, so a builtin tool can also hand slow work
     # off instead of holding the turn. None outside a call.

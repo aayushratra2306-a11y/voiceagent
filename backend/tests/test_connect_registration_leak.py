@@ -35,6 +35,7 @@ from app.core.call_capacity import (
     active_call_count,
     use_backend,
 )
+from app.core.org import OrgContext
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -81,6 +82,7 @@ def _arrange(monkeypatch, answer):
         llm_model = "m"
         language = "en"
         user_id = "user-1"
+        org_id = "org-1"
 
     async def owned(*a, **k):
         return _Bot()
@@ -108,6 +110,10 @@ class _FakeUser:
     id = "user-1"
 
 
+def _ctx():
+    return OrgContext(user=_FakeUser(), org_id="org-1", role="owner")
+
+
 async def test_a_malformed_answer_does_not_leak_the_capacity_slot(monkeypatch):
     """The worker came back with a dict that has no pc_id — a KeyError right
     where the old guard had just stopped protecting."""
@@ -120,7 +126,7 @@ async def test_a_malformed_answer_does_not_leak_the_capacity_slot(monkeypatch):
     # pc_id is the exact failure this guards, and asserting the precise
     # type keeps the test honest if the failure mode ever changes.
     with pytest.raises(KeyError):
-        await connect_module.connect(body, current_user=_FakeUser())
+        await connect_module.connect(body, ctx=_ctx())
 
     assert await active_call_count() == before, "the capacity slot leaked"
 
@@ -135,7 +141,7 @@ async def test_a_malformed_answer_does_not_leak_the_worker_process(monkeypatch):
     # pc_id is the exact failure this guards, and asserting the precise
     # type keeps the test honest if the failure mode ever changes.
     with pytest.raises(KeyError):
-        await connect_module.connect(body, current_user=_FakeUser())
+        await connect_module.connect(body, ctx=_ctx())
 
     assert proc.terminated, "the worker process was left running and unreferenced"
 
@@ -146,7 +152,7 @@ async def test_a_successful_call_keeps_its_slot_and_its_process(monkeypatch):
     proc = _arrange(monkeypatch, answer={"sdp": "x", "type": "answer", "pc_id": "pc-1"})
 
     body = connect_module.WebRTCOffer(bot_id="bot-1", sdp="x", type="offer")
-    result = await connect_module.connect(body, current_user=_FakeUser())
+    result = await connect_module.connect(body, ctx=_ctx())
 
     assert result["pc_id"] == "pc-1"
     assert "pc-1" in connect_module._active_calls

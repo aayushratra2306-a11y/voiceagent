@@ -70,13 +70,6 @@ async def test_user_cannot_list_documents_of_another_users_bot(client, user_a_to
     assert resp.status_code == 404
 
 
-@pytest.mark.xfail(
-    reason="Task 7 wires /connect's call site to OrgContext; until then "
-    "fetch_owned_bot (aliased to fetch_org_bot) is called with a User where "
-    "an OrgContext is required, so EVERY /connect request raises "
-    "AttributeError instead of running the real check. See task-5-report.md.",
-    strict=False,
-)
 async def test_connect_rejects_another_users_bot_id(client, user_a_token, user_b_token):
     resp = await client.post(
         "/bots/", json={"name": "A's Voice Bot"}, headers=auth_headers(user_a_token)

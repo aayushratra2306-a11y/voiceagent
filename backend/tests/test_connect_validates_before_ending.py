@@ -37,6 +37,7 @@ request was invalid is the normal price of validating a request at all.
 import pytest
 
 from app.api import connect as connect_module
+from app.core.org import OrgContext
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -76,7 +77,7 @@ async def test_an_unowned_bot_id_does_not_kill_the_callers_existing_call(
     not tear anything down on its way to being rejected."""
     from fastapi import HTTPException
 
-    async def reject(bot_id, user):
+    async def reject(bot_id, ctx):
         raise HTTPException(status_code=404, detail="Bot not found")
 
     monkeypatch.setattr(connect_module, "fetch_owned_bot", reject)
@@ -93,7 +94,7 @@ async def test_an_unowned_bot_id_does_not_kill_the_callers_existing_call(
     with pytest.raises(HTTPException) as raised:
         await connect_module.connect(
             connect_module.WebRTCOffer(bot_id="does-not-exist", sdp="x", type="offer"),
-            current_user=_User(),
+            ctx=OrgContext(user=_User(), org_id="org-1", role="owner"),
         )
 
     assert raised.value.status_code == 404
@@ -107,7 +108,7 @@ async def test_a_valid_request_still_ends_the_previous_call(live_call, monkeypat
     a way to run two pipelines for one caller."""
     ended = []
 
-    async def accept(bot_id, user):
+    async def accept(bot_id, ctx):
         class _Bot:
             id = "bot-1"
             name = "Test"
@@ -116,6 +117,7 @@ async def test_a_valid_request_still_ends_the_previous_call(live_call, monkeypat
             llm_model = "m"
             language = "en"
             user_id = "user-1"
+            org_id = "org-1"
         return _Bot()
 
     async def fake_end(user_id):
@@ -135,7 +137,7 @@ async def test_a_valid_request_still_ends_the_previous_call(live_call, monkeypat
     with pytest.raises(_OrderingReached):
         await connect_module.connect(
             connect_module.WebRTCOffer(bot_id="bot-1", sdp="x", type="offer"),
-            current_user=_User(),
+            ctx=OrgContext(user=_User(), org_id="org-1", role="owner"),
         )
 
     assert ended == ["user-1"], "the previous call was not ended for a valid request"

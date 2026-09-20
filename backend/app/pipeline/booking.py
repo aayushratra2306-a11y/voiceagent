@@ -220,7 +220,14 @@ async def _hold_slot(key: str, purpose: str) -> bool:
 
     try:
         await _slots_collection().insert_one(
-            {"_id": key, "purpose": purpose, "held_at": datetime.now(UTC)}
+            {
+                "_id": key,
+                "purpose": purpose,
+                "held_at": datetime.now(UTC),
+                # Task 7 — the call's organisation, so the slot itself can be
+                # scoped/audited alongside the appointment that holds it.
+                "org_id": call_context.current().org_id or "",
+            }
         )
         return True
     except DuplicateKeyError:
@@ -436,6 +443,7 @@ async def book_appointment(params: FunctionCallParams, date: str, time: str, pur
         reference=reference,
         status="booked",
         bot_id=ctx.bot_id or "",
+        org_id=ctx.org_id or "",
         slot_key=key,
     )
     try:
@@ -698,16 +706,12 @@ async def _emit(event: str, appointment: Appointment) -> None:
         return
 
     try:
-        # Task 6 renamed emit()'s parameter to org_id; call_context has no
-        # real organisation yet. None (not a call_context id) so emit()
-        # takes its own documented "nothing to queue" path — logged and
-        # dropped — rather than silently querying subscriptions under a
-        # value that isn't actually an org id. Task 7 wires the real
-        # organisation through the call context; until then, these events
-        # do not fire.
+        # Task 7 — the call's real organisation, read from call_context
+        # (set once at pipeline start, see voice_pipeline.py's set_call).
+        ctx = call_context.current()
         await emit(
             event,
-            org_id=None,
+            org_id=ctx.org_id,
             payload={
                 "reference": appointment.reference,
                 "date": appointment.date,

@@ -310,11 +310,13 @@ class TranscriptRecorder(FrameProcessor):
     the actual cleaned text that got spoken, not the raw Markdown.
     """
 
-    def __init__(self, session_id: str, bot_id: str | None, bot_name: str):
+    def __init__(self, session_id: str, bot_id: str | None, bot_name: str, org_id: str | None = None):
         super().__init__()
         self._session_id = session_id
         self._bot_id = bot_id
         self._bot_name = bot_name
+        # Task 7 — the call's organisation, stamped onto every saved turn.
+        self._org_id = org_id or ""
         self._reset_turn()
 
     def add_user_text(self, text: str | None) -> None:
@@ -382,6 +384,7 @@ class TranscriptRecorder(FrameProcessor):
         turn = ConversationTurn(
             session_id=self._session_id,
             bot_id=self._bot_id,
+            org_id=self._org_id,
             bot_name=self._bot_name,
             user_transcript=" ".join(self._user_parts),
             assistant_reply="".join(self._assistant_parts),
@@ -455,6 +458,11 @@ async def run_voice_pipeline(
     # fires to whichever customer of this platform configured it, so their
     # own system hears about their own bot's events.
     user_id: str | None = None,
+    # Task 7 — the bot's organisation, plain data crossing the process
+    # boundary in bot_config like everything else here (see api/connect.py).
+    # Stamped onto every booking/slot/transcript turn this call produces and
+    # is who call.ended fires to.
+    org_id: str | None = None,
 ):
     session_id = str(uuid.uuid4())
     call_started_at = datetime.now(UTC)  # task 3.8 — call.ended's duration
@@ -468,7 +476,8 @@ async def run_voice_pipeline(
     # process per call). pc_id is here for the same reason — task 3.7's
     # payment tool stamps it onto the PaymentSession it creates.
     call_context.set_call(
-        bot_id=bot_id, session_id=session_id, language=language, pc_id=pc_id, user_id=user_id
+        bot_id=bot_id, session_id=session_id, language=language, pc_id=pc_id,
+        user_id=user_id, org_id=org_id,
     )
 
     # NOTE (Phase 1, task 1.1): pipecat 1.7.0 removed `vad_analyzer` from
@@ -736,7 +745,9 @@ async def run_voice_pipeline(
             RAGContextProcessor(bot_id, context, voice_system_prompt, webrtc_connection)
         )
 
-    transcript_recorder = TranscriptRecorder(session_id=session_id, bot_id=bot_id, bot_name=bot_name)
+    transcript_recorder = TranscriptRecorder(
+        session_id=session_id, bot_id=bot_id, bot_name=bot_name, org_id=org_id
+    )
     record_user_turns(user_aggregator, transcript_recorder)
 
     pipeline_steps += [
@@ -843,16 +854,12 @@ async def run_voice_pipeline(
         try:
             from app.services.webhooks import emit
 
-            # Task 6 renamed emit()'s parameter to org_id; this pipeline has
-            # no real organisation to hand it yet. None (not user_id) so
-            # emit() takes its own documented "nothing to queue" path —
-            # logged and dropped — rather than silently querying
-            # subscriptions under a value that isn't actually an org id.
-            # Task 7 wires the real organisation through here; until then,
-            # call.ended does not fire.
+            # Task 7 — the call's real organisation (crossed in via
+            # bot_config -> run_voice_pipeline's org_id parameter), so this
+            # fires to whichever org's subscriptions actually want it.
             await emit(
                 "call.ended",
-                org_id=None,
+                org_id=org_id,
                 payload={
                     "bot_id": bot_id,
                     "bot_name": bot_name,

@@ -20,6 +20,7 @@ from app.core.call_capacity import (
     try_acquire_call_slot,
     use_backend,
 )
+from app.core.org import OrgContext
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -130,6 +131,7 @@ async def test_connect_refuses_with_a_clean_response_when_full(monkeypatch):
         llm_model = "m"
         language = "en"
         user_id = "user-x"
+        org_id = "org-x"
 
     async def _fake_owned_bot(*a, **k):
         return _Bot()
@@ -142,7 +144,9 @@ async def test_connect_refuses_with_a_clean_response_when_full(monkeypatch):
 
     with pytest.raises(HTTPException) as excinfo:
         body = connect_module.WebRTCOffer(bot_id="bot-1", sdp="x", type="offer")
-        await connect_module.connect(body, current_user=_FakeUser())
+        await connect_module.connect(
+            body, ctx=OrgContext(user=_FakeUser(), org_id="org-x", role="owner")
+        )
 
     assert excinfo.value.status_code == 503
 
@@ -239,7 +243,9 @@ async def test_an_unowned_bot_id_does_not_consume_a_slot(monkeypatch):
     body = connect_module.WebRTCOffer(bot_id="does-not-exist", sdp="x", type="offer")
 
     with pytest.raises(HTTPException) as excinfo:
-        await connect_module.connect(body, current_user=_FakeUser())
+        await connect_module.connect(
+            body, ctx=OrgContext(user=_FakeUser(), org_id="org-z", role="owner")
+        )
 
     assert excinfo.value.status_code == 404
     assert await active_call_count() == before, "the acquired slot was never released"
@@ -280,6 +286,7 @@ async def test_a_setup_timeout_releases_the_slot_it_acquired(monkeypatch):
             llm_model = "m"
             language = "en"
             user_id = "owner-1"
+            org_id = "org-y"
 
         return _Bot()
 
@@ -292,7 +299,9 @@ async def test_a_setup_timeout_releases_the_slot_it_acquired(monkeypatch):
     body = connect_module.WebRTCOffer(bot_id="bot-1", sdp="x", type="offer")
 
     with pytest.raises(HTTPException) as excinfo:
-        await connect_module.connect(body, current_user=_FakeUser())
+        await connect_module.connect(
+            body, ctx=OrgContext(user=_FakeUser(), org_id="org-y", role="owner")
+        )
 
     assert excinfo.value.status_code == 504
     assert await active_call_count() == before, "the acquired slot was never released"

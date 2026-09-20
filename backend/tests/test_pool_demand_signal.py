@@ -30,6 +30,7 @@ import pytest
 
 from app.api import connect as connect_module
 from app.core.call_capacity import _InProcessCapacity, use_backend
+from app.core.org import OrgContext
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -82,6 +83,10 @@ class _User:
     id = "user-1"
 
 
+def _ctx():
+    return OrgContext(user=_User(), org_id="org-1", role="owner")
+
+
 @pytest.fixture(autouse=True)
 def _arrange(monkeypatch):
     use_backend(_InProcessCapacity())
@@ -97,6 +102,7 @@ def _arrange(monkeypatch):
         llm_model = "m"
         language = "en"
         user_id = "user-1"
+        org_id = "org-1"
 
     async def owned(*a, **k):
         return _Bot()
@@ -115,7 +121,7 @@ def _arrange(monkeypatch):
 
 async def _call():
     body = connect_module.WebRTCOffer(bot_id="bot-1", sdp="x", type="offer")
-    return await connect_module.connect(body, _User())
+    return await connect_module.connect(body, _ctx())
 
 
 async def test_a_caller_handed_a_still_starting_worker_counts_as_demand(monkeypatch):

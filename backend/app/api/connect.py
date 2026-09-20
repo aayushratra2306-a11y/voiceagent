@@ -17,7 +17,13 @@ from app.core.call_capacity import (
     try_acquire_call_slot,
 )
 from app.core.config import settings
-from app.core.org import fetch_org_bot as fetch_owned_bot
+from app.core.org import (
+    OrgContext,
+    require_role,
+)
+from app.core.org import (
+    fetch_org_bot as fetch_owned_bot,
+)
 from app.models.user import User
 from app.pipeline.call_worker import call_worker_main, pooled_worker_main
 
@@ -464,8 +470,9 @@ async def ice_servers(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/connect")
-async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_user)):
+async def connect(body: WebRTCOffer, ctx: OrgContext = Depends(require_role("viewer"))):
     global _pool_exhausted_since_last_check
+    current_user = ctx.user
 
     # Review finding #4 — validate BEFORE tearing anything down.
     #
@@ -484,22 +491,17 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
     # this calls a plain function rather than going through a FastAPI
     # dependency (which would need bot_id as a path parameter).
     #
-    # Task 5.1: the old per-user helper module is gone. This name is now an
-    # alias for app/core/org.py's fetch_org_bot, kept so
-    # the tests that monkeypatch `connect_module.fetch_owned_bot` (see
+    # Task 5.1 / Task 7 — the old per-user helper module is gone. This name
+    # is now an alias for app/core/org.py's fetch_org_bot, kept so the tests
+    # that monkeypatch `connect_module.fetch_owned_bot` (see
     # test_capacity_cap.py, test_connect_validates_before_ending.py, etc.)
-    # keep working unchanged. The real signature has already changed to
-    # (bot_id, ctx: OrgContext) — passing current_user here is a stopgap.
-    #
-    # BROKEN until Task 7: fetch_org_bot reads ctx.org_id, and current_user
-    # is a User, not an OrgContext, so this line raises AttributeError on
-    # EVERY call to /connect — not only a request naming another
-    # organisation's bot. There is currently no request this line succeeds
-    # for. Task 7 threads a real OrgContext through /connect and fixes this
-    # call site; nothing here is deployed before that lands (see
-    # task-5-report.md's fix-round-1 note — no test exercises this real,
-    # un-monkeypatched call site, which Task 7 must add).
-    bot = await fetch_owned_bot(body.bot_id, current_user)
+    # keep working unchanged. `require_role("viewer")` above resolves the
+    # real OrgContext (401 bad token -> 400 no org chosen -> 404 not a
+    # member) before this ever runs, so this is a real, checked lookup — any
+    # bot outside `ctx.org_id`, whoever created it, 404s here, one call in,
+    # by id AND org_id together (see fetch_org_bot's own docstring on why
+    # that matters more than fetch-then-compare).
+    bot = await fetch_owned_bot(body.bot_id, ctx)
 
     # Now that the request is known to be legitimate: this caller gets
     # exactly one live pipeline. A previous one still running would keep
@@ -545,6 +547,11 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
         # whichever customer of THIS platform configured it (Bot.user_id),
         # so their own system hears about their own bot's events.
         "user_id": str(bot.user_id),
+        # Task 7 — the bot's organisation, plain data across the process
+        # boundary like everything else here. Booking stamps it on every
+        # appointment and slot, the transcript recorder stamps it on every
+        # turn, and call.ended emits to it — see voice_pipeline.py.
+        "org_id": bot.org_id,
     }
 
     loop = asyncio.get_event_loop()
@@ -690,11 +697,15 @@ def get_payment_queue(pc_id: str) -> "mp.Queue | None":
 @router.post("/connect/ice")
 async def ice_candidate(body: IcePatchBody, current_user: User = Depends(get_current_user)):
     entry = _active_calls.get(body.pc_id)
-    if entry is None:
+    # Task 5.1 — a live call belongs to the person who started it. Someone
+    # else's pc_id is treated exactly like an ended call, so nothing leaks:
+    # before this check, any logged-in user who guessed or observed another
+    # caller's pc_id could post ICE candidates into that stranger's call.
+    if entry is None or entry.user_id != str(current_user.id):
         # The call may have already ended (or this is a stray/late candidate
         # from a connection that failed setup) — not an error worth 4xx-ing
         # the client over, same as the original handler's tolerant behavior.
-        logger.debug(f"[CALL] ICE candidate for unknown/ended pc_id={body.pc_id}, ignoring")
+        logger.debug(f"[CALL] ICE candidate for unknown/ended/not-yours pc_id={body.pc_id}, ignoring")
         return {"status": "ok"}
 
     entry.ice_queue.put({
