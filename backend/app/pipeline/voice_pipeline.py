@@ -844,11 +844,15 @@ async def run_voice_pipeline(
             from app.services.webhooks import emit
 
             # Task 6 renamed emit()'s parameter to org_id; this pipeline has
-            # no real organisation to hand it yet, so user_id stands in.
-            # Task 7 wires the actual org through here.
+            # no real organisation to hand it yet. None (not user_id) so
+            # emit() takes its own documented "nothing to queue" path —
+            # logged and dropped — rather than silently querying
+            # subscriptions under a value that isn't actually an org id.
+            # Task 7 wires the real organisation through here; until then,
+            # call.ended does not fire.
             await emit(
                 "call.ended",
-                org_id=user_id,
+                org_id=None,
                 payload={
                     "bot_id": bot_id,
                     "bot_name": bot_name,
