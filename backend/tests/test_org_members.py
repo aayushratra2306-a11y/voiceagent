@@ -159,7 +159,6 @@ async def test_an_admin_of_a_cannot_rename_b_by_sending_as_header(client):
     assert "B7" in names and "pwned" not in names
 
 
-@pytest.mark.skip(reason="needs Task 5")
 async def test_only_an_empty_org_that_is_not_your_last_can_be_deleted(client):
     owner = await make_user("orgs-8@voiceagent-test.com")
     org_id = (await client.post("/orgs", json={"name": "Acme8"}, headers=_h(owner))).json()["id"]

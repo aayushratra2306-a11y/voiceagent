@@ -215,7 +215,10 @@ async def test_the_ordinary_rotation_still_works():
         resp = await client.post("/auth/refresh")
         assert resp.status_code == 200
         token = resp.json()["access_token"]
-        me = await client.get("/bots/", headers={"Authorization": f"Bearer {token}"})
+        # /orgs, not /bots/: this only needs to prove the token authenticates;
+        # /bots/ additionally requires an organisation header (Task 5.1),
+        # which is unrelated to what this test checks.
+        me = await client.get("/orgs", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
     finally:
         await client.aclose()

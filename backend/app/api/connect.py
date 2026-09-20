@@ -17,7 +17,7 @@ from app.core.call_capacity import (
     try_acquire_call_slot,
 )
 from app.core.config import settings
-from app.core.deps import fetch_owned_bot
+from app.core.org import fetch_org_bot as fetch_owned_bot
 from app.models.user import User
 from app.pipeline.call_worker import call_worker_main, pooled_worker_main
 
@@ -481,8 +481,17 @@ async def connect(body: WebRTCOffer, current_user: User = Depends(get_current_us
     # request is known to be valid, so it doesn't any more.
     #
     # Task 2.6: bot_id here comes from the request body, not the URL path, so
-    # this uses fetch_owned_bot directly rather than the get_owned_bot
-    # FastAPI dependency (which resolves bot_id from a path parameter).
+    # this calls a plain function rather than going through a FastAPI
+    # dependency (which would need bot_id as a path parameter).
+    #
+    # Task 5.1: the old per-user helper module is gone. This name is now an
+    # alias for app/core/org.py's fetch_org_bot, kept so
+    # the tests that monkeypatch `connect_module.fetch_owned_bot` (see
+    # test_capacity_cap.py, test_connect_validates_before_ending.py, etc.)
+    # keep working unchanged. The real signature has already changed to
+    # (bot_id, ctx: OrgContext) — passing current_user here is a stopgap;
+    # Task 7 threads an actual OrgContext through /connect and fixes this
+    # call site for real.
     bot = await fetch_owned_bot(body.bot_id, current_user)
 
     # Now that the request is known to be legitimate: this caller gets

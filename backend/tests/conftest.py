@@ -123,10 +123,21 @@ async def client():
 # characters, and this default was 11 ("testpass123") — every fixture
 # built on it would have started failing validation rather than testing
 # what it is about.
+#
+# Task 5.1 — every token this hands out is remembered with its owner's
+# personal organisation (in _org_of_token, added in Task 2), so
+# auth_headers(token) keeps meaning "this user, in their own workspace".
+# Existing cross-user tests thereby become cross-ORGANISATION tests without
+# being rewritten.
 async def _register_and_login(client: AsyncClient, email: str, password: str = "testpass12345") -> str:
     await client.post("/auth/register", json={"email": email, "password": password})
     resp = await client.post("/auth/login", json={"email": email, "password": password})
-    return resp.json()["access_token"]
+    token = resp.json()["access_token"]
+    orgs = await client.get("/orgs", headers={"Authorization": f"Bearer {token}"})
+    personal = [o for o in orgs.json() if o["personal"]]
+    if personal:
+        _org_of_token[token] = personal[0]["id"]
+    return token
 
 
 # Task 2.5 added a 5/minute rate limit to /auth/login and /auth/register —
@@ -163,13 +174,20 @@ async def user_b_token(_session_client):
     return _token_cache["b"]
 
 
-def auth_headers(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}"}
-
-
 # Task 5.1 — token -> that user's personal organisation, so auth_headers(token)
 # can mean "this user, in their own workspace" (see Task 5).
 _org_of_token: dict[str, str] = {}
+
+
+def auth_headers(token: str) -> dict:
+    headers = {"Authorization": f"Bearer {token}"}
+    if token in _org_of_token:
+        headers["X-Org-Id"] = _org_of_token[token]
+    return headers
+
+
+def org_headers(token: str, org_id: str) -> dict:
+    return {"Authorization": f"Bearer {token}", "X-Org-Id": org_id}
 
 
 async def make_user(email: str) -> str:

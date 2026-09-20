@@ -70,7 +70,10 @@ async def test_refresh_issues_a_new_access_token():
         # possible for login immediately followed by refresh, as here)
         # legitimately encode identically — that's not a bug. What matters
         # is that refresh genuinely issues a *working* token, checked below.
-        me_check = await client.get("/bots/", headers={"Authorization": f"Bearer {new_access_token}"})
+        # /orgs/, not /bots/: this is just probing that the token authenticates
+        # at all, and /bots/ now additionally requires an organisation header
+        # (Task 5.1) which is a separate concern from what this test is about.
+        me_check = await client.get("/orgs", headers={"Authorization": f"Bearer {new_access_token}"})
         assert me_check.status_code == 200
 
 

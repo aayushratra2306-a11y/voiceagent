@@ -4,10 +4,8 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 
-from app.core.auth import get_current_user
-from app.core.deps import get_owned_bot
+from app.core.org import OrgContext, org_bot, require_role
 from app.models.bot import Bot
-from app.models.user import User
 from app.pipeline.bot_templates import TEMPLATES
 
 router = APIRouter(prefix="/bots", tags=["bots"])
@@ -149,14 +147,14 @@ async def list_templates():
 
 
 @router.post("/", status_code=201)
-async def create_bot(body: BotCreate, current_user: User = Depends(get_current_user)):
-    bot = Bot(user_id=str(current_user.id), **body.model_dump())
+async def create_bot(body: BotCreate, ctx: OrgContext = Depends(require_role("member"))):
+    bot = Bot(org_id=ctx.org_id, user_id=str(ctx.user.id), **body.model_dump())
     await bot.insert()
     return {"id": str(bot.id), "name": bot.name}
 
 
 @router.get("/")
-async def list_bots(current_user: User = Depends(get_current_user)):
+async def list_bots(ctx: OrgContext = Depends(require_role("viewer"))):
     # Every field the bot editor needs, not just the ones the dashboard card
     # shows. This is the only endpoint the frontend has for reading a bot —
     # BotSettingsPage loads an existing bot by finding it in this list — so a
@@ -170,7 +168,7 @@ async def list_bots(current_user: User = Depends(get_current_user)):
     # with no language set. The prompt box was quietly empty for the same
     # reason. Saving did not corrupt either value only because update_bot
     # drops None fields, which is luck rather than design.
-    bots = await Bot.find(Bot.user_id == str(current_user.id)).to_list()
+    bots = await Bot.find(Bot.org_id == ctx.org_id).to_list()
     return [
         {
             "id": str(b.id),
@@ -193,12 +191,12 @@ async def list_bots(current_user: User = Depends(get_current_user)):
 
 
 @router.patch("/{bot_id}")
-async def update_bot(body: BotUpdate, bot: Bot = Depends(get_owned_bot)):
+async def update_bot(body: BotUpdate, bot: Bot = Depends(org_bot("member"))):
     update_data = {k: v for k, v in body.model_dump().items() if v is not None}
     await bot.set(update_data)
     return {"message": "Bot updated"}
 
 
 @router.delete("/{bot_id}", status_code=204)
-async def delete_bot(bot: Bot = Depends(get_owned_bot)):
+async def delete_bot(bot: Bot = Depends(org_bot("member"))):
     await bot.delete()

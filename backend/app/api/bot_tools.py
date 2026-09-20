@@ -1,9 +1,9 @@
 """Task 3.1 — managing a bot's tools as configuration.
 
-Every route here hangs off a bot the caller already owns: `get_owned_bot`
-(task 2.6) resolves the bot from the path and refuses if it belongs to
-someone else, so ownership is checked once by the dependency rather than
-repeated in each handler.
+Every route here hangs off a bot the caller's organisation owns: `org_bot`
+(task 5.1) resolves the bot from the path and refuses if it belongs to a
+different organisation, so that check is made once by the dependency rather
+than repeated in each handler.
 
 The credential is write-only across this API. It arrives in plain text on
 create and update, is encrypted before it touches the database, and is
@@ -18,7 +18,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
-from app.core.deps import get_owned_bot
+from app.core.org import org_bot
 from app.models.bot import Bot
 from app.models.bot_tool import (
     ApprovalConfig,
@@ -152,7 +152,7 @@ def _out(tool: BotTool) -> dict:
 async def _owned_tool(bot_id: str, tool_id: str) -> BotTool:
     """Load a tool and confirm it belongs to the bot in the path.
 
-    The bot itself is already checked by get_owned_bot; this stops a valid
+    The bot itself is already checked by org_bot; this stops a valid
     tool id from one bot being used against another bot's URL.
     """
     try:
@@ -165,13 +165,13 @@ async def _owned_tool(bot_id: str, tool_id: str) -> BotTool:
 
 
 @router.get("/")
-async def list_tools(bot: Bot = Depends(get_owned_bot)):
+async def list_tools(bot: Bot = Depends(org_bot("viewer"))):
     tools = await BotTool.find(BotTool.bot_id == str(bot.id)).to_list()
     return [_out(t) for t in tools]
 
 
 @router.post("/", status_code=201)
-async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
+async def create_tool(body: ToolIn, bot: Bot = Depends(org_bot("member"))):
     # The model rejects a name that is not an identifier, which matters
     # because it becomes a function name in the schema sent to the AI.
     if await BotTool.find_one(BotTool.bot_id == str(bot.id), BotTool.name == body.name):
@@ -180,6 +180,7 @@ async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
     data = body.model_dump(exclude={"auth", "payment", "approval", "undo"})
     tool = BotTool(
         bot_id=str(bot.id),
+        org_id=bot.org_id,
         auth=ToolAuth(
             kind=body.auth.kind,
             name=body.auth.name,
@@ -202,7 +203,7 @@ async def create_tool(body: ToolIn, bot: Bot = Depends(get_owned_bot)):
 
 
 @router.patch("/{tool_id}")
-async def update_tool(body: ToolIn, tool_id: str, bot: Bot = Depends(get_owned_bot)):
+async def update_tool(body: ToolIn, tool_id: str, bot: Bot = Depends(org_bot("member"))):
     tool = await _owned_tool(str(bot.id), tool_id)
 
     for field, value in body.model_dump(exclude={"auth", "payment", "approval", "undo"}).items():
@@ -233,7 +234,7 @@ async def update_tool(body: ToolIn, tool_id: str, bot: Bot = Depends(get_owned_b
 
 
 @router.delete("/{tool_id}", status_code=204)
-async def delete_tool(tool_id: str, bot: Bot = Depends(get_owned_bot)):
+async def delete_tool(tool_id: str, bot: Bot = Depends(org_bot("member"))):
     tool = await _owned_tool(str(bot.id), tool_id)
     await tool.delete()
 
@@ -242,7 +243,7 @@ async def delete_tool(tool_id: str, bot: Bot = Depends(get_owned_bot)):
 async def run_tool_test(
     tool_id: str,
     arguments: dict[str, Any] = Body(default_factory=dict),
-    bot: Bot = Depends(get_owned_bot),
+    bot: Bot = Depends(org_bot("member")),
 ):
     """Run the tool once, now, with arguments supplied by hand.
 

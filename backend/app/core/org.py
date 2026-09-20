@@ -9,7 +9,7 @@ Order matters and is tested (tests/test_org_context.py):
 
 Resources are fetched by id AND org_id in ONE query (fetch_org_bot, ...),
 never fetched then compared — OWASP API1's defence-in-depth advice. This
-replaces app/core/deps.py's per-user helpers.
+replaces the old per-user ownership helpers (deleted in Task 5.1).
 """
 
 from dataclasses import dataclass

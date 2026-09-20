@@ -3,12 +3,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
-from app.core.auth import get_current_user
-from app.core.deps import get_owned_bot, get_owned_document
+from app.core.org import OrgContext, org_bot, org_document, require_role
 from app.db.mongo import database
 from app.models.bot import Bot
 from app.models.document import Document
-from app.models.user import User
 from app.services.rag import chunk_text, delete_document_vectors, parse_pdf, upsert_document
 
 router = APIRouter(tags=["documents"])
@@ -29,8 +27,8 @@ def _bucket() -> AsyncIOMotorGridFSBucket:
 @router.post("/bots/{bot_id}/documents")
 async def upload_document(
     file: UploadFile = File(...),
-    bot: Bot = Depends(get_owned_bot),
-    current_user: User = Depends(get_current_user),
+    bot: Bot = Depends(org_bot("member")),
+    ctx: OrgContext = Depends(require_role("member")),
 ):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
@@ -48,12 +46,13 @@ async def upload_document(
     file_id = await _bucket().upload_from_stream(
         file.filename,
         content,
-        metadata={"bot_id": str(bot.id), "user_id": str(current_user.id)},
+        metadata={"bot_id": str(bot.id), "user_id": str(ctx.user.id), "org_id": bot.org_id},
     )
 
     doc = Document(
         bot_id=str(bot.id),
-        user_id=str(current_user.id),
+        user_id=str(ctx.user.id),
+        org_id=bot.org_id,
         filename=file.filename,
         chunk_count=len(chunks),
         file_id=str(file_id),
@@ -71,7 +70,7 @@ async def upload_document(
 
 
 @router.get("/bots/{bot_id}/documents")
-async def list_documents(bot: Bot = Depends(get_owned_bot)):
+async def list_documents(bot: Bot = Depends(org_bot("viewer"))):
     docs = await Document.find(Document.bot_id == str(bot.id)).to_list()
     return [
         {
@@ -86,10 +85,10 @@ async def list_documents(bot: Bot = Depends(get_owned_bot)):
 
 
 @router.get("/documents/{doc_id}/file")
-async def get_document_file(doc: Document = Depends(get_owned_document)):
+async def get_document_file(doc: Document = Depends(org_document("viewer"))):
     """Stream back the original PDF so a citation can open its source page.
 
-    Ownership is enforced by get_owned_document, exactly like every other
+    Ownership is enforced by org_document, exactly like every other
     document route — this returns the raw contents of a customer's uploaded
     knowledge base, so it is not a route to leave unauthenticated.
     """
@@ -121,7 +120,7 @@ async def get_document_file(doc: Document = Depends(get_owned_document)):
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc: Document = Depends(get_owned_document)):
+async def delete_document(doc: Document = Depends(org_document("member"))):
     await delete_document_vectors(doc.bot_id, str(doc.id), doc.chunk_count)
     if doc.file_id:
         # Best-effort: an orphaned GridFS blob is wasted space, but failing
