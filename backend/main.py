@@ -12,7 +12,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api import approvals, auth, bot_tools, bots, connect, documents, payments, webhooks
+from app.api import approvals, auth, bot_tools, bots, connect, documents, orgs, payments, webhooks
 from app.api.connect import maintain_worker_pool_loop, reap_dead_calls_loop
 from app.core import health, metrics
 from app.core.auth import get_current_user
@@ -105,6 +105,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(orgs.router)
 app.include_router(bots.router)
 app.include_router(connect.router)
 app.include_router(documents.router)

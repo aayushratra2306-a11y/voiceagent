@@ -6,10 +6,11 @@ comes from unique indexes and single-document atomic updates instead.
 
 from datetime import UTC, datetime
 
+from beanie import PydanticObjectId
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from app.models.organisation import Membership, Organisation
+from app.models.organisation import Membership, Organisation, Role
 from app.models.user import User
 
 
@@ -64,3 +65,91 @@ async def ensure_personal_org(user: User) -> Organisation | None:
     except DuplicateKeyError:
         pass  # a concurrent call inserted the same row
     return await Organisation.get(raw["_id"])
+
+
+class LastOwnerError(Exception):
+    """The change would leave an organisation with no owner."""
+
+
+class AlreadyMemberError(Exception):
+    pass
+
+
+def _orgs():
+    return Organisation.get_motor_collection()
+
+
+def _members():
+    return Membership.get_motor_collection()
+
+
+async def _inc(org_id: str, by: int) -> None:
+    await _orgs().update_one({"_id": PydanticObjectId(org_id)}, {"$inc": {"owner_count": by}})
+
+
+async def _take_one_owner_slot(org_id: str) -> None:
+    """Atomic: only succeeds while there are at least two owners."""
+    taken = await _orgs().find_one_and_update(
+        {"_id": PydanticObjectId(org_id), "owner_count": {"$gt": 1}},
+        {"$inc": {"owner_count": -1}},
+    )
+    if taken is None:
+        raise LastOwnerError
+
+
+async def add_member(org_id: str, user_id: str, role: Role) -> Membership:
+    m = Membership(org_id=org_id, user_id=user_id, role=role)
+    try:
+        await m.insert()
+    except DuplicateKeyError as e:
+        raise AlreadyMemberError from e
+    if role == "owner":
+        await _inc(org_id, +1)  # only after the insert succeeded
+    return m
+
+
+async def set_role(org_id: str, user_id: str, new_role: Role) -> Membership:
+    current = await Membership.find_one(Membership.org_id == org_id, Membership.user_id == user_id)
+    if current is None or current.role == new_role:
+        return current
+    if current.role == "owner":
+        await _take_one_owner_slot(org_id)
+        res = await _members().update_one(
+            {"org_id": org_id, "user_id": user_id, "role": "owner"}, {"$set": {"role": new_role}}
+        )
+        if res.modified_count == 0:  # someone else demoted them first
+            await _inc(org_id, +1)
+    elif new_role == "owner":
+        res = await _members().update_one(
+            {"org_id": org_id, "user_id": user_id, "role": {"$ne": "owner"}}, {"$set": {"role": "owner"}}
+        )
+        if res.modified_count:
+            await _inc(org_id, +1)
+    else:
+        await _members().update_one(
+            {"org_id": org_id, "user_id": user_id, "role": {"$ne": "owner"}}, {"$set": {"role": new_role}}
+        )
+    return await Membership.find_one(Membership.org_id == org_id, Membership.user_id == user_id)
+
+
+async def remove_member(org_id: str, user_id: str) -> None:
+    current = await Membership.find_one(Membership.org_id == org_id, Membership.user_id == user_id)
+    if current is None:
+        return
+    if current.role == "owner":
+        await _take_one_owner_slot(org_id)
+        res = await _members().delete_one({"org_id": org_id, "user_id": user_id, "role": "owner"})
+        if res.deleted_count == 0:
+            await _inc(org_id, +1)
+    else:
+        await _members().delete_one({"org_id": org_id, "user_id": user_id, "role": {"$ne": "owner"}})
+
+
+async def recount_owner_counts() -> int:
+    corrected = 0
+    async for org in _orgs().find({}, {"owner_count": 1}):
+        real = await _members().count_documents({"org_id": str(org["_id"]), "role": "owner"})
+        if org.get("owner_count") != real:
+            await _orgs().update_one({"_id": org["_id"]}, {"$set": {"owner_count": real}})
+            corrected += 1
+    return corrected
