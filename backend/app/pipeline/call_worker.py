@@ -235,15 +235,7 @@ async def _prepare_worker():
     # process. This is exactly the kind of gap Task 2.4's own "verified the
     # mechanism, not the WebRTC-specific path live" caveat was flagging.
     from app.db.mongo import init_db
-    from app.models.appointment import Appointment
-    from app.models.approval import PendingApproval
-    from app.models.bot import Bot
-    from app.models.bot_tool import BotTool
-    from app.models.conversation import ConversationTurn
-    from app.models.document import Document
-    from app.models.order import Order
-    from app.models.payment import PaymentSession
-    from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscription
+    from app.models.registry import ALL_MODELS
     from app.pipeline.voice_pipeline import run_voice_pipeline
 
     # Document is here for Task 2.10: the RAG processor resolves doc_id ->
@@ -267,13 +259,14 @@ async def _prepare_worker():
     #
     # Beanie raises CollectionWasNotInitialized for any model missing from
     # this list, so an omission here is the same failure this whole init_db
-    # call exists to fix. test_call_worker_models.py now checks this list
-    # against what the call-path code actually queries.
-    await init_db([
-        Order, Appointment, ConversationTurn, Document, BotTool, PaymentSession,
-        WebhookSubscription, WebhookDelivery, WebhookOutboxItem, PendingApproval,
-        Bot,
-    ])
+    # call exists to fix. Task 5.1 moved this from its own hand-maintained
+    # subset to the shared ALL_MODELS registry (app/models/registry.py) —
+    # registering a few extra models this process never queries (User,
+    # Organisation, ...) is harmless, and it means this list can no longer
+    # drift from what the rest of the app registers. test_call_worker_models.py
+    # now checks ALL_MODELS itself against what the call-path code actually
+    # queries.
+    await init_db(ALL_MODELS)
     return run_voice_pipeline
 
 
