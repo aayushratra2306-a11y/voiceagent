@@ -2,14 +2,19 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { CallProvider } from './context/CallContext'
 import { ChromeProvider } from './context/ChromeContext'
+import OrgProvider from './context/OrgContext'
 import AppShell from './components/AppShell'
+import RedirectToOrg from './components/RedirectToOrg'
 import LoginPage from './pages/LoginPage'
+import ChooseOrgPage from './pages/ChooseOrgPage'
 import DashboardPage from './pages/DashboardPage'
 import BotSettingsPage from './pages/BotSettingsPage'
 import BotToolsPage from './pages/BotToolsPage'
 import SessionPage from './pages/SessionPage'
 import WebhooksPage from './pages/WebhooksPage'
 import ApprovalsPage from './pages/ApprovalsPage'
+import MembersPage from './pages/MembersPage'
+import OrgSettingsPage from './pages/OrgSettingsPage'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, ready } = useAuth()
@@ -34,17 +39,36 @@ export default function App() {
           <ChromeProvider>
             <Routes>
               <Route path="/" element={<LoginPage />} />
-              {/* One layout route. Everything signed-in renders inside the
-                  shell, which is why every page now has the same background,
-                  the same navigation and the same approvals badge. */}
-              <Route element={<PrivateRoute><AppShell /></PrivateRoute>}>
-                <Route path="/dashboard" element={<DashboardPage />} />
-                <Route path="/bots/:id" element={<BotSettingsPage />} />
-                <Route path="/bots/:id/tools" element={<BotToolsPage />} />
-                <Route path="/session/:id" element={<SessionPage />} />
-                <Route path="/webhooks" element={<WebhooksPage />} />
-                <Route path="/approvals" element={<ApprovalsPage />} />
+
+              {/* Everything signed-in lives under /o/:orgId, so the address
+                  says which organisation you are looking at and a link you
+                  paste to a colleague opens the same workspace. OrgProvider
+                  is inside PrivateRoute because it calls GET /orgs. */}
+              <Route element={<PrivateRoute><OrgProvider /></PrivateRoute>}>
+                <Route element={<AppShell />}>
+                  <Route path="/o/:orgId/dashboard" element={<DashboardPage />} />
+                  <Route path="/o/:orgId/bots/:id" element={<BotSettingsPage />} />
+                  <Route path="/o/:orgId/bots/:id/tools" element={<BotToolsPage />} />
+                  <Route path="/o/:orgId/session/:id" element={<SessionPage />} />
+                  <Route path="/o/:orgId/webhooks" element={<WebhooksPage />} />
+                  <Route path="/o/:orgId/approvals" element={<ApprovalsPage />} />
+                  <Route path="/o/:orgId/members" element={<MembersPage />} />
+                  <Route path="/o/:orgId/settings" element={<OrgSettingsPage />} />
+                </Route>
               </Route>
+
+              {/* The chooser sits outside OrgProvider — it is what you see
+                  when there is no organisation to provide. */}
+              <Route path="/o" element={<PrivateRoute><ChooseOrgPage /></PrivateRoute>} />
+
+              {/* Addresses from before 5.1. Each lands on the same page
+                  under the last-used organisation. */}
+              <Route path="/dashboard" element={<PrivateRoute><RedirectToOrg /></PrivateRoute>} />
+              <Route path="/bots/:id" element={<PrivateRoute><RedirectToOrg /></PrivateRoute>} />
+              <Route path="/bots/:id/tools" element={<PrivateRoute><RedirectToOrg /></PrivateRoute>} />
+              <Route path="/session/:id" element={<PrivateRoute><RedirectToOrg /></PrivateRoute>} />
+              <Route path="/webhooks" element={<PrivateRoute><RedirectToOrg /></PrivateRoute>} />
+              <Route path="/approvals" element={<PrivateRoute><RedirectToOrg /></PrivateRoute>} />
             </Routes>
           </ChromeProvider>
         </CallProvider>
