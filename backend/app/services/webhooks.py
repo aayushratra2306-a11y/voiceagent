@@ -81,7 +81,7 @@ def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
-async def emit(event: str, user_id: str | None, payload: dict) -> None:
+async def emit(event: str, org_id: str | None, payload: dict) -> None:
     """Queue `event` for every enabled subscription that wants it.
 
     Fast and durable, deliberately: this returns after one insert per
@@ -90,13 +90,15 @@ async def emit(event: str, user_id: str | None, payload: dict) -> None:
     must never make a caller wait on a customer's webhook endpoint, and it
     must survive the call's own process exiting shortly after.
 
-    A blank user_id or an event outside EVENT_TYPES queues nothing rather
+    A blank org_id or an event outside EVENT_TYPES queues nothing rather
     than raising: the caller here is always application code with a typo
     risk of its own, and a broken webhook must never break the feature that
-    triggered it.
+    triggered it. Task 5.1 — scoped to the organisation, not the bot's
+    owner, so a subscription set up by any member of an org sees every
+    event the org's bots raise, whoever happens to be on the call.
     """
-    if not user_id:
-        logger.warning(f"[WEBHOOK] emit({event!r}) with no user_id — nothing queued")
+    if not org_id:
+        logger.warning(f"[WEBHOOK] emit({event!r}) with no org_id — nothing queued")
         return
     if event not in EVENT_TYPES:
         logger.warning(f"[WEBHOOK] emit({event!r}): not a recognised event type — nothing queued")
@@ -104,7 +106,7 @@ async def emit(event: str, user_id: str | None, payload: dict) -> None:
 
     try:
         subs = await WebhookSubscription.find(
-            WebhookSubscription.user_id == user_id,
+            WebhookSubscription.org_id == org_id,
             WebhookSubscription.event == event,
             WebhookSubscription.enabled == True,  # noqa: E712
         ).to_list()

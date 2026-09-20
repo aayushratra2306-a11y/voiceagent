@@ -1,9 +1,10 @@
 """Task 3.8 — a customer's own routes onto their webhook subscriptions.
 
-Every route here is scoped to the current user's own subscriptions, in
-the same spirit as bot_tools.py: an id from someone else's account is
-treated as not existing, not as a permission error, so nothing is leaked
-about whether it exists at all.
+Task 5.1 — scoped to the organisation, not the individual account: every
+route (other than the public "what events exist" one) requires at least
+`admin` in the org named by X-Org-Id, in the same spirit as bot_tools.py.
+An id belonging to another organisation is treated as not existing, not as
+a permission error, so nothing is leaked about whether it exists at all.
 """
 
 from datetime import UTC, datetime
@@ -12,10 +13,9 @@ from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
+from app.core.org import OrgContext, require_role
 from app.core.url_safety import rejection_reason
-from app.models.user import User
 from app.models.webhook import EVENT_TYPES, WebhookDelivery, WebhookSubscription
 from app.services.webhooks import deliver_now
 
@@ -61,12 +61,12 @@ def _validated(event: str, url: str) -> str:
     return url
 
 
-async def _owned_subscription(sub_id: str, user_id: str) -> WebhookSubscription:
+async def _owned_subscription(sub_id: str, org_id: str) -> WebhookSubscription:
     try:
         sub = await WebhookSubscription.get(PydanticObjectId(sub_id))
     except Exception:
         sub = None
-    if sub is None or sub.user_id != user_id:
+    if sub is None or sub.org_id != org_id:
         raise HTTPException(status_code=404, detail="Subscription not found")
     return sub
 
@@ -80,16 +80,17 @@ async def list_event_types():
 
 
 @router.get("/")
-async def list_subscriptions(current_user: User = Depends(get_current_user)):
-    subs = await WebhookSubscription.find(WebhookSubscription.user_id == str(current_user.id)).to_list()
+async def list_subscriptions(ctx: OrgContext = Depends(require_role("admin"))):
+    subs = await WebhookSubscription.find(WebhookSubscription.org_id == ctx.org_id).to_list()
     return [_out(s) for s in subs]
 
 
 @router.post("/", status_code=201)
-async def create_subscription(body: SubscriptionIn, current_user: User = Depends(get_current_user)):
+async def create_subscription(body: SubscriptionIn, ctx: OrgContext = Depends(require_role("admin"))):
     url = _validated(body.event, body.url)
     sub = WebhookSubscription(
-        user_id=str(current_user.id),
+        org_id=ctx.org_id,
+        user_id=str(ctx.user.id),
         event=body.event,
         url=url,
         enabled=body.enabled,
@@ -101,10 +102,10 @@ async def create_subscription(body: SubscriptionIn, current_user: User = Depends
 
 @router.patch("/{sub_id}")
 async def update_subscription(
-    sub_id: str, body: SubscriptionIn, current_user: User = Depends(get_current_user)
+    sub_id: str, body: SubscriptionIn, ctx: OrgContext = Depends(require_role("admin"))
 ):
     url = _validated(body.event, body.url)
-    sub = await _owned_subscription(sub_id, str(current_user.id))
+    sub = await _owned_subscription(sub_id, ctx.org_id)
     sub.event = body.event
     sub.url = url
     sub.enabled = body.enabled
@@ -115,18 +116,18 @@ async def update_subscription(
 
 
 @router.delete("/{sub_id}", status_code=204)
-async def delete_subscription(sub_id: str, current_user: User = Depends(get_current_user)):
-    sub = await _owned_subscription(sub_id, str(current_user.id))
+async def delete_subscription(sub_id: str, ctx: OrgContext = Depends(require_role("admin"))):
+    sub = await _owned_subscription(sub_id, ctx.org_id)
     await sub.delete()
 
 
 @router.get("/{sub_id}/deliveries")
-async def list_deliveries(sub_id: str, current_user: User = Depends(get_current_user)):
+async def list_deliveries(sub_id: str, ctx: OrgContext = Depends(require_role("admin"))):
     """The manual's own requirement: "show a delivery log so they can debug
     their end." Newest first — a customer checking this just fired a test
     or is chasing down why an event didn't arrive, and the answer is
     almost always at the top."""
-    await _owned_subscription(sub_id, str(current_user.id))  # ownership check; not otherwise used
+    await _owned_subscription(sub_id, ctx.org_id)  # ownership check; not otherwise used
     deliveries = (
         await WebhookDelivery.find(WebhookDelivery.subscription_id == sub_id)
         .sort(-WebhookDelivery.created_at)  # type: ignore[arg-type]
@@ -147,7 +148,7 @@ async def list_deliveries(sub_id: str, current_user: User = Depends(get_current_
 
 
 @router.post("/{sub_id}/test")
-async def test_subscription(sub_id: str, current_user: User = Depends(get_current_user)):
+async def test_subscription(sub_id: str, ctx: OrgContext = Depends(require_role("admin"))):
     """Send one real, signed test event right now — no queue, no waiting
     for a retry schedule. The manual's own acceptance test for this task:
     "an event fires, reaches a test endpoint with a valid signature."
@@ -157,7 +158,7 @@ async def test_subscription(sub_id: str, current_user: User = Depends(get_curren
     the same log a real event would, which is the whole point of testing
     against your own endpoint before relying on it.
     """
-    sub = await _owned_subscription(sub_id, str(current_user.id))
+    sub = await _owned_subscription(sub_id, ctx.org_id)
     payload = {"note": "This is a test event from your Voice Agent dashboard.", "test": True}
     result = await deliver_now(sub, sub.event, payload)
 
@@ -170,7 +171,7 @@ async def test_subscription(sub_id: str, current_user: User = Depends(get_curren
 
 
 @router.get("/_debug/outbox-summary")
-async def outbox_summary(current_user: User = Depends(get_current_user)):
+async def outbox_summary(ctx: OrgContext = Depends(require_role("admin"))):
     """Not customer-facing — a quick operational check ("is anything stuck
     pending for me") that the dashboard's delivery log page can surface
     without a customer needing server access to ask the same question."""
@@ -179,7 +180,7 @@ async def outbox_summary(current_user: User = Depends(get_current_user)):
     subs = {
         str(s.id)
         for s in await WebhookSubscription.find(
-            WebhookSubscription.user_id == str(current_user.id)
+            WebhookSubscription.org_id == ctx.org_id
         ).to_list()
     }
     if not subs:

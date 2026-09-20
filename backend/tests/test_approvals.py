@@ -16,7 +16,7 @@ from app.models.bot_tool import BotTool
 from app.pipeline import call_context
 from app.services import tool_registry
 from app.services.tool_registry import APPROVAL_RULE, to_function_schema
-from tests.conftest import auth_headers
+from tests.conftest import _org_of_token, auth_headers
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -237,12 +237,13 @@ def test_the_rule_is_only_added_for_a_bot_with_an_approval_tool():
 # --- the approvals API -------------------------------------------------------
 
 async def test_approving_runs_the_action_for_the_first_time(client, user_a_token, monkeypatch):
-    tool = _gated_tool(bot_id="bot-api-1")
+    tool = _gated_tool(bot_id="bot-api-1", org_id=_org_of_token[user_a_token])
     await tool.insert()
     approval = PendingApproval(
         tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-1", user_id=str(
             await _user_id(client, user_a_token)
         ),
+        org_id=_org_of_token[user_a_token],
         arguments={"amount": 500}, amount=500, threshold=100,
     )
     await approval.insert()
@@ -262,11 +263,12 @@ async def test_approving_runs_the_action_for_the_first_time(client, user_a_token
 
 
 async def test_denying_never_runs_the_action(client, user_a_token, monkeypatch):
-    tool = _gated_tool(bot_id="bot-api-2")
+    tool = _gated_tool(bot_id="bot-api-2", org_id=_org_of_token[user_a_token])
     await tool.insert()
     approval = PendingApproval(
         tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-2",
         user_id=str(await _user_id(client, user_a_token)),
+        org_id=_org_of_token[user_a_token],
         arguments={"amount": 500}, amount=500, threshold=100,
     )
     await approval.insert()
@@ -282,11 +284,12 @@ async def test_denying_never_runs_the_action(client, user_a_token, monkeypatch):
 
 
 async def test_an_already_decided_approval_cannot_be_decided_again(client, user_a_token):
-    tool = _gated_tool(bot_id="bot-api-3")
+    tool = _gated_tool(bot_id="bot-api-3", org_id=_org_of_token[user_a_token])
     await tool.insert()
     approval = PendingApproval(
         tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-3",
         user_id=str(await _user_id(client, user_a_token)),
+        org_id=_org_of_token[user_a_token],
         arguments={}, amount=500, threshold=100, status="approved",
     )
     await approval.insert()
@@ -296,11 +299,12 @@ async def test_an_already_decided_approval_cannot_be_decided_again(client, user_
 
 
 async def test_a_user_cannot_decide_someone_elses_approval(client, user_a_token, user_b_token):
-    tool = _gated_tool(bot_id="bot-api-4")
+    tool = _gated_tool(bot_id="bot-api-4", org_id=_org_of_token[user_a_token])
     await tool.insert()
     approval = PendingApproval(
         tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-4",
         user_id=str(await _user_id(client, user_a_token)),
+        org_id=_org_of_token[user_a_token],
         arguments={}, amount=500, threshold=100,
     )
     await approval.insert()
@@ -313,6 +317,7 @@ async def test_approving_when_the_tool_was_deleted_denies_automatically(client, 
     approval = PendingApproval(
         tool_id="a-tool-id-that-was-deleted", tool_name="issue_refund", bot_id="bot-api-5",
         user_id=str(await _user_id(client, user_a_token)),
+        org_id=_org_of_token[user_a_token],
         arguments={}, amount=500, threshold=100,
     )
     await approval.insert()
@@ -325,11 +330,12 @@ async def test_approving_when_the_tool_was_deleted_denies_automatically(client, 
 
 
 async def test_the_list_endpoint_only_shows_the_users_own_approvals(client, user_a_token, user_b_token):
-    tool = _gated_tool(bot_id="bot-api-6")
+    tool = _gated_tool(bot_id="bot-api-6", org_id=_org_of_token[user_a_token])
     await tool.insert()
     mine = PendingApproval(
         tool_id=str(tool.id), tool_name="issue_refund", bot_id="bot-api-6",
         user_id=str(await _user_id(client, user_a_token)),
+        org_id=_org_of_token[user_a_token],
         arguments={}, amount=500, threshold=100,
     )
     await mine.insert()
@@ -379,7 +385,8 @@ async def test_a_waiting_approval_raises_the_count(client, user_a_token):
     for amount in (5000, 7000):
         await PendingApproval(
             tool_id="t1", tool_name="issue_refund", bot_id="bot-count-1",
-            user_id=uid, arguments={"amount": amount}, amount=amount, threshold=1000,
+            user_id=uid, org_id=_org_of_token[user_a_token],
+            arguments={"amount": amount}, amount=amount, threshold=1000,
         ).insert()
 
     assert await _pending_count(client, user_a_token) == before + 2
@@ -395,6 +402,7 @@ async def test_a_decided_approval_is_not_counted(client, user_a_token):
     for status in ("denied", "approved"):
         await PendingApproval(
             tool_id="t1", tool_name="issue_refund", bot_id="bot-count-2", user_id=uid,
+            org_id=_org_of_token[user_a_token],
             arguments={"amount": 5000}, amount=5000, threshold=1000, status=status,
         ).insert()
 
@@ -409,6 +417,7 @@ async def test_an_in_flight_decision_is_not_counted_as_waiting(client, user_a_to
 
     await PendingApproval(
         tool_id="t1", tool_name="issue_refund", bot_id="bot-count-3", user_id=uid,
+        org_id=_org_of_token[user_a_token],
         arguments={"amount": 5000}, amount=5000, threshold=1000, status="approving",
     ).insert()
 
@@ -423,6 +432,7 @@ async def test_the_count_never_leaks_another_users_approvals(client, user_a_toke
 
     await PendingApproval(
         tool_id="t1", tool_name="issue_refund", bot_id="bot-count-4", user_id=uid_b,
+        org_id=_org_of_token[user_b_token],
         arguments={"amount": 5000}, amount=5000, threshold=1000,
     ).insert()
 

@@ -80,7 +80,7 @@ async def _forward_to_customer(session: PaymentSession, paid: bool) -> None:
     correctly.
 
     Nothing is sent for a session created before this field existed
-    (user_id blank) — emit() logs and drops it rather than guessing whose
+    (org_id blank) — emit() logs and drops it rather than guessing whose
     payment it was.
     """
     try:
@@ -88,7 +88,7 @@ async def _forward_to_customer(session: PaymentSession, paid: bool) -> None:
 
         await emit(
             "payment.received" if paid else "payment.failed",
-            user_id=session.user_id,
+            org_id=session.org_id,
             payload={
                 "reference": session.reference,
                 "status": session.status,

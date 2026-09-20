@@ -32,7 +32,7 @@ from app.pipeline import call_context
 from app.services import tool_registry
 from app.services import webhooks as webhooks_service
 from app.services.tool_registry import call_http_tool, to_function_schema
-from tests.conftest import auth_headers
+from tests.conftest import _org_of_token, auth_headers
 
 # The token fixtures hand back a JWT whose `sub` is the account's email,
 # while the approvals API scopes by the real Mongo id — this resolves the
@@ -185,9 +185,9 @@ async def test_a_long_running_tool_with_no_gate_is_unaffected(monkeypatch):
 # =========================================================================
 
 
-async def _pending_approval_for(user_id: str, tool_id: str) -> PendingApproval:
+async def _pending_approval_for(user_id: str, tool_id: str, org_id: str = "") -> PendingApproval:
     approval = PendingApproval(
-        tool_id=tool_id, bot_id="bot-1", user_id=user_id, tool_name="issue_refund",
+        tool_id=tool_id, bot_id="bot-1", user_id=user_id, org_id=org_id, tool_name="issue_refund",
         arguments={"amount": 500}, amount=500.0, threshold=100.0,
     )
     await approval.insert()
@@ -203,13 +203,14 @@ async def test_approving_the_same_thing_twice_runs_the_action_once(
     refund twice, which is the exact outcome this whole task exists to
     prevent."""
     user_id = str(await _user_id(client, user_a_token))
+    org_id = _org_of_token[user_a_token]
 
     tool = BotTool(
         bot_id="bot-1", name="issue_refund", description="Refund.", kind="http",
-        method="POST", url="https://api.test/refunds",
+        method="POST", url="https://api.test/refunds", org_id=org_id,
     )
     await tool.insert()
-    approval = await _pending_approval_for(user_id, str(tool.id))
+    approval = await _pending_approval_for(user_id, str(tool.id), org_id=org_id)
 
     http = _Client()
     monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: http)
@@ -256,12 +257,13 @@ async def test_only_one_decision_can_ever_claim_an_approval(client, user_a_token
 
 async def test_approve_and_deny_racing_cannot_both_win(client, user_a_token, monkeypatch):
     user_id = str(await _user_id(client, user_a_token))
+    org_id = _org_of_token[user_a_token]
     tool = BotTool(
         bot_id="bot-1", name="issue_refund", description="Refund.", kind="http",
-        method="POST", url="https://api.test/refunds",
+        method="POST", url="https://api.test/refunds", org_id=org_id,
     )
     await tool.insert()
-    approval = await _pending_approval_for(user_id, str(tool.id))
+    approval = await _pending_approval_for(user_id, str(tool.id), org_id=org_id)
     monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: _Client())
 
     a, d = await asyncio.gather(
@@ -670,13 +672,13 @@ async def test_a_settled_payment_is_forwarded_to_the_customers_own_webhooks(clie
     )
     await tool.insert()
     sub = WebhookSubscription(
-        user_id="user-pay", event="payment.received", url="https://example.com/hook",
-        secret_encrypted=encrypt_secret("s"),
+        user_id="user-pay", org_id="org-pay", event="payment.received",
+        url="https://example.com/hook", secret_encrypted=encrypt_secret("s"),
     )
     await sub.insert()
     session = PaymentSession(
-        reference="pay_777", bot_id="bot-c", user_id="user-pay", tool_id=str(tool.id),
-        amount="4200",
+        reference="pay_777", bot_id="bot-c", user_id="user-pay", org_id="org-pay",
+        tool_id=str(tool.id), amount="4200",
     )
     await session.insert()
 

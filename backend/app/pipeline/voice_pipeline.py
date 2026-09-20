@@ -843,9 +843,12 @@ async def run_voice_pipeline(
         try:
             from app.services.webhooks import emit
 
+            # Task 6 renamed emit()'s parameter to org_id; this pipeline has
+            # no real organisation to hand it yet, so user_id stands in.
+            # Task 7 wires the actual org through here.
             await emit(
                 "call.ended",
-                user_id=user_id,
+                org_id=user_id,
                 payload={
                     "bot_id": bot_id,
                     "bot_name": bot_name,

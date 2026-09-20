@@ -31,6 +31,7 @@ import pytest
 from app.core.crypto import encrypt_secret
 from app.models.bot_tool import BotTool, PaymentLinkConfig
 from app.models.payment import PaymentSession
+from app.models.webhook import WebhookOutboxItem, WebhookSubscription
 from app.pipeline import call_context
 from app.services import tool_registry
 from app.services.tool_registry import PAYMENT_SAFETY_RULE, call_http_tool
@@ -170,6 +171,33 @@ async def test_a_verified_webhook_marks_the_payment_paid(client):
     assert saved.last_webhook, "the provider's own payload was not kept for debugging"
 
 
+async def test_a_paid_webhook_notifies_the_tools_organisation(client):
+    """Task 5.1 — _forward_to_customer reads session.org_id, which itself
+    comes from the tool, so a payment reaches the ORG's own webhook
+    subscriptions, not something keyed off a "user" that may not even be
+    the one who owns the tool."""
+    tool = _payment_tool(org_id="org-payment-notify")
+    await tool.insert()
+    await PaymentSession(
+        reference="plink_notify", bot_id="b", tool_id=str(tool.id), org_id="org-payment-notify"
+    ).insert()
+    sub = WebhookSubscription(
+        org_id="org-payment-notify", user_id="org-payment-notify", event="payment.received",
+        url="https://hooks.example.com/pay", secret_encrypted=encrypt_secret("s"),
+    )
+    await sub.insert()
+
+    raw, sig = _signed(_webhook_body("plink_notify", "paid"))
+    resp = await client.post(
+        f"/payments/webhook/{tool.id}", content=raw,
+        headers={"X-Razorpay-Signature": sig, "Content-Type": "application/json"},
+    )
+
+    assert resp.status_code == 200
+    queued = await WebhookOutboxItem.find(WebhookOutboxItem.subscription_id == str(sub.id)).to_list()
+    assert any(i.event == "payment.received" for i in queued)
+
+
 async def test_a_status_that_is_not_the_paid_value_is_recorded_as_failed(client):
     tool = _payment_tool()
     await tool.insert()
@@ -289,6 +317,22 @@ async def test_creating_a_link_records_it_against_the_current_call(monkeypatch):
     assert saved.link_url == "https://rzp.io/i/abc"
     assert saved.status == "pending"
     assert "paid" in result["message"].lower()
+
+
+async def test_creating_a_link_carries_the_tools_organisation(monkeypatch):
+    """Task 5.1 — PaymentSession.org_id comes from the TOOL's org, not the
+    call context (which, unlike bot_id/pc_id, has no organisation of its
+    own to offer here)."""
+    tool = _payment_tool(org_id="org-abc")
+    call_context.set_call(bot_id="bot-pay", session_id="s1", pc_id="pc-org-1")
+    resp = _Resp(text='{"id": "plink_org_test", "short_url": "https://rzp.io/i/xyz", "amount": "500"}')
+    monkeypatch.setattr(tool_registry.httpx, "AsyncClient", lambda **k: _Client(response=resp))
+
+    await call_http_tool(tool, {})
+
+    saved = await PaymentSession.find_one(PaymentSession.reference == "plink_org_test")
+    assert saved is not None
+    assert saved.org_id == "org-abc"
 
 
 async def test_a_link_whose_reference_cannot_be_found_still_succeeds(monkeypatch):

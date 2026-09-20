@@ -74,10 +74,10 @@ class _Client:
 
 
 async def _make_subscription(
-    event="appointment.booked", user_id="user-1", url="https://example.com/hook"
+    event="appointment.booked", org_id="org-1", url="https://example.com/hook"
 ) -> WebhookSubscription:
     sub = WebhookSubscription(
-        user_id=user_id, event=event, url=url, secret_encrypted=encrypt_secret(SECRET)
+        user_id=org_id, org_id=org_id, event=event, url=url, secret_encrypted=encrypt_secret(SECRET)
     )
     await sub.insert()
     return sub
@@ -158,7 +158,7 @@ async def test_emit_queues_without_making_any_network_call(monkeypatch):
         raise AssertionError("emit() must not deliver directly")
 
     monkeypatch.setattr(webhooks_service, "deliver_now", _boom)
-    await emit("appointment.booked", user_id=sub.user_id, payload={"reference": "X"})
+    await emit("appointment.booked", org_id=sub.org_id, payload={"reference": "X"})
 
     assert called["n"] == 0
     queued = await WebhookOutboxItem.find(WebhookOutboxItem.subscription_id == str(sub.id)).to_list()
@@ -167,17 +167,17 @@ async def test_emit_queues_without_making_any_network_call(monkeypatch):
 
 
 async def test_emit_with_no_matching_subscription_queues_nothing():
-    await emit("appointment.cancelled", user_id="nobody-subscribed", payload={})
+    await emit("appointment.cancelled", org_id="nobody-subscribed", payload={})
     items = await WebhookOutboxItem.find(WebhookOutboxItem.event == "appointment.cancelled").to_list()
     assert all(i.subscription_id != "nobody-subscribed" for i in items)
 
 
 async def test_emit_ignores_a_disabled_subscription():
-    sub = await _make_subscription(event="call.ended", user_id="user-disabled")
+    sub = await _make_subscription(event="call.ended", org_id="org-disabled")
     sub.enabled = False
     await sub.save()
 
-    await emit("call.ended", user_id="user-disabled", payload={})
+    await emit("call.ended", org_id="org-disabled", payload={})
     items = await WebhookOutboxItem.find(WebhookOutboxItem.subscription_id == str(sub.id)).to_list()
     assert items == []
 
@@ -185,21 +185,21 @@ async def test_emit_ignores_a_disabled_subscription():
 async def test_emit_with_an_unrecognised_event_queues_nothing():
     """Application-code typo protection — this must never raise into the
     call that triggered it."""
-    sub = await _make_subscription(event="call.ended", user_id="user-typo")
-    await emit("call.eneded", user_id="user-typo", payload={})  # typo, deliberately
+    sub = await _make_subscription(event="call.ended", org_id="org-typo")
+    await emit("call.eneded", org_id="org-typo", payload={})  # typo, deliberately
     items = await WebhookOutboxItem.find(WebhookOutboxItem.subscription_id == str(sub.id)).to_list()
     assert items == []
 
 
-async def test_emit_with_no_user_id_does_not_raise():
-    await emit("call.ended", user_id=None, payload={})  # must simply do nothing
+async def test_emit_with_no_org_id_does_not_raise():
+    await emit("call.ended", org_id=None, payload={})  # must simply do nothing
 
 
 async def test_two_subscribers_to_the_same_event_both_get_queued():
-    sub1 = await _make_subscription(event="appointment.booked", user_id="user-multi", url="https://a.example.com")
-    sub2 = await _make_subscription(event="appointment.booked", user_id="user-multi", url="https://b.example.com")
+    sub1 = await _make_subscription(event="appointment.booked", org_id="org-multi", url="https://a.example.com")
+    sub2 = await _make_subscription(event="appointment.booked", org_id="org-multi", url="https://b.example.com")
 
-    await emit("appointment.booked", user_id="user-multi", payload={"reference": "Q9"})
+    await emit("appointment.booked", org_id="org-multi", payload={"reference": "Q9"})
 
     ids = {str(sub1.id), str(sub2.id)}
     items = await WebhookOutboxItem.find(

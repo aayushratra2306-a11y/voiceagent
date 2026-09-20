@@ -18,10 +18,9 @@ from datetime import UTC, datetime
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.auth import get_current_user
+from app.core.org import OrgContext, require_role
 from app.models.approval import PendingApproval
 from app.models.bot_tool import BotTool
-from app.models.user import User
 from app.services.tool_registry import call_http_tool
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
@@ -42,18 +41,18 @@ def _out(a: PendingApproval) -> dict:
     }
 
 
-async def _owned_approval(approval_id: str, user_id: str) -> PendingApproval:
+async def _owned_approval(approval_id: str, org_id: str) -> PendingApproval:
     try:
         approval = await PendingApproval.get(PydanticObjectId(approval_id))
     except Exception:
         approval = None
-    if approval is None or approval.user_id != user_id:
+    if approval is None or approval.org_id != org_id:
         raise HTTPException(status_code=404, detail="Approval not found")
     return approval
 
 
 @router.get("/pending-count")
-async def pending_approval_count(current_user: User = Depends(get_current_user)):
+async def pending_approval_count(ctx: OrgContext = Depends(require_role("admin"))):
     """How many approvals are waiting on this account, and nothing else.
 
     Its own endpoint rather than `len(list_approvals())` because the header
@@ -73,7 +72,7 @@ async def pending_approval_count(current_user: User = Depends(get_current_user))
     "pending-count" and try to look it up as an id.
     """
     count = await PendingApproval.find(
-        PendingApproval.user_id == str(current_user.id),
+        PendingApproval.org_id == ctx.org_id,
         PendingApproval.status == "pending",
     ).count()
     return {"count": count}
@@ -83,7 +82,7 @@ async def pending_approval_count(current_user: User = Depends(get_current_user))
 async def list_approvals(
     status: str | None = None,
     limit: int = 100,
-    current_user: User = Depends(get_current_user),
+    ctx: OrgContext = Depends(require_role("admin")),
 ):
     """Newest first — same reasoning as the webhook delivery log: whoever
     opens this is almost always chasing the thing that just happened.
@@ -92,7 +91,7 @@ async def list_approvals(
     while accumulates decided approvals indefinitely, and nobody opening
     this page wants every one of them ever.
     """
-    query = [PendingApproval.user_id == str(current_user.id)]
+    query = [PendingApproval.org_id == ctx.org_id]
     if status:
         query.append(PendingApproval.status == status)
     approvals = (
@@ -133,12 +132,12 @@ async def _claim_for_decision(approval: PendingApproval, new_status: str, decide
 
 
 @router.post("/{approval_id}/approve")
-async def approve(approval_id: str, current_user: User = Depends(get_current_user)):
+async def approve(approval_id: str, ctx: OrgContext = Depends(require_role("admin"))):
     """The action happens NOW, for the first time — not when it was
     originally requested. Everything about it (the tool, the arguments)
     was frozen at that moment; approving just releases it to actually run.
     """
-    approval = await _owned_approval(approval_id, str(current_user.id))
+    approval = await _owned_approval(approval_id, ctx.org_id)
     if approval.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already {approval.status}")
 
@@ -146,10 +145,10 @@ async def approve(approval_id: str, current_user: User = Depends(get_current_use
     # "approving" rather than "approved": the action has not happened yet,
     # and if this process dies during it, a record that already says
     # "approved" would be a lie about something nobody can confirm.
-    if not await _claim_for_decision(approval, "approving", current_user.email):
+    if not await _claim_for_decision(approval, "approving", ctx.user.email):
         raise HTTPException(status_code=409, detail="This was already decided.")
     approval.status = "approving"
-    approval.decided_by = current_user.email
+    approval.decided_by = ctx.user.email
 
     # A malformed or non-ObjectId tool_id must land in the same "deny"
     # branch as a genuinely deleted tool, not raise into a 500 — the
@@ -159,6 +158,12 @@ async def approve(approval_id: str, current_user: User = Depends(get_current_use
         tool = await BotTool.get(PydanticObjectId(approval.tool_id)) if approval.tool_id else None
     except Exception:
         tool = None
+    # A tool that resolves but now belongs to a different organisation (say
+    # it was deleted and its id recycled, or the approval itself was ever
+    # forged/foreign) must follow the exact same "no longer exists" path —
+    # this org has no business running a tool it doesn't own.
+    if tool is not None and tool.org_id != approval.org_id:
+        tool = None
     if tool is None:
         # The tool itself was edited or deleted since this was queued.
         # Refusing to run something whose configuration no longer exists is
@@ -166,7 +171,7 @@ async def approve(approval_id: str, current_user: User = Depends(get_current_use
         # left believing an unrunnable action might still happen.
         approval.status = "denied"
         approval.decided_at = datetime.now(UTC)
-        approval.decided_by = f"{current_user.email} (auto — tool no longer exists)"
+        approval.decided_by = f"{ctx.user.email} (auto — tool no longer exists)"
         await approval.save()
         await _notify(approval, granted=False)
         raise HTTPException(
@@ -178,7 +183,7 @@ async def approve(approval_id: str, current_user: User = Depends(get_current_use
 
     approval.status = "approved"
     approval.decided_at = datetime.now(UTC)
-    approval.decided_by = current_user.email
+    approval.decided_by = ctx.user.email
     approval.executed = True
     approval.result = result
     await approval.save()
@@ -188,21 +193,21 @@ async def approve(approval_id: str, current_user: User = Depends(get_current_use
 
 
 @router.post("/{approval_id}/deny")
-async def deny(approval_id: str, current_user: User = Depends(get_current_user)):
+async def deny(approval_id: str, ctx: OrgContext = Depends(require_role("admin"))):
     """The action never runs at all — the whole point of checking before
     rather than after."""
-    approval = await _owned_approval(approval_id, str(current_user.id))
+    approval = await _owned_approval(approval_id, ctx.org_id)
     if approval.status != "pending":
         raise HTTPException(status_code=409, detail=f"Already {approval.status}")
 
     # Same atomic claim as approve. Denying twice would be harmless in
     # itself, but going through the same door means a deny racing an
     # approve cannot both win — which is not harmless at all.
-    if not await _claim_for_decision(approval, "denied", current_user.email):
+    if not await _claim_for_decision(approval, "denied", ctx.user.email):
         raise HTTPException(status_code=409, detail="This was already decided.")
     approval.status = "denied"
     approval.decided_at = datetime.now(UTC)
-    approval.decided_by = current_user.email
+    approval.decided_by = ctx.user.email
 
     await _notify(approval, granted=False)
     return _out(approval)
@@ -224,7 +229,7 @@ async def _notify(approval: PendingApproval, granted: bool) -> None:
 
         await emit(
             "approval.granted" if granted else "approval.denied",
-            user_id=approval.user_id,
+            org_id=approval.org_id,
             payload={
                 "approval_id": str(approval.id),
                 "tool_name": approval.tool_name,

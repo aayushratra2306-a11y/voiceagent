@@ -699,9 +699,12 @@ async def _emit(event: str, appointment: Appointment) -> None:
 
     try:
         ctx = call_context.current()
+        # Task 6 renamed emit()'s parameter to org_id; call_context has no
+        # real organisation yet, so this passes ctx.user_id as a stand-in.
+        # Task 7 wires the actual org through the call context.
         await emit(
             event,
-            user_id=ctx.user_id,
+            org_id=ctx.user_id,
             payload={
                 "reference": appointment.reference,
                 "date": appointment.date,

@@ -669,6 +669,7 @@ async def _track_payment_session(tool: BotTool, payload: Any, result: dict[str, 
             reference=str(fields["reference"]),
             bot_id=ctx.bot_id or "",
             user_id=ctx.user_id or "",
+            org_id=tool.org_id,
             pc_id=ctx.pc_id or "",
             tool_id=str(tool.id or ""),
             amount=str(fields["amount"] or ""),
@@ -726,6 +727,7 @@ async def _check_approval_gate(tool: BotTool, args: dict[str, Any]) -> dict[str,
     try:
         approval = PendingApproval(
             tool_id=str(tool.id or ""), bot_id=ctx.bot_id or "", user_id=ctx.user_id or "",
+            org_id=tool.org_id,
             pc_id=ctx.pc_id or "", tool_name=tool.name, arguments=args,
             amount=amount, threshold=tool.approval.threshold,
         )
