@@ -52,7 +52,10 @@ def _run_script(*args, env_extra=None, timeout=30):
 def _accounts_file(tmp_path, count):
     path = tmp_path / "accounts.json"
     path.write_text(json.dumps(
-        [{"email": f"loadtest{i}@example.com", "bot_id": f"bot{i}"} for i in range(count)]
+        [
+            {"email": f"loadtest{i}@example.com", "bot_id": f"bot{i}", "org_id": f"org{i}"}
+            for i in range(count)
+        ]
     ))
     return path
 
@@ -114,7 +117,9 @@ def test_every_call_in_a_step_uses_a_different_account(monkeypatch):
         return load_test.CallResult(step_concurrency=3, call_index=len(seen) - 1, setup_ok=True)
 
     monkeypatch.setattr(load_test, "run_one_call", fake_call)
-    sessions = [load_test.Session(f"a{i}@x", f"bot{i}", f"token{i}", time.monotonic()) for i in range(4)]
+    sessions = [
+        load_test.Session(f"a{i}@x", f"bot{i}", f"org{i}", f"token{i}", time.monotonic()) for i in range(4)
+    ]
 
     asyncio.run(load_test.run_step("http://x", sessions, np.zeros(FRAME, np.int16), 3, 1.0, [],
                                    load_test.SpeechPlan()))
@@ -162,12 +167,63 @@ def test_logging_in_waits_and_retries_when_the_server_says_too_many(unused_tcp_p
     assert waits and waits[0] >= 10
 
 
+def test_load_accounts_rejects_an_entry_without_an_org_id(tmp_path):
+    """Task 5.1 — every bot now lives in an organisation, and /connect needs
+    to say which one (X-Org-Id). An account entry with no org_id would send
+    that header empty and hit the tenant check instead of a clear error
+    here, before any request is made."""
+    path = tmp_path / "accounts.json"
+    path.write_text(json.dumps([{"email": "a@x", "bot_id": "bot0"}]))
+    with pytest.raises(ValueError, match='every account needs an "email", a "bot_id" and an "org_id"'):
+        load_test.load_accounts(str(path))
+
+
+def test_load_accounts_accepts_an_entry_with_an_org_id(tmp_path):
+    path = tmp_path / "accounts.json"
+    path.write_text(json.dumps([{"email": "a@x", "bot_id": "bot0", "org_id": "org0"}]))
+    sessions = load_test.load_accounts(str(path))
+    assert sessions == [load_test.Session("a@x", "bot0", "org0", None, 0.0)]
+
+
+def test_run_one_call_sends_the_bot_and_its_organisation_as_headers(unused_tcp_port):
+    """Task 5.1 — bots are now organisation-scoped, so /connect needs
+    X-Org-Id the same way every other tenant route does (org_id threaded
+    through from the session, the way bot_id already is)."""
+    captured: dict = {}
+
+    async def connect(request):
+        captured["headers"] = dict(request.headers)
+        return web.Response(status=400, text="no thanks")
+
+    async def scenario():
+        import aiohttp
+
+        app = web.Application()
+        app.router.add_post("/connect", connect)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", unused_tcp_port).start()
+        try:
+            async with aiohttp.ClientSession() as http:
+                return await load_test.run_one_call(
+                    http, f"http://127.0.0.1:{unused_tcp_port}", "tok-1", "bot-1", "org-1", _tone(0.1),
+                    load_test.SpeechPlan(), 0.1, 1, 0, [],
+                )
+        finally:
+            await runner.cleanup()
+
+    result = asyncio.run(scenario())
+    assert not result.setup_ok
+    assert captured["headers"]["Authorization"] == "Bearer tok-1"
+    assert captured["headers"]["X-Org-Id"] == "org-1"
+
+
 def test_a_session_older_than_the_token_lifetime_is_logged_in_again():
     """Access tokens last 15 minutes; a full ramp can run longer than that."""
-    fresh = load_test.Session("a@x", "b", "t", obtained_at=1000.0)
+    fresh = load_test.Session("a@x", "b", "org", "t", obtained_at=1000.0)
     assert not load_test.needs_login(fresh, now=1000.0 + 60)
     assert load_test.needs_login(fresh, now=1000.0 + 13 * 60)
-    assert load_test.needs_login(load_test.Session("a@x", "b", None, 0.0), now=1.0)
+    assert load_test.needs_login(load_test.Session("a@x", "b", "org", None, 0.0), now=1.0)
 
 
 # --- defect 2: silence is not the bot speaking ------------------------------
@@ -424,7 +480,7 @@ def test_a_failed_connect_keeps_its_status_code_even_when_the_body_is_not_json(u
         try:
             async with aiohttp.ClientSession() as http:
                 return await load_test.run_one_call(
-                    http, f"http://127.0.0.1:{unused_tcp_port}", "tok", "bot", _tone(0.1),
+                    http, f"http://127.0.0.1:{unused_tcp_port}", "tok", "bot", "org", _tone(0.1),
                     load_test.SpeechPlan(), 0.1, 1, 0, [],
                 )
         finally:
@@ -447,7 +503,7 @@ def test_a_call_that_fails_while_being_built_still_releases_the_step(monkeypatch
     async def scenario():
         gate = load_test.StepGate(2)
         result = await load_test.run_one_call(
-            None, "http://x", "tok", "bot", _tone(0.1), load_test.SpeechPlan(), 0.1, 2, 0, [], gate=gate,
+            None, "http://x", "tok", "bot", "org", _tone(0.1), load_test.SpeechPlan(), 0.1, 2, 0, [], gate=gate,
         )
         gate.call_ready()  # the other call
         await asyncio.wait_for(gate.wait(), 1)

@@ -35,10 +35,12 @@ Usage:
 ONE ACCOUNT PER SIMULATED CALL. The server gives each account exactly one
 live call and ends the previous one when the same account starts another
 (connect.py, _end_previous_calls_for). --accounts is a JSON list of
-{"email": ..., "bot_id": ...}, one entry per simultaneous call at the largest
-step, each bot owned by its own account. All test accounts share one
-password, read from LOADTEST_PASSWORD or a hidden prompt, never from the
-command line (shell history, process list).
+{"email": ..., "bot_id": ..., "org_id": ...} (exactly what
+loadtest_accounts.py create writes), one entry per simultaneous call at the
+largest step, each bot owned by its own account, in its own organisation.
+X-Org-Id travels on /connect the same way every other tenant route needs
+it. All test accounts share one password, read from LOADTEST_PASSWORD or a
+hidden prompt, never from the command line (shell history, process list).
 
 What each simulated caller does: stays quiet for --lead-in-seconds so the
 greeting can play, says the recording, pauses for --pause-seconds, and
@@ -144,6 +146,7 @@ class CallResult:
 class Session:
     email: str
     bot_id: str
+    org_id: str
     token: str | None
     obtained_at: float
 
@@ -163,9 +166,14 @@ def load_accounts(path: str) -> list[Session]:
         raise ValueError("the accounts file must be a non-empty JSON list")
     sessions = []
     for entry in entries:
-        if not isinstance(entry, dict) or not entry.get("email") or not entry.get("bot_id"):
-            raise ValueError('every account needs an "email" and a "bot_id"')
-        sessions.append(Session(entry["email"], entry["bot_id"], None, 0.0))
+        if (
+            not isinstance(entry, dict)
+            or not entry.get("email")
+            or not entry.get("bot_id")
+            or not entry.get("org_id")
+        ):
+            raise ValueError('every account needs an "email", a "bot_id" and an "org_id"')
+        sessions.append(Session(entry["email"], entry["bot_id"], entry["org_id"], None, 0.0))
     if len({s.email for s in sessions}) != len(sessions):
         raise ValueError("the same email appears twice; each simultaneous call needs its own account")
     return sessions
@@ -399,7 +407,7 @@ class StepGate:
 
 
 async def run_one_call(
-    http: aiohttp.ClientSession, base_url: str, token: str, bot_id: str,
+    http: aiohttp.ClientSession, base_url: str, token: str, bot_id: str, org_id: str,
     speech: np.ndarray, plan: SpeechPlan, hold_seconds: float,
     step: int, index: int, ice_servers: list[RTCIceServer], gate: StepGate | None = None,
 ) -> CallResult:
@@ -462,7 +470,7 @@ async def run_one_call(
         async with http.post(
             f"{base_url}/connect",
             json={"bot_id": bot_id, "sdp": pc.localDescription.sdp, "type": pc.localDescription.type},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token}", "X-Org-Id": org_id},
             # The server gives up on a call setup after 45s
             # (connect.py CALL_SETUP_TIMEOUT_SECONDS). Waiting aiohttp's
             # default 300s would keep every other call in the step running,
@@ -530,7 +538,7 @@ async def run_step(
     # requests on this side and inflate connect_latency_s past that level.
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=0)) as http:
         results = await asyncio.gather(*[
-            run_one_call(http, base_url, sessions[i].token, sessions[i].bot_id, speech, plan,
+            run_one_call(http, base_url, sessions[i].token, sessions[i].bot_id, sessions[i].org_id, speech, plan,
                          hold_seconds, concurrency, i, ice_servers, gate=gate)
             for i in range(concurrency)
         ])
@@ -635,7 +643,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base-url", required=True, help="e.g. https://your-domain (no trailing slash)")
     ap.add_argument("--accounts", required=True,
-                    help='JSON list of {"email", "bot_id"}, one per simultaneous call')
+                    help='JSON list of {"email", "bot_id", "org_id"}, one per simultaneous call')
     ap.add_argument("--audio", required=True, help="A REAL speech recording (wav/mp3), one sentence")
     ap.add_argument("--steps", default="1,2,3", help="Comma-separated concurrency levels to ramp through")
     ap.add_argument("--hold-seconds", type=float, default=60.0, help="How long each step's calls last")

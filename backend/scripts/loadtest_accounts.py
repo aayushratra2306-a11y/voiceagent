@@ -67,9 +67,11 @@ def is_loadtest_account(email: str) -> bool:
 class Targets(NamedTuple):
     user_ids: list[str]
     bot_ids: list[str]
+    membership_ids: list[str]
+    org_ids: list[str]
 
 
-def loadtest_targets(users, bots) -> Targets:
+def loadtest_targets(users, bots, memberships, organisations) -> Targets:
     """Decide what the cleanup will remove, given everything that exists.
 
     A plain function over already-fetched rows, deliberately: this is the
@@ -80,11 +82,29 @@ def loadtest_targets(users, bots) -> Targets:
     reachable only by bot_id. Collect them here, before anything is deleted,
     or those rows are stranded with nothing left linking them to a test
     account.
+
+    Task 5.1 — every load-test bot now lives in an organisation
+    (loadtest_accounts.create), so a clean delete removes the load-test
+    user's memberships too, and any organisation THEY created that would be
+    left with no members once those memberships are gone. Never an
+    organisation merely touched by a load-test membership: one they were
+    invited into (or a real organisation whose other members remain) is
+    left alone.
     """
     user_ids = [str(u.id) for u in users if is_loadtest_account(u.email)]
     wanted = set(user_ids)
     bot_ids = [str(b.id) for b in bots if str(b.user_id) in wanted]
-    return Targets(user_ids=user_ids, bot_ids=bot_ids)
+    membership_ids = [str(m.id) for m in memberships if m.user_id in wanted]
+
+    remaining_members_by_org: dict[str, int] = {}
+    for m in memberships:
+        if m.user_id not in wanted:
+            remaining_members_by_org[m.org_id] = remaining_members_by_org.get(m.org_id, 0) + 1
+    org_ids = [
+        str(o.id) for o in organisations
+        if o.created_by in wanted and remaining_members_by_org.get(str(o.id), 0) == 0
+    ]
+    return Targets(user_ids=user_ids, bot_ids=bot_ids, membership_ids=membership_ids, org_ids=org_ids)
 
 
 def _password() -> str:
@@ -129,9 +149,20 @@ async def create(base_url: str, count: int, out: Path) -> None:
                     sys.exit(f"Could not log in as {email}: {response.status} {await response.text()}")
                 token = (await response.json())["access_token"]
 
+            async with session.get(
+                f"{base_url}/orgs", headers={"Authorization": f"Bearer {token}"}
+            ) as response:
+                if response.status != 200:
+                    sys.exit(f"Could not read organisations for {email}: {response.status} {await response.text()}")
+                orgs = await response.json()
+            personal = next((o for o in orgs if o.get("personal")), None)
+            if personal is None:
+                sys.exit(f"{email} has no personal organisation — cannot create its load-test bot.")
+            org_id = personal["id"]
+
             async with session.post(
                 f"{base_url}/bots/",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {token}", "X-Org-Id": org_id},
                 json={
                     "name": f"Load test {i}",
                     "system_prompt": "You are a load test. Answer briefly.",
@@ -142,8 +173,8 @@ async def create(base_url: str, count: int, out: Path) -> None:
                     sys.exit(f"Could not create a bot for {email}: {response.status} {await response.text()}")
                 bot_id = (await response.json())["id"]
 
-            accounts.append({"email": email, "bot_id": bot_id})
-            print(f"  {email} -> bot {bot_id}")
+            accounts.append({"email": email, "bot_id": bot_id, "org_id": org_id})
+            print(f"  {email} -> bot {bot_id} (org {org_id})")
 
     out.write_text(json.dumps(accounts, indent=2), encoding="utf-8")
     print(f"\n{len(accounts)} accounts written to {out}")
@@ -159,6 +190,7 @@ async def delete(confirmed: bool) -> None:
     from app.db.mongo import init_db
     from app.models.bot import Bot
     from app.models.conversation import ConversationTurn
+    from app.models.organisation import Membership, Organisation
     from app.models.registry import ALL_MODELS
     from app.models.user import User
 
@@ -169,7 +201,9 @@ async def delete(confirmed: bool) -> None:
 
     users = await User.find_all().to_list()
     bots = await Bot.find_all().to_list()
-    targets = loadtest_targets(users, bots)
+    memberships = await Membership.find_all().to_list()
+    organisations = await Organisation.find_all().to_list()
+    targets = loadtest_targets(users, bots, memberships, organisations)
     if not targets.user_ids:
         print("No load-test accounts found.")
         return
@@ -180,7 +214,11 @@ async def delete(confirmed: bool) -> None:
         {"bot_id": {"$in": targets.bot_ids}}
     ).count() if targets.bot_ids else 0
 
-    print(f"{len(targets.user_ids)} load-test account(s), {len(targets.bot_ids)} bot(s), {turns} saved turn(s):")
+    print(
+        f"{len(targets.user_ids)} load-test account(s), {len(targets.bot_ids)} bot(s), "
+        f"{len(targets.membership_ids)} membership(s), {len(targets.org_ids)} now-empty organisation(s), "
+        f"{turns} saved turn(s):"
+    )
     for user in users:
         if str(user.id) in set(targets.user_ids):
             print(f"  {user.email}")
@@ -191,13 +229,25 @@ async def delete(confirmed: bool) -> None:
 
     if targets.bot_ids:
         await ConversationTurn.find({"bot_id": {"$in": targets.bot_ids}}).delete()
+    for membership in memberships:
+        if str(membership.id) in set(targets.membership_ids):
+            await membership.delete()
     for user in users:
         if str(user.id) in set(targets.user_ids):
             await user.delete()
     for bot in bots:
         if str(bot.id) in set(targets.bot_ids):
             await bot.delete()
-    print(f"\nDeleted {len(targets.user_ids)} account(s), {len(targets.bot_ids)} bot(s) and {turns} turn(s).")
+    # After the memberships that held them open are gone, not before —
+    # loadtest_targets already decided this from that same "after" view.
+    for org in organisations:
+        if str(org.id) in set(targets.org_ids):
+            await org.delete()
+    print(
+        f"\nDeleted {len(targets.user_ids)} account(s), {len(targets.bot_ids)} bot(s), "
+        f"{len(targets.membership_ids)} membership(s), {len(targets.org_ids)} organisation(s) and "
+        f"{turns} turn(s)."
+    )
 
 
 def main() -> None:
