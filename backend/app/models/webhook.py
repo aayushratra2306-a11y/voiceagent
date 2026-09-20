@@ -53,9 +53,11 @@ EVENT_TYPES = frozenset({
 
 
 class WebhookSubscription(Document):
-    user_id: str  # whose platform account this belongs to (the bot's owner)
-    # Task 5.1 — the owning organisation. user_id stays as "who created it"
-    # and is no longer used for access. Blank = not yet migrated = invisible.
+    # The admin who created this subscription (see app/api/webhooks.py,
+    # create_subscription) — provenance only, not used for access or routing.
+    user_id: str
+    # Task 5.1 — the owning organisation. emit() (services/webhooks.py)
+    # routes strictly by this field. Blank = not yet migrated = invisible.
     org_id: str = ""
     event: str  # one of EVENT_TYPES
     url: str

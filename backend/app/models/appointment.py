@@ -46,8 +46,8 @@ class Appointment(Document):
     status: str = "booked"  # booked | cancelled
     # Which bot took it. Blank for rows written before 3.5.
     bot_id: str = ""
-    # Task 5.1 — the owning organisation. user_id stays as "who created it"
-    # and is no longer used for access. Blank = not yet migrated = invisible.
+    # Task 5.1 — the owning organisation, inherited from the bot. This model
+    # has no user_id field. Blank = not yet migrated = invisible.
     org_id: str = ""
     caller_name: str = ""
     # The key held in the booking_slots collection while this is live. Kept

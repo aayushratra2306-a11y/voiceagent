@@ -176,8 +176,8 @@ class BotTool(Document):
     """One configured tool belonging to one bot."""
 
     bot_id: str
-    # Task 5.1 — the owning organisation. user_id stays as "who created it"
-    # and is no longer used for access. Blank = not yet migrated = invisible.
+    # Task 5.1 — the owning organisation, inherited from the bot. This model
+    # has no user_id field. Blank = not yet migrated = invisible.
     org_id: str = ""
     # What the model calls it. Must be a valid identifier because it becomes
     # a function name in the schema sent to the provider.

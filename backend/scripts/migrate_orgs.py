@@ -30,6 +30,32 @@ Fix round 1 (2026-09-20 review) — two things changed:
     run instead of reading zero. Estimated counts are called out by name
     in the printed report (`estimated_users`), never silently presented as
     exact.
+
+Fix round 2 (2026-09-20 review) — two more things changed:
+
+  - `--dry-run` used to call `init_db(ALL_MODELS)` unconditionally. Beanie
+    creates every declared index for every model it's given, at init time,
+    whether or not a single document is ever read or written afterwards —
+    so a dry run against a database that had never seen organisations or
+    memberships created both those collections and eight new indexes
+    before printing "DRY RUN — nothing changed", directly contradicting
+    this module's own docstring. A dry run only ever reads through
+    `database[...]` raw handles and `User.find_all()` / `User.get(...)`
+    (see `_org_for_user`) — `ensure_personal_org` and
+    `recount_owner_counts`, the only functions that touch Organisation or
+    Membership through Beanie, are both called on the real-run path only
+    (search this file for `if not dry_run` around them). So a dry run now
+    initialises only `[User]`; a real run still initialises `ALL_MODELS`,
+    since `ensure_personal_org`/`recount_owner_counts` need every model
+    Beanie-registered.
+
+  - The production guard checks the database NAME only, and cannot catch a
+    right-name/wrong-cluster mistake (e.g. an operator's shell pointing
+    `MONGODB_URL` at the wrong Atlas project while `DB_NAME` still reads
+    "voiceagent"). The printed header now also names the connection HOST,
+    with any embedded credentials stripped — see `_connection_host` — so
+    that class of mistake is visible before a real run's guard is even
+    reached.
 """
 
 import argparse
@@ -37,6 +63,7 @@ import asyncio
 
 from beanie import PydanticObjectId
 
+from app.core.config import settings
 from app.core.db_safety import is_disposable_database
 from app.db.mongo import database, init_db
 from app.models.registry import ALL_MODELS
@@ -51,6 +78,22 @@ BOT_OWNED = ("documents", "bot_tools", "conversation_turns", "appointments",
 class ProductionGuardError(Exception):
     """A real run was refused: the database is not a disposable test/CI
     database, and the operator did not pass the acknowledgement flag."""
+
+
+def _connection_host(url: str) -> str:
+    """The host(s) this script will talk to, credentials stripped.
+
+    The production guard (below) validates the DATABASE NAME only, so a
+    right-name/wrong-cluster mistake — the shell's MONGODB_URL pointed at
+    a different Atlas project while DB_NAME still happens to read
+    "voiceagent" — sails straight through it. Printing the host next to
+    the name at least puts that mismatch in front of whoever is running
+    this. Never returns anything after the credentials boundary (the
+    `user:pass@` part of the URL, if any).
+    """
+    rest = url.split("://", 1)[-1]
+    rest = rest.rsplit("@", 1)[-1]  # drop "user:pass@" if present
+    return rest.split("/", 1)[0].split("?", 1)[0]
 
 
 async def _personal_org_of(user_id: str) -> str | None:
@@ -114,7 +157,7 @@ async def migrate(
     voiceagent_test for the whole session.
     """
     name = db_name if db_name is not None else database.name
-    print(f"[migrate_orgs] target database: {name!r} "
+    print(f"[migrate_orgs] target database: {name!r} @ {_connection_host(settings.mongodb_url)} "
           f"({'dry run — no writes' if dry_run else 'APPLYING CHANGES'})")
     if not dry_run and not is_disposable_database(name) and not allow_non_disposable:
         raise ProductionGuardError(
@@ -204,7 +247,15 @@ async def _main() -> None:
              "not end in _test or _ci. Take a scripts.db_backup snapshot first.",
     )
     args = parser.parse_args()
-    await init_db(ALL_MODELS)
+    # A dry run only ever reads: raw database[...] handles everywhere, plus
+    # User.find_all()/User.get(...) in _org_for_user. ensure_personal_org and
+    # recount_owner_counts — the only functions here that touch Organisation
+    # or Membership through Beanie rather than a raw handle — are both
+    # called on the real-run path only. So a dry run initialises just
+    # [User]: enough for every model access it can actually reach, and none
+    # of the index-creation side effects init_beanie(ALL_MODELS) would
+    # otherwise cause against a database that has never seen them.
+    await init_db([User] if args.dry_run else ALL_MODELS)
     try:
         report = await migrate(dry_run=args.dry_run, allow_non_disposable=args.allow_non_disposable)
     except ProductionGuardError as e:

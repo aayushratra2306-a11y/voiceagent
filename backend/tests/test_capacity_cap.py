@@ -199,7 +199,12 @@ async def test_the_request_is_validated_before_anything_is_torn_down():
     from app.api import connect as connect_module
 
     source = inspect.getsource(connect_module.connect)
-    fetched_at = source.find("fetch_owned_bot")
+    # Anchored on the actual call, not just the name: connect()'s docstring-
+    # style comments above it also mention "fetch_owned_bot" in prose (see
+    # the alias note a few lines above the real call), so a plain
+    # source.find("fetch_owned_bot") matches that comment instead of the
+    # call below it. "await fetch_owned_bot(" appears nowhere but the call.
+    fetched_at = source.find("await fetch_owned_bot(")
     ended_at = source.find("_end_previous_calls_for")
     checked_at = source.find("try_acquire_call_slot")
 

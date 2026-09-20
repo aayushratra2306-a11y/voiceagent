@@ -25,8 +25,10 @@ from pymongo import ASCENDING, DESCENDING, IndexModel
 class PendingApproval(Document):
     tool_id: str
     bot_id: str
-    user_id: str  # the bot's owner — who is allowed to decide this
-    # from the TOOL's org — two writers run outside a call (spec, Part 1)
+    user_id: str  # the bot's owner at creation time — provenance only
+    # from the TOOL's org — two writers run outside a call (spec, Part 1).
+    # Task 5.1: org admins are who is actually allowed to decide this now,
+    # and approval.granted/denied routes by this field, not by user_id above.
     org_id: str = ""
     # The live call this came from, if any. Almost always long gone by the
     # time a person actually approves something (see the module docstring

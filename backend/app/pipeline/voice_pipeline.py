@@ -454,9 +454,9 @@ async def run_voice_pipeline(
     # task, works exactly as before.
     pc_id: str | None = None,
     payment_queue=None,
-    # Task 3.8 — the bot's OWNER (Bot.user_id), not the caller. A webhook
-    # fires to whichever customer of this platform configured it, so their
-    # own system hears about their own bot's events.
+    # Task 3.8 / Task 5.1 — Bot.user_id, kept as provenance (who created
+    # this bot), not the caller. No longer what a webhook routes by — see
+    # org_id below, which is what call.ended actually fires to.
     user_id: str | None = None,
     # Task 7 — the bot's organisation, plain data crossing the process
     # boundary in bot_config like everything else here (see api/connect.py).

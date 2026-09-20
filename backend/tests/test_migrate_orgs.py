@@ -1,10 +1,14 @@
 """The migration: fills org_id everywhere it can, guesses nowhere, reruns safely."""
 
+import sys
+
 import pytest
 
 from app.db.mongo import database
-from app.models.organisation import Membership
+from app.models.organisation import Membership, Organisation
+from app.models.registry import ALL_MODELS
 from app.models.user import User
+from scripts import migrate_orgs
 from scripts.migrate_orgs import MISSING, ProductionGuardError, migrate
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -86,6 +90,89 @@ async def test_a_real_run_tags_everything_it_can_and_nothing_it_cannot():
     assert (await database["webhook_subscriptions"].find_one({"url": "u"}))["org_id"] == org
     # The orphan turn is left untagged, not guessed.
     assert (await database["conversation_turns"].find_one({"session_id": "orphan"})).get("org_id") in (None, "")
+
+
+async def test_main_dry_run_initialises_only_the_user_model(monkeypatch):
+    """Blocker 1 (2026-09-20 review): `_main()` used to call
+    `init_db(ALL_MODELS)` unconditionally, dry run or not. Beanie creates
+    every declared index for every model it's given at init time — so a
+    dry run against a database that had never seen organisations or
+    memberships created both collections and their indexes before ever
+    printing "DRY RUN — nothing changed".
+
+    A dry run only ever reads: raw `database[...]` handles everywhere, plus
+    `User.find_all()` / `User.get(...)` in `_org_for_user`. `ensure_personal_org`
+    and `recount_owner_counts` — the only functions in this module that touch
+    Organisation or Membership through Beanie rather than a raw handle — are
+    both called on the real-run path only (see the `if not dry_run:` guards
+    around each call site in `migrate()`). So `_main()` must initialise just
+    `[User]` for `--dry-run`.
+    """
+    seen: list[list] = []
+
+    async def fake_init_db(models):
+        seen.append(list(models))
+
+    monkeypatch.setattr(migrate_orgs, "init_db", fake_init_db)
+    monkeypatch.setattr(sys, "argv", ["migrate_orgs", "--dry-run"])
+    await migrate_orgs._main()
+    assert seen == [[User]]
+
+
+async def test_main_real_run_still_initialises_every_model(monkeypatch):
+    """The real-run path still needs every Beanie model: `ensure_personal_org`
+    and `recount_owner_counts` run only when dry_run is False, and both touch
+    Organisation/Membership through Beanie."""
+    seen: list[list] = []
+
+    async def fake_init_db(models):
+        seen.append(list(models))
+
+    monkeypatch.setattr(migrate_orgs, "init_db", fake_init_db)
+    monkeypatch.setattr(sys, "argv", ["migrate_orgs"])
+    await migrate_orgs._main()
+    assert seen == [ALL_MODELS]
+
+
+async def test_dry_run_does_not_recreate_a_dropped_organisation_index(monkeypatch):
+    """The direct proof behind blocker 1, at the exact granularity the
+    review named: "Beanie's init creates every declared index... eight new
+    indexes... on a 512 MB Atlas M0." If `_main()` still called
+    `init_db(ALL_MODELS)` in dry-run mode, registering Organisation would
+    recreate this index as a side effect — the same mechanism that would
+    create the whole collection from nothing on a never-migrated database.
+
+    Can't reproduce "the collection doesn't exist at all" against
+    `voiceagent_test` itself: it's the shared, session-wide database
+    (conftest's autouse `init_db(ALL_MODELS)` created both organisations
+    and memberships before this file ever ran), and the Atlas user this
+    project connects with locally has no access to any other database
+    name to prove the from-scratch version safely. Dropping one of
+    Organisation's own indexes and checking it stays gone through a dry
+    run is the same claim, provably, on the one database this suite may
+    touch — and it's restored in `finally` either way.
+    """
+    orgs = Organisation.get_motor_collection()
+    index_name = "one_personal_org_per_user"
+    before = await orgs.index_information()
+    assert index_name in before  # sanity: it's really there beforehand
+
+    await orgs.drop_index(index_name)
+    try:
+        assert index_name not in await orgs.index_information()
+
+        monkeypatch.setattr(sys, "argv", ["migrate_orgs", "--dry-run"])
+        await migrate_orgs._main()
+
+        assert index_name not in await orgs.index_information(), (
+            "the dry run recreated an Organisation index — it must call "
+            "init_db([User]) only, not ALL_MODELS, while dry_run is True"
+        )
+    finally:
+        from beanie import init_beanie
+
+        await init_beanie(database=database, document_models=ALL_MODELS)
+        assert index_name in await orgs.index_information()  # left as found
 
 
 async def test_running_twice_is_a_no_op():

@@ -543,9 +543,9 @@ async def connect(body: WebRTCOffer, ctx: OrgContext = Depends(require_role("vie
         "llm_model": bot.llm_model,
         "language": bot.language,
         "bot_id": str(bot.id),
-        # Task 3.8 — the bot's owner, not the caller. A webhook fires to
-        # whichever customer of THIS platform configured it (Bot.user_id),
-        # so their own system hears about their own bot's events.
+        # Task 3.8 / Task 5.1 — Bot.user_id, kept as provenance (who created
+        # this bot) but no longer what a webhook routes by. See org_id below,
+        # which is what call.ended and every other webhook actually fires to.
         "user_id": str(bot.user_id),
         # Task 7 — the bot's organisation, plain data across the process
         # boundary like everything else here. Booking stamps it on every

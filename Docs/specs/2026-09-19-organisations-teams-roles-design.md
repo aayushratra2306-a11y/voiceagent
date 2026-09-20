@@ -407,11 +407,17 @@ Then a local click-through with two accounts: one organisation, owner plus viewe
 1. `docker compose run --rm backup python -m scripts.db_backup snapshot`
    (not the default `loop` command). Tag the current backend image `pre-5.1`.
 2. Migration `--dry-run` against production; show the user the counts.
-3. User go-ahead → run the migration. It only *adds* fields and collections, so the
-   running old code is unaffected.
+   `python -m scripts.migrate_orgs --dry-run` — no flag needed, it never writes.
+3. User go-ahead → run the migration for real:
+   `python -m scripts.migrate_orgs --i-understand-this-writes-to-a-non-test-database`.
+   Against the production database name (`voiceagent`) the script refuses to write
+   without that exact flag (see `app/core/db_safety.py`); it only *adds* fields and
+   collections, so the running old code is unaffected.
 4. Deploy the backend and rebuild the frontend.
-5. Run the migration again. `ensure_personal_org` reuses the orgs made by the new code
-   in between, and the recount runs.
+5. Run the migration again, same flag as step 3:
+   `python -m scripts.migrate_orgs --i-understand-this-writes-to-a-non-test-database`.
+   `ensure_personal_org` reuses the orgs made by the new code in between, and the
+   recount runs.
 6. Verify read-only: logs, counts of records missing `org_id` (expect only the listed
    orphans), `/health`, a real call.
 
