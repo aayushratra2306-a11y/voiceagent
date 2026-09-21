@@ -464,10 +464,14 @@ def _words_to_number(words: list[str]) -> int | None:
         return None
 
     rest = words[used:]
-    if rest and rest[0] in ("hundred", "and"):
+    if rest and rest[0] == "hundred":
         # "ten hundred", "one hundred hundred" — a number-shaped tail this
         # cannot fold in means the reading is not settled.
         return None
+    if rest and rest[0] == "and":
+        # A connector the number could not use, so look past it at what it
+        # joins: "eighty and ninety" is two pages, not one.
+        rest = rest[1:]
 
     repeated, _ = _parse_leading_number(rest)
     if repeated is not None and repeated != value:
@@ -503,7 +507,16 @@ def _extract_page_num(query: str) -> int | None:
     for. A language model is the wrong thing to make load-bearing for
     something a parser settles exactly; the rewriter is still welcome to
     normalise numbers, it just no longer has to.
+
+    EVERY "page" in the query is read, not just the first, and they all have
+    to agree. Returning the first one answered the page a caller had just
+    taken back ("page one — no, page eighty" reads as page 1), and there is
+    nothing in the words to separate a correction from "compare page one and
+    page eighty", where both are meant. Mentions that carry no number at all
+    ("the first page", "the page layout") are skipped rather than counted.
     """
+    found: int | None = None
+
     for match in _PAGE_RE.finditer(query):
         tail = query[match.end():]
 
@@ -514,18 +527,23 @@ def _extract_page_num(query: str) -> int | None:
 
         digits = re.match(r'(\d+)\b', tail)
         if digits:
-            return int(digits.group(1))
+            number = int(digits.group(1))
+        else:
+            sentence = _SENTENCE_END_RE.split(tail, maxsplit=1)[0]
+            words = [w for w in re.split(r'[^a-z]+', sentence.lower()) if w]
+            # "two hundred and thirty one" is five words, and _words_to_number
+            # needs to see past the number to tell a repeat from a second one.
+            # Eight also caps how far a stray "page" can reach for a number.
+            number = _words_to_number(words[:8])
 
-        sentence = _SENTENCE_END_RE.split(tail, maxsplit=1)[0]
-        words = [w for w in re.split(r'[^a-z]+', sentence.lower()) if w]
-        # "two hundred and thirty one" is five words, and _words_to_number
-        # needs to see past the number to tell a repeat from a second one.
-        # Eight also caps how far a stray "page" can reach for a number.
-        number = _words_to_number(words[:8])
-        if number is not None:
-            return number
+        if number is None:
+            continue
+        if found is None:
+            found = number
+        elif found != number:
+            return None  # two different pages asked for; choose neither
 
-    return None
+    return found
 
 
 # Task 1.7 — reranking. Cast a wide net (RETRIEVE_TOP_K candidates from raw

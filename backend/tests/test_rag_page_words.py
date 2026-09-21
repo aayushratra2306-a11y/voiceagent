@@ -158,3 +158,39 @@ def test_a_later_page_mention_is_found_without_punctuation_to_help():
 
 def test_an_innocent_page_mention_before_a_real_one():
     assert _extract_page_num("about the page layout - and what is on page eighty?") == 80
+
+
+# --- third review round: two different pages in one breath ---------------------
+#
+# Callers correct themselves out loud ("page one — no, page eighty") and the
+# transcript runs it together with a comma or a "but", never a full stop.
+# Reading only the first mention answers the page they just took back.
+# Nothing distinguishes that from "compare page one and page eighty", where
+# both are meant and neither alone is the answer, so the same rule applies as
+# everywhere else here: two different readings means no filter.
+
+@pytest.mark.parametrize("query", [
+    "page one, page eighty",
+    "start on page one but actually go to page eighty",
+    "compare page one and page eighty",
+    "page 1, page 80",
+    "on page 50 there is a chart, what about page 51",
+    "page eighty or was it page ninety",
+])
+def test_two_different_pages_named_means_no_filter(query):
+    assert _extract_page_num(query) is None
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("page eighty, page eighty", 80),
+    ("page 80, page 80", 80),
+    ("turn to page eighty and read me page eighty", 80),
+])
+def test_the_same_page_named_twice_still_answers(query, expected):
+    assert _extract_page_num(query) == expected
+
+
+def test_an_innocent_mention_does_not_count_as_a_second_page():
+    """Only mentions that actually resolve to a number are compared."""
+    assert _extract_page_num("the first page please turn to page eighty") == 80
+    assert _extract_page_num("about the page layout, what is on page eighty?") == 80
