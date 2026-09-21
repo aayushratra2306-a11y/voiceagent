@@ -194,3 +194,29 @@ def test_an_innocent_mention_does_not_count_as_a_second_page():
     """Only mentions that actually resolve to a number are compared."""
     assert _extract_page_num("the first page please turn to page eighty") == 80
     assert _extract_page_num("about the page layout, what is on page eighty?") == 80
+
+
+# --- fourth review round: a number cut off mid-word ----------------------------
+#
+# "one hundred and ..." is ONE number with a connector inside it, so if the
+# rest never arrives the number is unfinished and 100 is a guess at it.
+# "eighty and ..." is not — nobody says "eighty and five" for 85 — so there
+# the "and" belongs to the sentence and 80 is the whole number. That is the
+# line drawn here, and it is why the two cases below differ.
+
+@pytest.mark.parametrize("query", [
+    "page one hundred and",
+    "page one hundred and please",
+    "page two hundred and",
+])
+def test_an_unfinished_hundreds_number_is_not_guessed_at(query):
+    assert _extract_page_num(query) is None
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("page eighty and", 80),
+    ("page eighty and please", 80),
+    ("page one hundred and ninety", 190),
+])
+def test_a_finished_number_survives_a_trailing_and(query, expected):
+    assert _extract_page_num(query) == expected

@@ -469,8 +469,15 @@ def _words_to_number(words: list[str]) -> int | None:
         # cannot fold in means the reading is not settled.
         return None
     if rest and rest[0] == "and":
-        # A connector the number could not use, so look past it at what it
-        # joins: "eighty and ninety" is two pages, not one.
+        if value >= 100 and value % 100 == 0:
+            # "one hundred and ..." is one number with a connector inside
+            # it, so a caller cut off there has not finished saying it and
+            # 100 would be a guess. Nobody says "eighty and five" for 85,
+            # so after a whole number the same "and" is just the sentence
+            # carrying on and the number already stands.
+            return None
+        # Otherwise look past the connector at what it joins: "eighty and
+        # ninety" is two pages, not one.
         rest = rest[1:]
 
     repeated, _ = _parse_leading_number(rest)
