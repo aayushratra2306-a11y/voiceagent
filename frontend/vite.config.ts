@@ -12,6 +12,14 @@ export default defineConfig({
       '/bots': 'http://localhost:8080',
       '/connect': 'http://localhost:8080',
       '/documents': 'http://localhost:8080',
+      // Task 9 — found while writing the local click-through script:
+      // /orgs (list/create/rename/delete an organisation, its members) is
+      // a real backend router (see app/api/orgs.py) but was never added
+      // here, unlike deploy/Caddyfile's equivalent block. Every one of
+      // this feature's manual checks needs it — without it `npm run dev`
+      // falls through to the SPA for every org call and the page never
+      // gets past "loading".
+      '/orgs': 'http://localhost:8080',
     },
   },
   // jsdom rather than the default node environment: what is worth testing on
