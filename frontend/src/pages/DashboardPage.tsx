@@ -9,7 +9,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const navigate = useNavigate()
-  const { orgPath, can } = useOrg()
+  const { orgId, orgPath, can } = useOrg()
   const mayEdit = can('member')   // create / edit / delete bots
 
   useEffect(() => {
@@ -23,7 +23,12 @@ export default function DashboardPage() {
         navigate('/o', { replace: true })
       })
       .finally(() => setLoading(false))
-  }, [])
+    // orgId: switching organisation (/o/A/dashboard -> /o/B/dashboard) matches
+    // the same route, so React Router re-renders this page rather than
+    // remounting it — without orgId here the effect would never re-fire and
+    // A's bots would stay on screen under B's name. See MembersPage's load
+    // effect for the same pattern.
+  }, [orgId])
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this bot?')) return

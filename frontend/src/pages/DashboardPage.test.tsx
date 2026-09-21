@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom'
 import DashboardPage from './DashboardPage'
 import * as api from '../lib/api'
 import * as orgCtx from '../context/OrgContext'
@@ -103,5 +103,70 @@ describe('DashboardPage error routing', () => {
     )
 
     await waitFor(() => expect(screen.getByText('chooser')).toBeInTheDocument())
+  })
+})
+
+describe('DashboardPage organisation switching', () => {
+  // Whole-branch review finding 1 (2026-09-21): the load effect's dependency
+  // array was `[]`. Switching from /o/A/dashboard to /o/B/dashboard matches
+  // the SAME route (`/o/:orgId/dashboard`), so React Router re-renders this
+  // page rather than remounting it — an empty deps array means the effect
+  // never re-fires and A's bots stay on screen under B's name.
+  //
+  // This useOrg stub deliberately reads useParams() itself, rather than
+  // returning a fixed org, so it reacts to the address the same way the real
+  // OrgProvider does: a navigation to a new orgId re-renders DashboardPage
+  // with a new org from useOrg(), without remounting it. That reproduces the
+  // exact scenario the bug lived in.
+  function useOrgStubFollowingRoute() {
+    const { orgId } = useParams<{ orgId: string }>()
+    const org: api.Org = { id: orgId!, name: orgId!, personal: false, role: 'admin' }
+    return {
+      orgId: org.id, org, orgs: [org], role: org.role,
+      can: () => true,
+      orgPath: (to: string) => `/o/${org.id}${to.startsWith('/') ? to : `/${to}`}`,
+      reloadOrgs: async () => {},
+    }
+  }
+
+  function SwitchOrgButton() {
+    const navigate = useNavigate()
+    return (
+      <button onClick={() => navigate('/o/org-b/dashboard')}>
+        switch organisation
+      </button>
+    )
+  }
+
+  it('re-fetches and re-renders the bot list when the organisation in the address changes', async () => {
+    vi.spyOn(orgCtx, 'useOrg').mockImplementation(useOrgStubFollowingRoute as never)
+    const botA = { ...bot, id: 'bot-a', name: 'Org A Bot' }
+    const botB = { ...bot, id: 'bot-b', name: 'Org B Bot' }
+    const listBots = vi.spyOn(api, 'listBots')
+      .mockResolvedValueOnce([botA])
+      .mockResolvedValueOnce([botB])
+
+    render(
+      <MemoryRouter initialEntries={['/o/org-a/dashboard']}>
+        <SwitchOrgButton />
+        <Routes>
+          <Route path="/o/:orgId/dashboard" element={<DashboardPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    // Landed on org A's dashboard, showing org A's bot.
+    await waitFor(() => expect(screen.getByText('Org A Bot')).toBeInTheDocument())
+
+    // Switch the address to org B without leaving the /dashboard route —
+    // same component instance, no remount.
+    fireEvent.click(screen.getByText('switch organisation'))
+
+    // The stale org A bot must be gone, replaced by org B's bot, and the
+    // list must actually have been re-fetched (not just re-rendered from
+    // the same data).
+    await waitFor(() => expect(screen.getByText('Org B Bot')).toBeInTheDocument())
+    expect(screen.queryByText('Org A Bot')).not.toBeInTheDocument()
+    expect(listBots).toHaveBeenCalledTimes(2)
   })
 })
