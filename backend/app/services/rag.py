@@ -334,9 +334,12 @@ async def rewrite_query(raw_query: str) -> str:
     RAG lookup, so it deliberately uses Groq's small/fast model
     (`groq_rewrite_model`), not the conversational one.
 
-    This also replaces the old hand-written word-number parsing below:
-    the rewriter turns "page fifty" into "page 50" naturally, so
-    _extract_page_num only needs to handle the digit form now.
+    It is asked to normalise spoken numbers ("page fifty" -> "page 50"),
+    but nothing depends on it doing so: it once did replace the word-number
+    parsing in _extract_page_num, and on 2026-09-21 it handed
+    "Check page eighty eighty." back untouched, which cost that call its
+    page filter. _extract_page_num parses the words itself now, so a
+    rewrite that ignores the instruction is a missed tidy-up, not a defect.
 
     Falls back to the raw query untouched on any failure (no Groq key,
     API error, empty/junk response) — a slightly messier search beats
@@ -370,12 +373,91 @@ async def rewrite_query(raw_query: str) -> str:
 
 # ── Pinecone query ─────────────────────────────────────────────────────────────
 
+_NUMBER_WORDS_UNDER_TWENTY = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+_NUMBER_WORDS_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+
+
+def _words_to_number(words: list[str]) -> int | None:
+    """Reads a spoken number off the front of `words`, ignoring whatever
+    follows it. Returns None if `words` does not start with a number.
+
+    Stops at the first word that cannot extend the number it is already
+    holding, which is what separates "twenty five" (25 — a tens word may
+    take a unit) from the live "eighty eighty" (80 — two tens words cannot
+    compose, so the second one is the caller repeating themselves, not a
+    second digit to add).
+    """
+    hundreds = 0
+    value: int | None = None
+
+    for word in words:
+        if word in _NUMBER_WORDS_UNDER_TWENTY:
+            unit = _NUMBER_WORDS_UNDER_TWENTY[word]
+            if value is None:
+                value = unit
+            elif value in _NUMBER_WORDS_TENS.values() and 1 <= unit <= 9:
+                value += unit  # "thirty" + "one"
+            else:
+                break
+        elif word in _NUMBER_WORDS_TENS:
+            if value is not None:
+                break  # "eighty eighty" — a repeat, not a sum
+            value = _NUMBER_WORDS_TENS[word]
+        elif word == "hundred":
+            if value is None or not 1 <= value <= 9:
+                break
+            hundreds += value * 100
+            value = None
+        else:
+            break
+
+    if value is None:
+        return hundreds or None
+    return hundreds + value
+
+
+# Every "page ..." in the query, with up to 40 characters after it to read a
+# number out of. Every occurrence, not just the first, because a query can
+# mention the word innocently before asking ("about the page layout — and
+# what is on page eighty?").
+_PAGE_RE = re.compile(r'\bpage\s+([\w\s-]{1,40})', re.IGNORECASE)
+
+
 def _extract_page_num(query: str) -> int | None:
-    # "page 50" — digit form. The word form ("page fifty") used to need a
-    # hand-written number-word parser here; rewrite_query() now normalizes
-    # that upstream, so this only ever sees digits.
-    m = re.search(r'\bpage\s+(\d+)\b', query, re.IGNORECASE)
-    return int(m.group(1)) if m else None
+    """The page number a caller asked for, in digits or in words.
+
+    The word form is parsed here rather than left to rewrite_query(). It
+    used to be: this function was digit-only, on the grounds that the
+    rewriter normalises "page fifty" into "page 50" upstream. The live call
+    of 2026-09-21 disproved that — the rewriter ran, returned
+    "Check page eighty eighty." unchanged, and page 80 was never filtered
+    for. A language model is the wrong thing to make load-bearing for
+    something a parser settles exactly; the rewriter is still welcome to
+    normalise numbers, it just no longer has to.
+    """
+    for match in _PAGE_RE.finditer(query):
+        after_page = match.group(1)
+
+        digits = re.match(r'(\d+)\b', after_page)
+        if digits:
+            return int(digits.group(1))
+
+        words = [w for w in re.split(r'[\s-]+', after_page.lower()) if w]
+        # Four words is "two hundred thirty one" — the longest page number
+        # anyone says out loud, and a cap on how far a stray "page" can reach.
+        number = _words_to_number(words[:4])
+        if number is not None:
+            return number
+
+    return None
 
 
 # Task 1.7 — reranking. Cast a wide net (RETRIEVE_TOP_K candidates from raw
