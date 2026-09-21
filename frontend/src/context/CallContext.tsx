@@ -30,6 +30,10 @@ interface CallContextType {
   /** epoch ms the media actually connected — null until then. Drives the timer. */
   connectedAt: number | null
   openingDoc: string | null
+  /** The organisation this call started in — see the comment at its
+   *  declaration in CallProvider. Null only if the call started from an
+   *  address with no /o/:orgId prefix. */
+  callOrgId: string | null
   startCall: (bot: Bot) => Promise<void>
   endCall: () => void
   toggleMute: () => void
@@ -63,6 +67,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [sources, setSources] = useState<RagSource[] | null>(null)
   const [connectedAt, setConnectedAt] = useState<number | null>(null)
   const [openingDoc, setOpeningDoc] = useState<string | null>(null)
+  // Task 5.1.7 — the organisation this call belongs to.
+  //
+  // CallProvider is mounted above <Routes>, so a call outlives a
+  // navigation, including a switch to another organisation. The ambient
+  // organisation is therefore not safe to use once a call is running: a
+  // citation opened after switching must still be fetched from the
+  // organisation whose bot is on the line. Captured once, in startCall, from
+  // the address rather than from useOrg() — CallProvider sits above the
+  // route that provides it, so there is no organisation in scope here.
+  const [callOrgId, setCallOrgId] = useState<string | null>(null)
 
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -135,6 +149,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
     // endCall() on purpose: endCall clears the guard we just set, which
     // would hand the very race above back to the second click.
     closeConnection()
+
+    // Captured now, once, from the address — not from useOrg(), which is
+    // not in scope this high in the tree. Every org-sensitive request this
+    // call makes uses this value for as long as the call is up, even after
+    // the person navigates to a different organisation elsewhere in the app.
+    const orgFromAddress = window.location.pathname.match(/^\/o\/([^/]+)/)?.[1] ?? null
+    setCallOrgId(orgFromAddress)
 
     // The guard above only closes the window where two starts land in the
     // same React batch. It does nothing about the much wider window this
@@ -363,7 +384,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
       // remaining candidates now follow over /connect/ice while the worker
       // is already starting up, so the two overlap instead of queueing.
       addLog('Connecting to bot…')
-      const answer = await connectBot(target.id, pc.localDescription!.sdp, pc.localDescription!.type)
+      const answer = await connectBot(
+        target.id, pc.localDescription!.sdp, pc.localDescription!.type, orgFromAddress,
+      )
       // The last and most expensive gap: the server has now started a worker
       // for this call. There is no hangup endpoint to tell it otherwise, so
       // the answer is deliberately never applied — closing the peer without
@@ -413,6 +436,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setSpeaking(false)
     setMuted(false)
     setConnectedAt(null)
+    setCallOrgId(null)
     // `bot` is deliberately left alone: SessionPage still wants to show
     // whose call just ended, and startCall() replaces it on the next one.
   }
@@ -466,7 +490,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (!src.doc_id || !src.has_file) return
     setOpeningDoc(src.doc_id)
     try {
-      const url = await fetchDocumentBlobUrl(src.doc_id)
+      const url = await fetchDocumentBlobUrl(src.doc_id, callOrgId)
       blobUrlsRef.current.push(url)
       window.open(src.page ? `${url}#page=${src.page}` : url, '_blank')
     } catch (e: any) {
@@ -478,7 +502,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   return (
     <CallContext.Provider value={{
-      bot, status, speaking, muted, log, sources, connectedAt, openingDoc,
+      bot, status, speaking, muted, log, sources, connectedAt, openingDoc, callOrgId,
       startCall, endCall, toggleMute, openSource,
     }}>
       {children}

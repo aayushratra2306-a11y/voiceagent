@@ -19,8 +19,15 @@ export function setActiveOrg(orgId: string | null): void {
   activeOrgId = orgId
 }
 
-function orgHeaders(): HeadersInit {
-  return activeOrgId ? { 'X-Org-Id': activeOrgId } : {}
+// Task 5.1.7 — `override` lets a caller pin a request to a specific
+// organisation instead of whatever is currently active. A live call is the
+// reason this exists: CallProvider records the organisation a call started
+// in and passes it here for every org-sensitive request that call makes, so
+// switching organisations elsewhere in the app can't redirect a call's own
+// requests to the wrong one.
+function orgHeaders(override?: string | null): HeadersInit {
+  const id = override ?? activeOrgId
+  return id ? { 'X-Org-Id': id } : {}
 }
 
 // Task 2.5 — the access token now lives 15 minutes (was 60), so a session
@@ -411,14 +418,19 @@ export async function deleteDocument(docId: string): Promise<void> {
 // Doesn't go through request() because the response is binary, not JSON —
 // but it repeats the same 401-refresh-once behavior so a citation clicked
 // after the 15-minute access token expires still opens.
-export async function fetchDocumentBlobUrl(docId: string, _retried = false): Promise<string> {
+// `orgId` — omit to use the ambient active organisation (the ordinary case,
+// everywhere outside a live call); pass it explicitly to pin the request to
+// a specific organisation regardless of what is active (see orgHeaders()).
+export async function fetchDocumentBlobUrl(
+  docId: string, orgId?: string | null, _retried = false,
+): Promise<string> {
   const res = await fetch(`${BASE}/documents/${docId}/file`, {
-    headers: { ...authHeaders(), ...orgHeaders() },
+    headers: { ...authHeaders(), ...orgHeaders(orgId) },
   })
 
   if (res.status === 401 && !_retried) {
     await refreshAccessToken()
-    return fetchDocumentBlobUrl(docId, true)
+    return fetchDocumentBlobUrl(docId, orgId, true)
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -470,12 +482,16 @@ export async function sendIceCandidates(
   }).catch(() => {})
 }
 
+// `orgId` — same override as fetchDocumentBlobUrl's, above: the organisation
+// CallContext recorded when the call started, so /connect reaches the same
+// organisation the call is on even if the active one has since changed.
 export async function connectBot(
-  botId: string, sdp: string, type: string, pcId?: string
+  botId: string, sdp: string, type: string, orgId?: string | null, pcId?: string,
 ): Promise<{ sdp: string; type: string; pc_id: string }> {
   return request('/connect', {
     method: 'POST',
     body: JSON.stringify({ bot_id: botId, sdp, type, pc_id: pcId ?? null }),
+    headers: orgHeaders(orgId),
   })
 }
 

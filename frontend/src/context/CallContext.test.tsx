@@ -32,7 +32,8 @@ vi.mock('../lib/api', () => ({
   fetchDocumentBlobUrl: vi.fn(),
 }))
 
-import { connectBot, getIceServers } from '../lib/api'
+import { connectBot, getIceServers, fetchDocumentBlobUrl } from '../lib/api'
+import type { RagSource } from './CallContext'
 
 // ---------------------------------------------------------------- fixtures
 
@@ -140,6 +141,9 @@ beforeEach(mount)
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.clearAllMocks()
+  // Several tests below navigate the address to simulate switching
+  // organisations — put it back so it can't leak into a test after it.
+  window.history.pushState({}, '', '/')
 })
 
 // -------------------------------------------------------------------- tests
@@ -249,5 +253,63 @@ describe('a call nobody interrupts', () => {
     expect(FakePeerConnection.made[0].closed).toBe(true)
     expect(FakeAudioContext.made[0].closed).toBe(true)
     expect(call.status).toBe('idle')
+  })
+})
+
+// Task 5.1.7 — CallProvider is mounted above <Routes>, so a call outlives a
+// navigation, including a switch to another organisation. It cannot read
+// the organisation from useOrg() (not in scope up there), so it reads it
+// from the address at the moment the call starts, and that is what every
+// org-sensitive call-path function must keep using — not whatever
+// organisation the address names once the call is under way.
+describe('the organisation a call started in', () => {
+  it('keeps the organisation the call started in, after switching to another', async () => {
+    const { stream } = fakeStream()
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(stream)
+
+    window.history.pushState({}, '', '/o/org-1/session/bot-1')
+    await act(async () => { await call.startCall(BOT) })
+    await settle()
+
+    expect(call.callOrgId).toBe('org-1')
+    expect(connectBot).toHaveBeenCalledWith('bot-1', 'v=0', 'offer', 'org-1')
+
+    // The user navigates to another organisation entirely while the call
+    // (started under org-1) is still up.
+    window.history.pushState({}, '', '/o/org-2/dashboard')
+
+    vi.mocked(fetchDocumentBlobUrl).mockResolvedValue('blob:x')
+    const src: RagSource = { doc_id: 'doc-1', filename: 'a.pdf', page: null, score: null, has_file: true }
+    await act(async () => { await call.openSource(src) })
+
+    // Fetched with the call's own organisation, not the one the address
+    // names now — otherwise this is exactly the 404-against-the-wrong-org
+    // bug the task exists to prevent.
+    expect(fetchDocumentBlobUrl).toHaveBeenCalledWith('doc-1', 'org-1')
+  })
+
+  it('falls back to no organisation when the call did not start under /o/:orgId', async () => {
+    const { stream } = fakeStream()
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(stream)
+
+    window.history.pushState({}, '', '/session/bot-1')
+    await act(async () => { await call.startCall(BOT) })
+    await settle()
+
+    expect(call.callOrgId).toBeNull()
+  })
+
+  it('clears the organisation when the call ends', async () => {
+    const { stream } = fakeStream()
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValue(stream)
+
+    window.history.pushState({}, '', '/o/org-1/session/bot-1')
+    await act(async () => { await call.startCall(BOT) })
+    await settle()
+    expect(call.callOrgId).toBe('org-1')
+
+    act(() => { call.endCall() })
+
+    expect(call.callOrgId).toBeNull()
   })
 })

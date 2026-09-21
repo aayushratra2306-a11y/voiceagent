@@ -11,17 +11,26 @@ function formatDuration(ms: number) {
   return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`
 }
 
+// Task 5.1.7 — the call's own organisation, not whatever the address names
+// now: CallContext.callOrgId is recorded once, at startCall, precisely so it
+// survives a later switch elsewhere in the app. Falls back to the
+// pre-organisation path if a call somehow has none recorded (no /o/:orgId in
+// the address it started from), so the bar keeps working either way.
+function sessionPathFor(botId: string, callOrgId: string | null) {
+  return callOrgId ? `/o/${callOrgId}/session/${botId}` : `/session/${botId}`
+}
+
 /**
  * Whether the bar is on screen right now. The shell needs to know too, so it
  * can reserve the space instead of letting the bar cover the last row of
  * whatever page is underneath.
  */
 export function useCallBarVisible() {
-  const { bot, status } = useCall()
+  const { bot, status, callOrgId } = useCall()
   const { pathname } = useLocation()
   if (!isCallActive(status) || !bot) return false
   // Already looking at this call — the bar would just be a smaller copy.
-  return pathname !== `/session/${bot.id}`
+  return pathname !== sessionPathFor(bot.id, callOrgId)
 }
 
 /**
@@ -34,7 +43,7 @@ export function useCallBarVisible() {
  * full size.
  */
 export default function CallBar() {
-  const { bot, status, speaking, muted, connectedAt, endCall, toggleMute } = useCall()
+  const { bot, status, speaking, muted, connectedAt, callOrgId, endCall, toggleMute } = useCall()
   const navigate = useNavigate()
   const [now, setNow] = useState(() => Date.now())
 
@@ -48,6 +57,8 @@ export default function CallBar() {
   }, [active, connectedAt])
 
   if (!visible || !bot) return null
+
+  const sessionPath = sessionPathFor(bot.id, callOrgId)
 
   return (
     <div className="fixed bottom-0 inset-x-0 z-50 px-4 pb-4 pointer-events-none">
@@ -115,7 +126,7 @@ export default function CallBar() {
         </button>
 
         <button
-          onClick={() => navigate(`/session/${bot.id}`)}
+          onClick={() => navigate(sessionPath)}
           className="text-xs font-medium text-slate-300 hover:text-white px-3 py-2 rounded-xl hover:bg-white/8 transition-all shrink-0"
         >
           Back to call
