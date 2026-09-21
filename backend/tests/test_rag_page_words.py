@@ -99,3 +99,62 @@ def test_no_page_number_means_no_filter(query):
 def test_a_number_word_that_is_not_about_a_page_is_ignored():
     """"pay eighty" in the live transcript must not be read as a page."""
     assert _extract_page_num("why not pay eighty") is None
+
+
+# --- second review round: ambiguity must fail safe -----------------------------
+#
+# A WRONG page number is worse than none at all. The caller turns it into
+# `{"page": {"$eq": n}}` on the vector search (rag.py), so a wrong number
+# silently excludes the very page the caller asked for, and the bot answers
+# from nothing. No number just means an unfiltered search, which still has a
+# chance of finding the right passage. So anything ambiguous returns None.
+
+def test_hundreds_spoken_with_and():
+    """"one hundred and five" is how most of the world says 105 out loud."""
+    assert _extract_page_num("page one hundred and five") == 105
+
+
+def test_the_2026_09_14_garble_is_closed():
+    """Logged live: "page twenty five" reached the server as "page twenty and"
+    + "five", was rewritten to "page 20 and 5", and page 20 was answered."""
+    assert _extract_page_num("page twenty and five") == 25
+
+
+@pytest.mark.parametrize("query", [
+    "page one thousand",      # not 1
+    "page two thousand five",  # not 2
+    "page one million",        # not 1
+])
+def test_numbers_we_cannot_parse_return_nothing_not_a_fragment(query):
+    """Truncating "one thousand" to 1 would filter to the wrong page."""
+    assert _extract_page_num(query) is None
+
+
+@pytest.mark.parametrize("query", [
+    "page one two three",    # digit-by-digit, or three separate pages?
+    "page nineteen twenty",  # 1920, or page 19 then 20?
+    "page ten hundred",      # not a number anyone says
+    "page one hundred hundred",
+])
+def test_two_different_numbers_in_a_row_is_ambiguous(query):
+    assert _extract_page_num(query) is None
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("page eighty eighty", 80),
+    ("page twenty twenty", 20),
+    ("page five five", 5),
+    ("page forty two forty two", 42),
+])
+def test_the_same_number_twice_is_the_caller_repeating_themselves(query, expected):
+    assert _extract_page_num(query) == expected
+
+
+def test_a_later_page_mention_is_found_without_punctuation_to_help():
+    """The first "page" is innocent and nothing separates it from the real one."""
+    query = "what is on the first page please turn to page eighty"
+    assert _extract_page_num(query) == 80
+
+
+def test_an_innocent_page_mention_before_a_real_one():
+    assert _extract_page_num("about the page layout - and what is on page eighty?") == 80

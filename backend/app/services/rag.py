@@ -385,20 +385,29 @@ _NUMBER_WORDS_TENS = {
 }
 
 
-def _words_to_number(words: list[str]) -> int | None:
-    """Reads a spoken number off the front of `words`, ignoring whatever
-    follows it. Returns None if `words` does not start with a number.
+# Said aloud, these would carry the number past what a page filter can use,
+# and a partial read of one ("one thousand" -> 1) points at the wrong page.
+_NUMBER_WORDS_TOO_BIG = {"thousand", "million", "billion"}
 
-    Stops at the first word that cannot extend the number it is already
-    holding, which is what separates "twenty five" (25 — a tens word may
-    take a unit) from the live "eighty eighty" (80 — two tens words cannot
-    compose, so the second one is the caller repeating themselves, not a
-    second digit to add).
+
+def _parse_leading_number(words: list[str]) -> tuple[int | None, int]:
+    """Reads one spoken number off the front of `words`.
+
+    Returns the number and how many words it used, or (None, 0) if `words`
+    does not begin with one this can represent.
     """
     hundreds = 0
     value: int | None = None
+    used = 0
+    i = 0
 
-    for word in words:
+    while i < len(words):
+        word = words[i]
+
+        if word in _NUMBER_WORDS_TOO_BIG:
+            # Refuse the whole thing rather than return the part read so far.
+            return None, 0
+
         if word in _NUMBER_WORDS_UNDER_TWENTY:
             unit = _NUMBER_WORDS_UNDER_TWENTY[word]
             if value is None:
@@ -409,26 +418,78 @@ def _words_to_number(words: list[str]) -> int | None:
                 break
         elif word in _NUMBER_WORDS_TENS:
             if value is not None:
-                break  # "eighty eighty" — a repeat, not a sum
+                break
             value = _NUMBER_WORDS_TENS[word]
         elif word == "hundred":
             if value is None or not 1 <= value <= 9:
                 break
             hundreds += value * 100
             value = None
+        elif word == "and" and (hundreds or value is not None):
+            # A connector inside a number, never the start of one: "one
+            # hundred and five", and the 2026-09-14 live garble where
+            # "page twenty five" arrived as "page twenty and five".
+            i += 1
+            continue
         else:
             break
 
+        i += 1
+        used = i
+
+    if hundreds == 0 and value is None:
+        return None, 0
+    return hundreds + (value or 0), used
+
+
+def _words_to_number(words: list[str]) -> int | None:
+    """The one number `words` starts with, or None if that is not clear.
+
+    A WRONG page number is worse than no page number: the caller turns it
+    into an `$eq` filter on the vector search, so a wrong one silently
+    excludes the page that was actually asked for and the bot answers from
+    nothing. No number at all just means an unfiltered search, which can
+    still find the passage. So anything ambiguous returns None.
+
+    What that rules in and out is decided by what follows the first number.
+    Nothing, or a non-number, means the number stands ("page eighty
+    please"). The SAME number again is the caller repeating themselves on a
+    bad line, which is what the live "page eighty eighty" was — 80, never
+    160. A DIFFERENT number is two readings with nothing to choose between
+    them ("one two three" is either page 1 or page 123; "nineteen twenty"
+    is either 1920 or two separate pages), so neither is returned.
+    """
+    value, used = _parse_leading_number(words)
     if value is None:
-        return hundreds or None
-    return hundreds + value
+        return None
+
+    rest = words[used:]
+    if rest and rest[0] in ("hundred", "and"):
+        # "ten hundred", "one hundred hundred" — a number-shaped tail this
+        # cannot fold in means the reading is not settled.
+        return None
+
+    repeated, _ = _parse_leading_number(rest)
+    if repeated is not None and repeated != value:
+        return None
+
+    return value
 
 
-# Every "page ..." in the query, with up to 40 characters after it to read a
-# number out of. Every occurrence, not just the first, because a query can
-# mention the word innocently before asking ("about the page layout — and
-# what is on page eighty?").
-_PAGE_RE = re.compile(r'\bpage\s+([\w\s-]{1,40})', re.IGNORECASE)
+# Just the word, deliberately capturing nothing after it. An earlier version
+# captured the following characters, which meant a match starting at an
+# innocent "page" swallowed the real one ("the first page please turn to page
+# eighty" read as one span and found no number, because finditer resumes
+# after a match). Matching the bare word leaves every later "page" reachable.
+_PAGE_RE = re.compile(r'\bpage\b', re.IGNORECASE)
+
+# The caller must have said something after "page", and it must be attached
+# to it — whitespace or a hyphen, not a full stop.
+_AFTER_PAGE_RE = re.compile(r'[\s-]+')
+
+# A number ends where the sentence does. Commas are left in, because they
+# fall inside spoken numbers more often than they end them.
+_SENTENCE_END_RE = re.compile(r'[.?!;:]')
 
 
 def _extract_page_num(query: str) -> int | None:
@@ -444,16 +505,23 @@ def _extract_page_num(query: str) -> int | None:
     normalise numbers, it just no longer has to.
     """
     for match in _PAGE_RE.finditer(query):
-        after_page = match.group(1)
+        tail = query[match.end():]
 
-        digits = re.match(r'(\d+)\b', after_page)
+        separator = _AFTER_PAGE_RE.match(tail)
+        if not separator:
+            continue  # end of the query, or "page." — nothing follows it
+        tail = tail[separator.end():]
+
+        digits = re.match(r'(\d+)\b', tail)
         if digits:
             return int(digits.group(1))
 
-        words = [w for w in re.split(r'[\s-]+', after_page.lower()) if w]
-        # Four words is "two hundred thirty one" — the longest page number
-        # anyone says out loud, and a cap on how far a stray "page" can reach.
-        number = _words_to_number(words[:4])
+        sentence = _SENTENCE_END_RE.split(tail, maxsplit=1)[0]
+        words = [w for w in re.split(r'[^a-z]+', sentence.lower()) if w]
+        # "two hundred and thirty one" is five words, and _words_to_number
+        # needs to see past the number to tell a repeat from a second one.
+        # Eight also caps how far a stray "page" can reach for a number.
+        number = _words_to_number(words[:8])
         if number is not None:
             return number
 
