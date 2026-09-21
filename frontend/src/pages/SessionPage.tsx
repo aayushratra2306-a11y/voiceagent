@@ -5,6 +5,7 @@ import type { Bot } from '../lib/api'
 import { useCall, isCallActive } from '../context/CallContext'
 import { usePageChrome } from '../context/ChromeContext'
 import { useOrg } from '../context/OrgContext'
+import { sessionPathFor } from '../components/CallBar'
 
 /**
  * A VIEW of the call, not the owner of it.
@@ -20,7 +21,7 @@ export default function SessionPage() {
   const { orgPath } = useOrg()
   const [bot, setBot] = useState<Bot | null>(null)
   const {
-    bot: callBot, status, speaking, muted, log, sources, openingDoc,
+    bot: callBot, status, speaking, muted, log, sources, openingDoc, callOrgId,
     startCall, endCall, toggleMute, openSource,
   } = useCall()
 
@@ -172,7 +173,7 @@ export default function SessionPage() {
           {otherCallLive ? (
             <>
               <button
-                onClick={() => navigate(orgPath(`/session/${callBot!.id}`))}
+                onClick={() => navigate(sessionPathFor(callBot!.id, callOrgId))}
                 className="flex items-center gap-2.5 bg-white/8 hover:bg-white/12 text-white font-semibold px-6 py-3 rounded-2xl transition-all text-sm"
               >
                 Go to that call

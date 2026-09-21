@@ -16,7 +16,11 @@ function formatDuration(ms: number) {
 // survives a later switch elsewhere in the app. Falls back to the
 // pre-organisation path if a call somehow has none recorded (no /o/:orgId in
 // the address it started from), so the bar keeps working either way.
-function sessionPathFor(botId: string, callOrgId: string | null) {
+//
+// Exported so SessionPage's own "Go to that call" link (whole-branch review
+// finding, 2026-09-21) uses this same rule instead of the ambient
+// organisation from useOrg() — one rule rather than two that can disagree.
+export function sessionPathFor(botId: string, callOrgId: string | null) {
   return callOrgId ? `/o/${callOrgId}/session/${botId}` : `/session/${botId}`
 }
 
