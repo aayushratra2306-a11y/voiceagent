@@ -57,7 +57,8 @@ const smallField = 'flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg 
 
 export default function BotToolsPage() {
   const { id } = useParams()
-  const { orgPath } = useOrg()
+  const { orgPath, can } = useOrg()
+  const mayEdit = can('member')   // add / edit / delete tools, run a test call
 
   usePageChrome('Tools', orgPath(`/bots/${id}`))
 
@@ -259,15 +260,17 @@ export default function BotToolsPage() {
                   <p className="text-xs font-mono text-slate-600 mt-1 truncate">{t.url}</p>
                 )}
               </div>
-              <div className="flex gap-1.5 shrink-0">
-                <button onClick={() => startEdit(t)} className="text-xs px-3 py-1.5 rounded-lg bg-white/6 hover:bg-white/12 text-slate-300 transition-all">Edit</button>
-                <button onClick={() => remove(t)} className="text-xs px-3 py-1.5 rounded-lg text-red-400/80 hover:bg-red-500/12 transition-all">Delete</button>
-              </div>
+              {mayEdit && (
+                <div className="flex gap-1.5 shrink-0">
+                  <button onClick={() => startEdit(t)} className="text-xs px-3 py-1.5 rounded-lg bg-white/6 hover:bg-white/12 text-slate-300 transition-all">Edit</button>
+                  <button onClick={() => remove(t)} className="text-xs px-3 py-1.5 rounded-lg text-red-400/80 hover:bg-red-500/12 transition-all">Delete</button>
+                </div>
+              )}
             </div>
           ))}
         </div>
 
-        {editingId === null && (
+        {mayEdit && editingId === null && (
           <button onClick={startNew} className="w-full py-3 rounded-2xl border border-dashed border-white/15 text-sm text-slate-400 hover:border-violet-500/50 hover:text-white transition-all">
             + Add a tool
           </button>

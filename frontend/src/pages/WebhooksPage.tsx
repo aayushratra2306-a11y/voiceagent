@@ -21,7 +21,13 @@ const label = 'block text-xs font-semibold text-slate-400 uppercase tracking-wid
 const field = 'w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-violet-500/60 transition-all'
 
 export default function WebhooksPage() {
-  const { orgPath } = useOrg()
+  const { orgPath, role, can } = useOrg()
+  // Admin-only page (Task 8). This must not fire the fetch below for a
+  // lower role — the server would 403 it — so the guard sits inside the
+  // effect and the hooks themselves stay unconditional (React requires the
+  // same hooks every render); the plain message is returned once, below all
+  // of them, before any of the admin UI is built.
+  const mayAdmin = can('admin')
 
   usePageChrome('Webhooks', orgPath('/dashboard'))
 
@@ -40,7 +46,7 @@ export default function WebhooksPage() {
   const [testResult, setTestResult] = useState<Record<string, string>>({})
   const [testing, setTesting] = useState<string | null>(null)
 
-  useEffect(() => { refresh() }, [])
+  useEffect(() => { if (mayAdmin) refresh() }, [])
 
   async function refresh() {
     try {
@@ -100,6 +106,14 @@ export default function WebhooksPage() {
     } finally {
       setTesting(null)
     }
+  }
+
+  if (!mayAdmin) {
+    return (
+      <div className="relative z-10 max-w-3xl mx-auto px-6 py-12 text-sm text-slate-400">
+        Your role ({role}) can&rsquo;t do this.
+      </div>
+    )
   }
 
   if (loading) return <PageLoader />

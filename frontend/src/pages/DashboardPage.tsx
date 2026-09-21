@@ -7,13 +7,21 @@ import { useOrg } from '../context/OrgContext'
 export default function DashboardPage() {
   const [bots, setBots] = useState<Bot[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const navigate = useNavigate()
-  const { orgPath } = useOrg()
+  const { orgPath, can } = useOrg()
+  const mayEdit = can('member')   // create / edit / delete bots
 
   useEffect(() => {
     listBots()
       .then(setBots)
-      .catch(() => navigate('/'))
+      .catch(err => {
+        // Not the login page: a 400 (no organisation), 403 (wrong role) or
+        // 404 (not a member) is not a failed session. The chooser is where
+        // any of those can actually be resolved.
+        setError((err as Error).message)
+        navigate('/o', { replace: true })
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -25,18 +33,25 @@ export default function DashboardPage() {
 
   return (
       <main className="relative z-10 max-w-3xl mx-auto px-6 py-10">
+        {error && (
+          <div className="bg-red-500/10 text-red-400 border border-red-500/20 text-sm rounded-xl px-4 py-3 mb-5">
+            {error}
+          </div>
+        )}
         <div className="flex items-center justify-between mb-7">
           <div>
             <h2 className="text-xl font-bold text-white">Your Bots</h2>
             <p className="text-sm text-slate-500 mt-0.5">Create and manage your voice assistants</p>
           </div>
-          <button
-            onClick={() => navigate(orgPath('/bots/new'))}
-            className="flex items-center gap-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-violet-900/30"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            New Bot
-          </button>
+          {mayEdit && (
+            <button
+              onClick={() => navigate(orgPath('/bots/new'))}
+              className="flex items-center gap-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-violet-900/30"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              New Bot
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -53,12 +68,14 @@ export default function DashboardPage() {
             </div>
             <p className="text-slate-300 font-medium">No bots yet</p>
             <p className="text-slate-500 text-sm mt-1 mb-5">Create your first voice assistant to get started</p>
-            <button
-              onClick={() => navigate(orgPath('/bots/new'))}
-              className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-violet-900/30"
-            >
-              Create Bot
-            </button>
+            {mayEdit && (
+              <button
+                onClick={() => navigate(orgPath('/bots/new'))}
+                className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-violet-900/30"
+              >
+                Create Bot
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
@@ -100,15 +117,17 @@ export default function DashboardPage() {
                       <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                     </svg>
                   </button>
-                  <button
-                    onClick={() => handleDelete(bot.id)}
-                    className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all"
-                    title="Delete"
-                  >
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                    </svg>
-                  </button>
+                  {mayEdit && (
+                    <button
+                      onClick={() => handleDelete(bot.id)}
+                      className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all"
+                      title="Delete"
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                      </svg>
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

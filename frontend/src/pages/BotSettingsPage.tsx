@@ -100,7 +100,8 @@ export default function BotSettingsPage() {
   const { id } = useParams()
   const isNew = id === 'new'
   const navigate = useNavigate()
-  const { orgPath } = useOrg()
+  const { orgPath, can } = useOrg()
+  const mayEdit = can('member')   // create / edit / delete bots, tools, documents
 
   usePageChrome(isNew ? 'New Bot' : 'Edit Bot', orgPath('/dashboard'))
   const [form, setForm] = useState<Omit<Bot, 'id'>>(DEFAULTS)
@@ -483,20 +484,24 @@ export default function BotSettingsPage() {
                   <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Knowledge Base</label>
                   <p className="text-xs text-slate-600 mt-0.5">Upload PDFs — the bot will answer questions from them</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="flex items-center gap-1.5 bg-violet-600/70 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition-all"
-                >
-                  {uploading ? (
-                    <span className="w-3 h-3 border border-white/40 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                  )}
-                  {uploading ? 'Uploading…' : 'Upload PDF'}
-                </button>
-                <input autoComplete="off" ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
+                {mayEdit && (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="flex items-center gap-1.5 bg-violet-600/70 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition-all"
+                  >
+                    {uploading ? (
+                      <span className="w-3 h-3 border border-white/40 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    )}
+                    {uploading ? 'Uploading…' : 'Upload PDF'}
+                  </button>
+                )}
+                {mayEdit && (
+                  <input autoComplete="off" ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleUpload} />
+                )}
               </div>
 
               {uploadError && (
@@ -520,15 +525,17 @@ export default function BotSettingsPage() {
                           <p className="text-xs text-slate-600">{doc.chunk_count} chunks indexed</p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteDoc(doc.id)}
-                        className="p-1 text-slate-600 hover:text-red-400 transition-colors ml-2 shrink-0"
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                        </svg>
-                      </button>
+                      {mayEdit && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDoc(doc.id)}
+                          className="p-1 text-slate-600 hover:text-red-400 transition-colors ml-2 shrink-0"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                          </svg>
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -545,13 +552,15 @@ export default function BotSettingsPage() {
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white font-semibold rounded-xl py-2.5 text-sm transition-all shadow-lg shadow-violet-900/30"
-            >
-              {saving ? 'Saving…' : isNew ? 'Create Bot' : 'Save Changes'}
-            </button>
+            {mayEdit && (
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white font-semibold rounded-xl py-2.5 text-sm transition-all shadow-lg shadow-violet-900/30"
+              >
+                {saving ? 'Saving…' : isNew ? 'Create Bot' : 'Save Changes'}
+              </button>
+            )}
           </div>
         </form>
       </main>

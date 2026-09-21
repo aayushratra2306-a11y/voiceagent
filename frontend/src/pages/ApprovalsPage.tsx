@@ -19,11 +19,16 @@ export default function ApprovalsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [deciding, setDeciding] = useState<string | null>(null)
-  const { orgPath } = useOrg()
+  const { orgPath, role, can } = useOrg()
+  // Admin-only page (Task 8). The guard sits inside the effect, not before
+  // the hooks, so every render still calls the same hooks — only whether
+  // the fetch (which the server would 403 below admin) actually fires
+  // changes.
+  const mayAdmin = can('admin')
 
   usePageChrome('Approvals', orgPath('/dashboard'))
 
-  useEffect(() => { refresh() }, [filter])
+  useEffect(() => { if (mayAdmin) refresh() }, [filter])
 
   async function refresh() {
     setLoading(true)
@@ -49,6 +54,14 @@ export default function ApprovalsPage() {
     } finally {
       setDeciding(null)
     }
+  }
+
+  if (!mayAdmin) {
+    return (
+      <div className="relative z-10 max-w-3xl mx-auto px-6 py-12 text-sm text-slate-400">
+        Your role ({role}) can&rsquo;t do this.
+      </div>
+    )
   }
 
   return (

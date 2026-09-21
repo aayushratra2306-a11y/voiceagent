@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import DashboardPage from './DashboardPage'
 import * as api from '../lib/api'
@@ -23,7 +23,11 @@ const bot: api.Bot = {
   slot_minutes: 30,
 }
 
-afterEach(() => vi.restoreAllMocks())
+// testing-library only unmounts between tests on its own when the runner
+// exposes a global afterEach; this config does not (no `globals: true`), so
+// without this every test sees every earlier test's page still mounted (see
+// LoginPage.test.tsx for the same note).
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('DashboardPage links', () => {
   it('opens a bot under the current organisation', async () => {
@@ -48,5 +52,38 @@ describe('DashboardPage links', () => {
     fireEvent.click(within(row).getByTitle('Settings'))
 
     await waitFor(() => expect(screen.getByTestId('bot-page')).toBeInTheDocument())
+  })
+})
+
+describe('DashboardPage role gating', () => {
+  it('offers no New bot button to a viewer', async () => {
+    vi.spyOn(orgCtx, 'useOrg').mockReturnValue({
+      ...useOrgStub(), role: 'viewer', can: (m: string) => m === 'viewer',
+    } as never)
+    vi.spyOn(api, 'listBots').mockResolvedValue([])
+
+    render(
+      <MemoryRouter initialEntries={['/o/org-7/dashboard']}>
+        <Routes><Route path="/o/:orgId/dashboard" element={<DashboardPage />} /></Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(api.listBots).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: /new bot/i })).not.toBeInTheDocument()
+  })
+
+  it('still offers it to a member', async () => {
+    vi.spyOn(orgCtx, 'useOrg').mockReturnValue({
+      ...useOrgStub(), role: 'member', can: (m: string) => m !== 'admin' && m !== 'owner',
+    } as never)
+    vi.spyOn(api, 'listBots').mockResolvedValue([])
+
+    render(
+      <MemoryRouter initialEntries={['/o/org-7/dashboard']}>
+        <Routes><Route path="/o/:orgId/dashboard" element={<DashboardPage />} /></Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /new bot/i })).toBeInTheDocument())
   })
 })
