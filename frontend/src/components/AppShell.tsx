@@ -7,6 +7,7 @@ import { useCall } from '../context/CallContext'
 import { useChrome } from '../context/ChromeContext'
 import { useOrg } from '../context/OrgContext'
 import CallBar, { useCallBarVisible } from './CallBar'
+import OrgSwitcher from './OrgSwitcher'
 
 // How often the header re-checks for waiting approvals. An approval is
 // raised mid-call and a person is expected to act on it while the caller is
@@ -39,12 +40,18 @@ export default function AppShell() {
   const { logout } = useAuth()
   const { endCall } = useCall()
   const { chrome } = useChrome()
-  const { orgPath } = useOrg()
+  const { can, orgPath } = useOrg()
   const navigate = useNavigate()
   const location = useLocation()
   const barVisible = useCallBarVisible()
+  const isAdmin = can('admin')
 
   useEffect(() => {
+    // GET /approvals/pending-count requires admin. A viewer or member would
+    // 403 on every tick of this poll forever — a wasted request every
+    // twelve seconds, on every page — so below admin there is nothing to
+    // poll and nothing to show.
+    if (!isAdmin) { setPendingApprovals(0); return }
     let cancelled = false
     // Failures are swallowed deliberately: this is an ambient indicator, and
     // one flaky poll must not surface an error over a page the user is
@@ -66,14 +73,15 @@ export default function AppShell() {
       clearInterval(timer)
       window.removeEventListener(APPROVALS_CHANGED, check)
     }
-  }, [])
+  }, [isAdmin])
 
   // Also re-check on every navigation. The event above covers decisions
   // made in this tab; this covers arriving back from anywhere with a count
   // that moved while the page was in the background.
   useEffect(() => {
+    if (!isAdmin) return
     getPendingApprovalCount().then(setPendingApprovals).catch(() => {})
-  }, [location.pathname])
+  }, [location.pathname, isAdmin])
 
   function goBack() {
     // `key` is 'default' only for the first entry the app rendered — a
@@ -134,6 +142,8 @@ export default function AppShell() {
             </span>
           </button>
 
+          <OrgSwitcher />
+
           {chrome.title && (
             <>
               <span className="text-slate-700 shrink-0" aria-hidden="true">/</span>
@@ -143,40 +153,50 @@ export default function AppShell() {
         </div>
 
         <nav className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={() => navigate(orgPath('/approvals'))}
-            // aria-label carries the count too: the badge is a visual cue,
-            // and a screen reader announcing a bare "Approvals" would lose
-            // the only part that says something needs doing.
-            aria-label={
-              pendingApprovals > 0
-                ? `Approvals, ${pendingApprovals} waiting`
-                : 'Approvals'
-            }
-            className={`relative ${navItem} ${
-              pendingApprovals > 0
-                ? 'text-amber-300 hover:text-amber-200'
-                : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            Approvals
-            {pendingApprovals > 0 && (
-              <span
-                // Not a red dot: red reads as "something is broken", and a
-                // waiting approval is a normal request for a decision.
-                // Amber says "your turn" without implying a failure.
-                className="ml-1.5 inline-flex items-center justify-center min-w-[17px] h-[17px] px-1 rounded-full bg-amber-400 text-[10px] font-bold text-neutral-900 align-middle tabular-nums"
+          {isAdmin && (
+            <>
+              <button
+                onClick={() => navigate(orgPath('/approvals'))}
+                // aria-label carries the count too: the badge is a visual cue,
+                // and a screen reader announcing a bare "Approvals" would lose
+                // the only part that says something needs doing.
+                aria-label={
+                  pendingApprovals > 0
+                    ? `Approvals, ${pendingApprovals} waiting`
+                    : 'Approvals'
+                }
+                className={`relative ${navItem} ${
+                  pendingApprovals > 0
+                    ? 'text-amber-300 hover:text-amber-200'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
               >
-                {/* Capped so a long-neglected queue can't stretch the nav */}
-                {pendingApprovals > 99 ? '99+' : pendingApprovals}
-              </span>
-            )}
+                Approvals
+                {pendingApprovals > 0 && (
+                  <span
+                    // Not a red dot: red reads as "something is broken", and a
+                    // waiting approval is a normal request for a decision.
+                    // Amber says "your turn" without implying a failure.
+                    className="ml-1.5 inline-flex items-center justify-center min-w-[17px] h-[17px] px-1 rounded-full bg-amber-400 text-[10px] font-bold text-neutral-900 align-middle tabular-nums"
+                  >
+                    {/* Capped so a long-neglected queue can't stretch the nav */}
+                    {pendingApprovals > 99 ? '99+' : pendingApprovals}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => navigate(orgPath('/webhooks'))}
+                className={`${navItem} text-slate-500 hover:text-slate-300`}
+              >
+                Webhooks
+              </button>
+            </>
+          )}
+          <button onClick={() => navigate(orgPath('/members'))} className={`${navItem} text-slate-500 hover:text-slate-300`}>
+            Members
           </button>
-          <button
-            onClick={() => navigate(orgPath('/webhooks'))}
-            className={`${navItem} text-slate-500 hover:text-slate-300`}
-          >
-            Webhooks
+          <button onClick={() => navigate(orgPath('/settings'))} className={`${navItem} text-slate-500 hover:text-slate-300`}>
+            Settings
           </button>
           <button onClick={signOut} className={`${navItem} text-slate-500 hover:text-slate-300`}>
             Sign out
