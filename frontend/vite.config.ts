@@ -15,10 +15,11 @@ export default defineConfig({
       // Task 9 — found while writing the local click-through script:
       // /orgs (list/create/rename/delete an organisation, its members) is
       // a real backend router (see app/api/orgs.py) but was never added
-      // here, unlike deploy/Caddyfile's equivalent block. Every one of
-      // this feature's manual checks needs it — without it `npm run dev`
-      // falls through to the SPA for every org call and the page never
-      // gets past "loading".
+      // here. Every one of this feature's manual checks needs it — without
+      // it `npm run dev` falls through to the SPA for every org call and
+      // the page never gets past "loading". (deploy/Caddyfile's proxy list
+      // does not have it either — that is outside frontend/, so out of
+      // scope here, but it likely needs the same fix; see the task report.)
       '/orgs': 'http://localhost:8080',
     },
   },
