@@ -24,7 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { logout, trySilentRefresh } from './api'
-import { setActiveOrg, listBots, uploadDocument, fetchDocumentBlobUrl, listOrgs, addMember } from './api'
+import { setActiveOrg, listBots, uploadDocument, fetchDocumentBlobUrl, listOrgs, addMember, connectBot } from './api'
 
 /** A promise whose settlement this test controls, to hold a fetch open. */
 function deferred<T>() {
@@ -189,5 +189,27 @@ describe('X-Org-Id', () => {
     const spy = mockFetch(() => json([]))
     await listBots()
     expect(headerOf(spy)['x-org-id']).toBeUndefined()
+  })
+
+  // Task 5.1.7 — a live call passes the organisation it started in
+  // explicitly, so it must win over whatever is active now, not just agree
+  // with it. Reading the header-merge order in request()/orgHeaders() is
+  // not proof by itself: these assert the header that actually lands on
+  // the wire, with the override and the active organisation deliberately
+  // set to two DIFFERENT values, so the test fails if the override stops
+  // winning and the ambient one leaks through instead.
+  it('lets fetchDocumentBlobUrl override the active organisation on its own request', async () => {
+    const spy = mockFetch(() => new Response(new Blob(['x']), { status: 200 }))
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x' })
+    setActiveOrg('org-2')
+    await fetchDocumentBlobUrl('doc-1', 'org-1')
+    expect(headerOf(spy)['x-org-id']).toBe('org-1')
+  })
+
+  it('lets connectBot override the active organisation on its own request', async () => {
+    const spy = mockFetch(() => json({ sdp: 'v=0', type: 'answer', pc_id: 'pc-1' }))
+    setActiveOrg('org-2')
+    await connectBot('bot-1', 'v=0', 'offer', 'org-1')
+    expect(headerOf(spy)['x-org-id']).toBe('org-1')
   })
 })
