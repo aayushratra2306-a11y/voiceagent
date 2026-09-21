@@ -62,6 +62,11 @@
 	# "payment received" callback would have got 200 and HTML back, treated
 	# it as delivered, and never retried — a paid order silently never
 	# recorded.
+	#
+	# Same class of bug found again 2026-09-21, Task 9 of 5.1: /orgs was
+	# missing here too, which would have taken the switcher, the chooser,
+	# Members and Settings down with it, since every one of them needs an
+	# organisation resolved before it can render anything.
 	handle /approvals/* {
 		reverse_proxy backend:8080
 	}
@@ -69,6 +74,12 @@
 		reverse_proxy backend:8080
 	}
 	handle /payments/* {
+		reverse_proxy backend:8080
+	}
+	handle /orgs {
+		reverse_proxy backend:8080
+	}
+	handle /orgs/* {
 		reverse_proxy backend:8080
 	}
 
