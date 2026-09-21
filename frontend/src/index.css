@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+/* Found live 2026-09-21 on the Members page: opening any dropdown showed a
+   white box with no readable text — only the row under the cursor could be
+   read, so the list looked empty until you arrowed through it.
+   The popup list of a native <select> is drawn by the operating system, not
+   by the page, so the Tailwind classes on the <select> itself never reach
+   it: the options kept the page's white text and the OS's white background.
+   Both properties are set because browsers disagree about which one they
+   honour on the list versus the individual option. This is a global rule
+   rather than a class because all ten <select>s in the app (bot settings,
+   tools, webhooks, members) have the same problem. */
+select option,
+select optgroup {
+  background-color: #11111f;
+  color: #e2e8f0;
+}
