@@ -87,3 +87,21 @@ describe('DashboardPage role gating', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /new bot/i })).toBeInTheDocument())
   })
 })
+
+describe('DashboardPage error routing', () => {
+  it('sends a failed bot list to the chooser rather than the login page', async () => {
+    vi.spyOn(orgCtx, 'useOrg').mockImplementation(useOrgStub as never)
+    vi.spyOn(api, 'listBots').mockRejectedValue(new Error('not a member of this organisation'))
+
+    render(
+      <MemoryRouter initialEntries={['/o/org-7/dashboard']}>
+        <Routes>
+          <Route path="/o/:orgId/dashboard" element={<DashboardPage />} />
+          <Route path="/o" element={<div>chooser</div>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('chooser')).toBeInTheDocument())
+  })
+})
