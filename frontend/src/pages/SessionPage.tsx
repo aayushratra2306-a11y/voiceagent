@@ -4,6 +4,7 @@ import { listBots } from '../lib/api'
 import type { Bot } from '../lib/api'
 import { useCall, isCallActive } from '../context/CallContext'
 import { usePageChrome } from '../context/ChromeContext'
+import { useOrg } from '../context/OrgContext'
 
 /**
  * A VIEW of the call, not the owner of it.
@@ -16,6 +17,7 @@ import { usePageChrome } from '../context/ChromeContext'
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { orgPath } = useOrg()
   const [bot, setBot] = useState<Bot | null>(null)
   const {
     bot: callBot, status, speaking, muted, log, sources, openingDoc,
@@ -24,7 +26,7 @@ export default function SessionPage() {
 
   // No background blobs: this page paints its own, and it reacts to the
   // caller's voice.
-  usePageChrome(bot?.name ?? 'Call', '/dashboard', false)
+  usePageChrome(bot?.name ?? 'Call', orgPath('/dashboard'), false)
 
   useEffect(() => {
     listBots().then(bots => setBot(bots.find(b => b.id === id) ?? null))
@@ -170,7 +172,7 @@ export default function SessionPage() {
           {otherCallLive ? (
             <>
               <button
-                onClick={() => navigate(`/session/${callBot!.id}`)}
+                onClick={() => navigate(orgPath(`/session/${callBot!.id}`))}
                 className="flex items-center gap-2.5 bg-white/8 hover:bg-white/12 text-white font-semibold px-6 py-3 rounded-2xl transition-all text-sm"
               >
                 Go to that call

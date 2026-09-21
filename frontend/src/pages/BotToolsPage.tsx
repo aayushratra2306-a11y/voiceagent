@@ -4,6 +4,7 @@ import {
   listTools, createTool, updateTool, deleteTool, testTool,
 } from '../lib/api'
 import { usePageChrome } from '../context/ChromeContext'
+import { useOrg } from '../context/OrgContext'
 import PageLoader from '../components/PageLoader'
 import type { BotTool, BotToolInput, ToolParameter } from '../lib/api'
 
@@ -56,8 +57,9 @@ const smallField = 'flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg 
 
 export default function BotToolsPage() {
   const { id } = useParams()
+  const { orgPath } = useOrg()
 
-  usePageChrome('Tools', `/bots/${id}`)
+  usePageChrome('Tools', orgPath(`/bots/${id}`))
 
   const [tools, setTools] = useState<BotTool[]>([])
   const [loading, setLoading] = useState(true)

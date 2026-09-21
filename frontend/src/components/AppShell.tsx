@@ -5,6 +5,7 @@ import { APPROVALS_CHANGED } from '../lib/events'
 import { useAuth } from '../context/AuthContext'
 import { useCall } from '../context/CallContext'
 import { useChrome } from '../context/ChromeContext'
+import { useOrg } from '../context/OrgContext'
 import CallBar, { useCallBarVisible } from './CallBar'
 
 // How often the header re-checks for waiting approvals. An approval is
@@ -38,6 +39,7 @@ export default function AppShell() {
   const { logout } = useAuth()
   const { endCall } = useCall()
   const { chrome } = useChrome()
+  const { orgPath } = useOrg()
   const navigate = useNavigate()
   const location = useLocation()
   const barVisible = useCallBarVisible()
@@ -80,7 +82,7 @@ export default function AppShell() {
     // should do: it returns you where you actually came from, including to
     // a call in progress.
     if (location.key !== 'default') navigate(-1)
-    else navigate(chrome.backTo ?? '/dashboard')
+    else navigate(chrome.backTo ?? orgPath('/dashboard'))
   }
 
   function signOut() {
@@ -116,7 +118,7 @@ export default function AppShell() {
           )}
 
           <button
-            onClick={() => navigate('/dashboard')}
+            onClick={() => navigate(orgPath('/dashboard'))}
             className="flex items-center gap-2 shrink-0"
             aria-label="Voix home"
           >
@@ -142,7 +144,7 @@ export default function AppShell() {
 
         <nav className="flex items-center gap-1 shrink-0">
           <button
-            onClick={() => navigate('/approvals')}
+            onClick={() => navigate(orgPath('/approvals'))}
             // aria-label carries the count too: the badge is a visual cue,
             // and a screen reader announcing a bare "Approvals" would lose
             // the only part that says something needs doing.
@@ -171,7 +173,7 @@ export default function AppShell() {
             )}
           </button>
           <button
-            onClick={() => navigate('/webhooks')}
+            onClick={() => navigate(orgPath('/webhooks'))}
             className={`${navItem} text-slate-500 hover:text-slate-300`}
           >
             Webhooks

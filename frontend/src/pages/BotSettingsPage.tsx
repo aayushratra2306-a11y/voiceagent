@@ -6,6 +6,7 @@ import {
   listBotTemplates, createTool,
 } from '../lib/api'
 import { usePageChrome } from '../context/ChromeContext'
+import { useOrg } from '../context/OrgContext'
 import PageLoader from '../components/PageLoader'
 import type { Bot, BotDocument, BotTemplate } from '../lib/api'
 
@@ -99,8 +100,9 @@ export default function BotSettingsPage() {
   const { id } = useParams()
   const isNew = id === 'new'
   const navigate = useNavigate()
+  const { orgPath } = useOrg()
 
-  usePageChrome(isNew ? 'New Bot' : 'Edit Bot', '/dashboard')
+  usePageChrome(isNew ? 'New Bot' : 'Edit Bot', orgPath('/dashboard'))
   const [form, setForm] = useState<Omit<Bot, 'id'>>(DEFAULTS)
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
@@ -244,7 +246,7 @@ export default function BotSettingsPage() {
       } else {
         await updateBot(id!, form)
       }
-      navigate('/dashboard')
+      navigate(orgPath('/dashboard'))
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -361,7 +363,7 @@ export default function BotSettingsPage() {
           {!isNew && (
             <button
               type="button"
-              onClick={() => navigate(`/bots/${id}/tools`)}
+              onClick={() => navigate(orgPath(`/bots/${id}/tools`))}
               className="w-full bg-white/4 border border-white/8 rounded-2xl p-5 flex items-center gap-4 text-left hover:border-violet-500/40 hover:bg-white/6 transition-all"
             >
               <div className="flex-1">
@@ -538,7 +540,7 @@ export default function BotSettingsPage() {
           <div className="flex gap-3 pt-1">
             <button
               type="button"
-              onClick={() => navigate('/dashboard')}
+              onClick={() => navigate(orgPath('/dashboard'))}
               className="flex-1 border border-white/10 hover:border-white/20 text-slate-400 hover:text-white font-semibold rounded-xl py-2.5 text-sm transition-all"
             >
               Cancel

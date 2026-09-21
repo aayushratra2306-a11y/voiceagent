@@ -6,6 +6,7 @@ import {
 } from '../lib/api'
 import type { WebhookSubscription, WebhookSubscriptionInput, WebhookDeliveryLogEntry } from '../lib/api'
 import { usePageChrome } from '../context/ChromeContext'
+import { useOrg } from '../context/OrgContext'
 import PageLoader from '../components/PageLoader'
 
 // Task 3.8 — a customer registering their own URL per event, the manual's
@@ -20,7 +21,9 @@ const label = 'block text-xs font-semibold text-slate-400 uppercase tracking-wid
 const field = 'w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-600 outline-none focus:border-violet-500/60 transition-all'
 
 export default function WebhooksPage() {
-  usePageChrome('Webhooks', '/dashboard')
+  const { orgPath } = useOrg()
+
+  usePageChrome('Webhooks', orgPath('/dashboard'))
 
   const [events, setEvents] = useState<string[]>([])
   const [subs, setSubs] = useState<WebhookSubscription[]>([])

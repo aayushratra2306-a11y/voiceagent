@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { listApprovals, approveAction, denyAction } from '../lib/api'
 import { usePageChrome } from '../context/ChromeContext'
+import { useOrg } from '../context/OrgContext'
 import { APPROVALS_CHANGED } from '../lib/events'
 import type { PendingApproval } from '../lib/api'
 
@@ -18,8 +19,9 @@ export default function ApprovalsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [deciding, setDeciding] = useState<string | null>(null)
+  const { orgPath } = useOrg()
 
-  usePageChrome('Approvals', '/dashboard')
+  usePageChrome('Approvals', orgPath('/dashboard'))
 
   useEffect(() => { refresh() }, [filter])
 

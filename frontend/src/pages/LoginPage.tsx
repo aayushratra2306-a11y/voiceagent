@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { login, register } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
+import { readLastOrg } from '../lib/orgs'
 
 export default function LoginPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login')
@@ -26,7 +27,11 @@ export default function LoginPage() {
       } else {
         const { access_token } = await login(email, password)
         saveToken(access_token)
-        navigate('/dashboard')
+        // No organisation is in the address yet at this point — the
+        // remembered one from a previous visit, or the chooser (which then
+        // picks the personal organisation) when there isn't one.
+        const remembered = readLastOrg()
+        navigate(remembered ? `/o/${remembered}/dashboard` : '/o', { replace: true })
       }
     } catch (err: any) {
       setError(err.message)

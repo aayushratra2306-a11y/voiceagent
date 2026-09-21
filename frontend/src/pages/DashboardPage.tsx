@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { listBots, deleteBot } from '../lib/api'
 import type { Bot } from '../lib/api'
+import { useOrg } from '../context/OrgContext'
 
 export default function DashboardPage() {
   const [bots, setBots] = useState<Bot[]>([])
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
+  const { orgPath } = useOrg()
 
   useEffect(() => {
     listBots()
@@ -29,7 +31,7 @@ export default function DashboardPage() {
             <p className="text-sm text-slate-500 mt-0.5">Create and manage your voice assistants</p>
           </div>
           <button
-            onClick={() => navigate('/bots/new')}
+            onClick={() => navigate(orgPath('/bots/new'))}
             className="flex items-center gap-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition-all shadow-lg shadow-violet-900/30"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -52,7 +54,7 @@ export default function DashboardPage() {
             <p className="text-slate-300 font-medium">No bots yet</p>
             <p className="text-slate-500 text-sm mt-1 mb-5">Create your first voice assistant to get started</p>
             <button
-              onClick={() => navigate('/bots/new')}
+              onClick={() => navigate(orgPath('/bots/new'))}
               className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-violet-900/30"
             >
               Create Bot
@@ -80,7 +82,7 @@ export default function DashboardPage() {
 
                 <div className="flex items-center gap-2 ml-4 shrink-0">
                   <button
-                    onClick={() => navigate(`/session/${bot.id}`)}
+                    onClick={() => navigate(orgPath(`/session/${bot.id}`))}
                     className="flex items-center gap-1.5 bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-all shadow-sm"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -90,7 +92,7 @@ export default function DashboardPage() {
                     Talk
                   </button>
                   <button
-                    onClick={() => navigate(`/bots/${bot.id}`)}
+                    onClick={() => navigate(orgPath(`/bots/${bot.id}`))}
                     className="p-2 text-slate-500 hover:text-slate-200 hover:bg-white/8 rounded-xl transition-all"
                     title="Settings"
                   >
