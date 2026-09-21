@@ -18,8 +18,8 @@ export default defineConfig({
       // here. Every one of this feature's manual checks needs it — without
       // it `npm run dev` falls through to the SPA for every org call and
       // the page never gets past "loading". (deploy/Caddyfile's proxy list
-      // does not have it either — that is outside frontend/, so out of
-      // scope here, but it likely needs the same fix; see the task report.)
+      // had the same gap; that was outside frontend/, so out of scope here,
+      // but it was fixed separately — commit 3a7becd.)
       '/orgs': 'http://localhost:8080',
     },
   },
