@@ -56,7 +56,10 @@ export default function MembersPage() {
   // gated the same way server-side — skip the request entirely for anyone
   // else rather than firing a call that will just 403.
   const loadInvitations = useCallback(async () => {
-    if (!manages) { setInvitations([]); return }
+    // No setInvitations([]) here: the state already starts [], and setting a
+    // fresh empty array would be a new reference, so React would re-render
+    // every viewer and member for nothing.
+    if (!manages) return
     try {
       setInvitations(await listInvitations(orgId))
     } catch (e) {
@@ -247,14 +250,21 @@ export default function MembersPage() {
                 <span className="flex-1 text-sm truncate">{inv.email}</span>
                 <span className="text-xs text-slate-500">{inv.role}</span>
                 <span className="text-xs text-slate-600">Expires {formatDate(inv.expires_at)}</span>
-                <button
-                  aria-label={`Revoke invitation to ${inv.email}`}
-                  disabled={busy}
-                  onClick={() => void revoke(inv.id)}
-                  className="text-xs text-slate-500 hover:text-rose-300 disabled:opacity-50"
-                >
-                  Revoke
-                </button>
+                {/* The same rule mayTouch applies to the members list above:
+                    the server refuses an admin who tries to cancel an OWNER
+                    invitation (403 "Only an owner can change another owner"),
+                    so offering the control would just be a button that always
+                    fails. */}
+                {(role === 'owner' || inv.role !== 'owner') && (
+                  <button
+                    aria-label={`Revoke invitation to ${inv.email}`}
+                    disabled={busy}
+                    onClick={() => void revoke(inv.id)}
+                    className="text-xs text-slate-500 hover:text-rose-300 disabled:opacity-50"
+                  >
+                    Revoke
+                  </button>
+                )}
               </li>
             ))}
           </ul>

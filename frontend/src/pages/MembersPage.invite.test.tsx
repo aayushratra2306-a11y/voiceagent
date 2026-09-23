@@ -171,4 +171,35 @@ describe('MembersPage — invitations', () => {
     await screen.findByLabelText('Invitation link')
     expect(screen.getByText(/expires/i)).toBeInTheDocument()
   })
+
+  // --- review round 1 ---------------------------------------------------------
+
+  it('does not offer an admin a revoke control on an owner invitation', async () => {
+    // Mirrors "does not offer an admin any control over an owner" in
+    // MembersPage.test.tsx. The server guards this (403 "Only an owner can
+    // change another owner"), so a button here would always fail.
+    stubOrg('admin')
+    stubAuth('admin@x.com')
+    vi.spyOn(api, 'listMembers').mockResolvedValue(MEMBERS)
+    vi.spyOn(api, 'listInvitations').mockResolvedValue([
+      { id: 'inv-o', email: 'heir@x.com', role: 'owner', invited_at: '2026-09-20T00:00:00Z', expires_at: '2026-09-27T00:00:00Z' },
+    ])
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('heir@x.com')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Revoke invitation to heir@x.com' })).not.toBeInTheDocument()
+  })
+
+  it('does offer an owner a revoke control on an owner invitation', async () => {
+    stubOrg('owner')
+    stubAuth('owner@x.com')
+    vi.spyOn(api, 'listMembers').mockResolvedValue(MEMBERS)
+    vi.spyOn(api, 'listInvitations').mockResolvedValue([
+      { id: 'inv-o', email: 'heir@x.com', role: 'owner', invited_at: '2026-09-20T00:00:00Z', expires_at: '2026-09-27T00:00:00Z' },
+    ])
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('heir@x.com')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Revoke invitation to heir@x.com' })).toBeInTheDocument()
+  })
 })
