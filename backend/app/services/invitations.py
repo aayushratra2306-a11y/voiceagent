@@ -41,13 +41,20 @@ class AlreadyMemberError(InvitationError):
 
 
 def _normalise_email(email: str) -> str:
-    # Same intent as the users index (app/models/user.py, via EmailStr at
-    # the API boundary): an email is a case-insensitive key. Plain
-    # strip+lower here because create_invitation/accept take a raw str, not
-    # a pydantic EmailStr field — there is no separate normalisation being
-    # invented, just the same "an address is its lowercase form" rule
-    # applied where the users index applies it through the field type
-    # instead.
+    # Lowercases the WHOLE address (local part included), so an invitation
+    # matches an address however it happens to be typed — that is what
+    # people expect of email, and this comparison behaviour is deliberately
+    # being kept.
+    #
+    # This is NOT the same rule the users index applies, despite the
+    # similar intent. User.email is Annotated[EmailStr, Indexed(unique=True)]
+    # with no collation: pydantic's EmailStr lowercases only the domain
+    # part, so uniqueness there is case-SENSITIVE on the local part.
+    # "Admin@x.com" and "admin@x.com" can both exist as separate accounts.
+    # Because this function lowercases the local part too, one invitation
+    # can therefore be satisfied by either of two such case-variant
+    # accounts. That is a pre-existing gap in the users index (a possible
+    # auth issue), not something this function can or should fix.
     return email.strip().lower()
 
 
@@ -160,5 +167,18 @@ async def deliver_invitation(invitation: Invitation, url: str) -> None:
     In 5.2 there is no email sending at all: delivery is by hand — the
     admin is shown the link and copies it to whoever they're inviting.
     This function only logs that an invitation exists to be delivered.
+
+    `url` is accepted (and will be used to actually send the email once
+    7.10 lands) but is deliberately NEVER logged, and neither is anything
+    built from it. It carries the raw invitation token — the only thing
+    gating membership of an organisation — and logs are read by more
+    people, kept for longer, and shipped to more places than the database
+    ever is. Logging it would be strictly worse than storing the token
+    itself, which create_invitation already goes out of its way not to do.
+    Do not add it back.
     """
-    logger.info(f"[INVITATIONS] {invitation.email} invited to org {invitation.org_id}: deliver by hand -> {url}")
+    msg = (
+        f"[INVITATIONS] invitation {invitation.id} for {invitation.email} "
+        f"to org {invitation.org_id}: ready for hand delivery"
+    )
+    logger.info(msg)
