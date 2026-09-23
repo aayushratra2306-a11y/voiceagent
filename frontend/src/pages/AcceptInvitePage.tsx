@@ -47,7 +47,11 @@ export default function AcceptInvitePage() {
   const [acceptError, setAcceptError] = useState('')
 
   useEffect(() => {
-    if (!token) { setLoadFailed(true); return }
+    // No setLoadFailed here: the route is /invite/:token so this branch is
+    // unreachable in practice, and setting state synchronously inside an
+    // effect just forces a second render. A missing token is derived at
+    // render time instead (see the loadFailed check below).
+    if (!token) return
     let cancelled = false
     getInvitation(token)
       .then(inv => { if (!cancelled) setInvite(inv) })
@@ -74,7 +78,7 @@ export default function AcceptInvitePage() {
   // Invalid, expired, revoked or already-used — the backend returns the
   // same 404 for all four and this page deliberately does not try to guess
   // which one it was.
-  if (loadFailed) {
+  if (loadFailed || !token) {
     return (
       <Shell>
         <p className="text-sm text-slate-300">This invitation link is no longer valid.</p>
@@ -125,6 +129,22 @@ export default function AcceptInvitePage() {
           >
             {accepting ? 'Joining…' : 'Accept invitation'}
           </button>
+          {acceptError && (
+            // A way out. This page sits outside AppShell, so it has no nav
+            // of its own: without this, a visitor whose accept keeps being
+            // refused can only re-click a button that will never work. That
+            // is reachable — sameEmail() here is a plain trim+lowercase
+            // check while the server uses the users index's own
+            // normalisation, so the two can disagree and the server, which
+            // is the authority, wins.
+            <button
+              type="button"
+              onClick={() => logout()}
+              className="w-full bg-white/10 hover:bg-white/15 text-white text-sm rounded-xl py-2.5 transition-colors"
+            >
+              Sign out and use a different account
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-2">

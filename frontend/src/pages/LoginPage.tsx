@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { login, register } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { readLastOrg } from '../lib/orgs'
+import { safeReturnPath } from '../lib/returnPath'
 
 export default function LoginPage() {
   const [searchParams] = useSearchParams()
@@ -13,8 +14,10 @@ export default function LoginPage() {
   // page would otherwise send them. Only a same-site path is honoured —
   // anything else (a bare "//host/…" or an absolute URL) is an open
   // redirect and gets the ordinary landing instead.
-  const next = searchParams.get('next')
-  const safeNext = next && next.startsWith('/') && !next.startsWith('//') ? next : null
+  // The check itself lives in lib/returnPath so it can be tested directly:
+  // "where do we send someone after login" is exactly the input an attacker
+  // wants to control, and inline here it had no test of its own.
+  const safeNext = safeReturnPath(searchParams.get('next'))
 
   const [mode, setMode] = useState<'login' | 'register'>(
     searchParams.get('mode') === 'register' ? 'register' : 'login',

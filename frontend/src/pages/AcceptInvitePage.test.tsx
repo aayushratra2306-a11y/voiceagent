@@ -75,6 +75,29 @@ describe('signed in with a matching email', () => {
       expect(screen.getByText("You're already a member of this organisation")).toBeInTheDocument())
     expect(screen.queryByTestId('landed')).not.toBeInTheDocument()
   })
+
+  it('offers a way out when accepting keeps failing', async () => {
+    // Review finding: this page sits outside AppShell, so it has no nav of
+    // its own. Showing only an error plus a button that will never succeed
+    // strands the visitor. Reachable in practice: the client-side email
+    // check is a plain trim+lowercase while the server uses the users
+    // index's own normalisation, so the two can disagree — and the server,
+    // which is the authority, wins.
+    stubAuth('tok', 'invitee@x.com')
+    vi.spyOn(api, 'getInvitation').mockResolvedValue(PREVIEW)
+    vi.spyOn(api, 'acceptInvitation').mockRejectedValue(
+      new Error('This invitation was sent to a different email address'),
+    )
+    renderAt('/invite/tok-abc')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /accept/i })).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /accept/i }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
+  })
 })
 
 describe('signed out', () => {
