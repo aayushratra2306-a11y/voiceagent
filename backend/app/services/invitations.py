@@ -200,9 +200,37 @@ async def revoke_all_for_org(org_id: str) -> int:
     return result.modified_count
 
 
+async def revoke_all_by_inviter(org_id: str, user_id: str) -> int:
+    """Revokes every pending invitation a given person sent in a given
+    organisation, and returns how many.
+
+    An invitation is an exercise of authority: it hands out a role the
+    sender was entitled to hand out. When they lose that entitlement --
+    removed from the organisation, or demoted below admin -- their
+    outstanding invitations must not keep granting it for the rest of the
+    7 days, to whoever happens to hold the link. delete_org already had
+    this reasoning for the organisation itself; this is the same rule for
+    the person.
+    """
+    result = await Invitation.get_motor_collection().update_many(
+        {"org_id": org_id, "invited_by": user_id, "status": "pending"},
+        {"$set": {"status": "revoked"}},
+    )
+    return result.modified_count
+
+
 async def list_pending(org_id: str) -> list[Invitation]:
+    """Only invitations that could still actually be used.
+
+    Filters expiry as well as status, matching find_valid. Without the
+    expiry check an invitation nobody can accept any more sat in the
+    admin's "Pending invitations" list for ever, offering a Revoke button
+    and showing a date in the past.
+    """
     return await Invitation.find(
-        Invitation.org_id == org_id, Invitation.status == "pending"
+        Invitation.org_id == org_id,
+        Invitation.status == "pending",
+        Invitation.expires_at > datetime.now(UTC),
     ).sort(+Invitation.created_at).to_list()
 
 

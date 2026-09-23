@@ -12,6 +12,7 @@ from pydantic import BaseModel, EmailStr, Field
 from app.core.auth import get_current_user
 from app.core.org import OrgContext, require_role
 from app.core.rate_limit import limiter
+from app.core.times import utc_isoformat
 from app.models.approval import PendingApproval
 from app.models.bot import Bot
 from app.models.organisation import ROLE_RANK, Membership, Organisation, Role
@@ -28,7 +29,13 @@ class OrgIn(BaseModel):
 
 
 class MemberIn(BaseModel):
-    email: EmailStr  # same normalisation as registration, so lookups match
+    # EmailStr validates the shape. It does NOT normalise the way this
+    # feature compares addresses: it lowercases only the domain, while
+    # invitations._normalise_email lowercases the whole address. Nothing
+    # looks the address up here any more (task 5.2 removed that, with the
+    # 404 that leaked whether it was registered) — the comparison happens
+    # at accept time.
+    email: EmailStr
     role: Role
 
 
@@ -99,7 +106,7 @@ async def list_members(ctx: OrgContext = Depends(require_role("viewer", from_pat
         {"_id": {"$in": [PydanticObjectId(m.user_id) for m in members]}}
     ).to_list()}
     return [
-        {"user_id": m.user_id, "email": users[m.user_id].email, "role": m.role, "joined": m.created_at.isoformat()}
+        {"user_id": m.user_id, "email": users[m.user_id].email, "role": m.role, "joined": utc_isoformat(m.created_at)}
         for m in members if m.user_id in users
     ]
 
@@ -129,7 +136,7 @@ async def add_member(
     invite, raw_token = await inv.create_invitation(ctx.org_id, body.email, body.role, str(ctx.user.id))
     invite_path = f"/invite/{raw_token}"
     await inv.deliver_invitation(invite, invite_path)
-    return {"status": "invitation sent", "invite_path": invite_path, "expires_at": invite.expires_at.isoformat()}
+    return {"status": "invitation sent", "invite_path": invite_path, "expires_at": utc_isoformat(invite.expires_at)}
 
 
 @router.patch("/{org_id}/members/{user_id}")
@@ -142,6 +149,13 @@ async def change_role(user_id: str, body: RoleIn, ctx: OrgContext = Depends(requ
         await svc.set_role(ctx.org_id, user_id, body.role)
     except svc.LastOwnerError as e:
         raise HTTPException(status_code=409, detail="An organisation needs at least one owner") from e
+    # Losing the right to invite takes the outstanding invitations with it.
+    # Only a demotion below admin: a promotion leaves them alone. Done after
+    # the role change, so an interruption leaves the weaker role with live
+    # invitations (visible, revocable by any admin) rather than the stronger
+    # role with none.
+    if ROLE_RANK[body.role] < ROLE_RANK["admin"]:
+        await inv.revoke_all_by_inviter(ctx.org_id, user_id)
     return {"user_id": user_id, "role": body.role}
 
 
@@ -159,6 +173,10 @@ async def remove_member(user_id: str, ctx: OrgContext = Depends(require_role("vi
         await svc.remove_member(ctx.org_id, user_id)
     except svc.LastOwnerError as e:
         raise HTTPException(status_code=409, detail="An organisation needs at least one owner") from e
+    # Same rule as the demotion above: someone who is no longer in the
+    # organisation must not keep handing out roles in it for the rest of the
+    # 7 days, to whoever holds a link they sent before they left.
+    await inv.revoke_all_by_inviter(ctx.org_id, user_id)
     return Response(status_code=204)
 
 
@@ -170,8 +188,8 @@ async def list_invitations(ctx: OrgContext = Depends(require_role("admin", from_
             "id": str(invite.id),
             "email": invite.email,
             "role": invite.role,
-            "invited_at": invite.created_at.isoformat(),
-            "expires_at": invite.expires_at.isoformat(),
+            "invited_at": utc_isoformat(invite.created_at),
+            "expires_at": utc_isoformat(invite.expires_at),
         }
         for invite in pending
     ]

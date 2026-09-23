@@ -13,11 +13,14 @@ import PageLoader from '../components/PageLoader'
  * would either fail outright or (worse) bounce them away from the one page
  * they were sent here to see.
  *
- * The invited email address itself is never rendered anywhere on this page,
- * in any state — only used internally to decide whether "Accept" makes
- * sense to offer. Printing it next to the signed-in account's address would
- * turn the page into an oracle for comparing the two; leaving it out avoids
- * that question rather than trying to answer it safely.
+ * The invited email address IS shown. It was hidden at first, to avoid
+ * turning the page into an oracle for comparing it against whichever
+ * account is signed in. That bought nothing: the address is in the
+ * getInvitation response and therefore in devtools either way, so hiding it
+ * only stopped the person who needs it from reading it. It cost the common
+ * path — someone with no account clicks "Sign up", registers with whichever
+ * address they prefer, and lands on "this was sent to a different account"
+ * with no way to learn which address to use.
  */
 
 function sameEmail(a: string, b: string): boolean {
@@ -98,13 +101,15 @@ export default function AcceptInvitePage() {
     <Shell>
       <p className="text-white font-medium text-sm mb-1">Join {invite.org_name}</p>
       <p className="text-slate-400 text-xs mb-5">
-        Invited by {invite.invited_by_email} as {invite.role}.
+        Invited by {invite.invited_by_email} as {invite.role}, for{' '}
+        <span className="text-slate-300">{invite.email}</span>.
       </p>
 
       {wrongAccount ? (
         <div className="space-y-3">
           <p className="text-sm text-slate-300">
-            This invitation was sent to a different account than the one you're signed in with.
+            This invitation was sent to {invite.email}, which isn&rsquo;t the account
+            you&rsquo;re signed in with.
           </p>
           <button
             type="button"
@@ -132,11 +137,11 @@ export default function AcceptInvitePage() {
           {acceptError && (
             // A way out. This page sits outside AppShell, so it has no nav
             // of its own: without this, a visitor whose accept keeps being
-            // refused can only re-click a button that will never work. That
-            // is reachable — sameEmail() here is a plain trim+lowercase
-            // check while the server uses the users index's own
-            // normalisation, so the two can disagree and the server, which
-            // is the authority, wins.
+            // refused can only re-click a button that will never work.
+            // Reachable on a 409 ("already a member of this organisation")
+            // and on any 404, neither of which sameEmail() can predict —
+            // the server is the authority and this page only guesses at
+            // which control to offer.
             <button
               type="button"
               onClick={() => logout()}

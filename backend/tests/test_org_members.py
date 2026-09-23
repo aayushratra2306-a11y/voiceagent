@@ -92,10 +92,10 @@ async def test_owner_invites_an_existing_user_who_accepts_and_then_sees_the_org(
     # 5.2 — Task 2: /members now invites rather than adding directly (a
     # 201-with-the-added-membership response would have to differ between
     # a known and unknown address, which is the leak this task closes). The
-    # invitee only shows up in `viewer`'s orgs once they accept; there is
-    # no HTTP accept endpoint yet (a later task), so this calls the
-    # invitations service directly, the same way test_invitations_service.py
-    # does.
+    # invitee only shows up in `viewer`'s orgs once they accept. This calls
+    # the invitations service directly rather than POST /invitations/{token}/
+    # accept (which task 3 added, and test_invite_accept.py covers): this
+    # test is about the org appearing in their list, not the HTTP accept.
     owner = await make_user("orgs-3@voiceagent-test.com")
     viewer = await make_user("orgs-3v@voiceagent-test.com")
     org_id = (await client.post("/orgs", json={"name": "Acme"}, headers=_h(owner))).json()["id"]

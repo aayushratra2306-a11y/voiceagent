@@ -20,6 +20,7 @@ from beanie import PydanticObjectId
 from app.models.organisation import Membership
 from app.models.user import User
 from app.services import invitations as inv
+from app.services import orgs as org_service
 from tests.conftest import _org_of_token, make_user
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -271,3 +272,88 @@ async def test_a_stranger_cannot_replay_someone_elses_accepted_token(client):
     nonsense = await client.post("/invitations/not-a-real-token-at-all/accept", headers=_bearer(stranger))
     assert replay.status_code == nonsense.status_code == 404
     assert replay.json() == nonsense.json()
+
+
+# --- whole-branch review ------------------------------------------------------
+
+async def test_an_expired_invitation_leaves_the_pending_list(client):
+    """list_pending filtered on status only, so an expired invitation sat in
+    the admin's "Pending invitations" list for ever, with a Revoke button and
+    a date in the past. find_valid already excluded it; the list did not."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.invitation import Invitation
+
+    org, inviter = await _org_with_owner("exp-1")
+    invite, _ = await inv.create_invitation(org, "ia-x-exp-1@voiceagent-test.com", "member", inviter)
+    assert len(await inv.list_pending(org)) == 1
+
+    invite.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await invite.save()
+
+    assert await inv.list_pending(org) == []
+    assert await Invitation.get(invite.id) is not None  # still there, just not listed
+
+
+async def test_removing_a_member_revokes_the_invitations_they_sent(client):
+    """An invitation is an exercise of authority. If the person who sent it
+    loses that authority, their pending invitations must not keep handing
+    out the role they chose -- for up to 7 days, to whoever holds the link."""
+    owner_email = "ia-owner-rights-1@voiceagent-test.com"
+    owner = await make_user(owner_email)
+    org = _org_of_token[owner]
+    admin_email = "ia-admin-rights-1@voiceagent-test.com"
+    await make_user(admin_email)
+    admin_id = await _uid(admin_email)
+    await org_service.add_member(org, admin_id, "admin")
+
+    await inv.create_invitation(org, "ia-guest-rights-1@voiceagent-test.com", "admin", admin_id)
+    assert len(await inv.list_pending(org)) == 1
+
+    gone = await client.delete(
+        f"/orgs/{org}/members/{admin_id}", headers={**_bearer(owner), "X-Org-Id": org}
+    )
+    assert gone.status_code == 204, gone.text
+    assert await inv.list_pending(org) == []
+
+
+async def test_demoting_someone_below_admin_revokes_the_invitations_they_sent(client):
+    owner_email = "ia-owner-rights-2@voiceagent-test.com"
+    owner = await make_user(owner_email)
+    org = _org_of_token[owner]
+    admin_email = "ia-admin-rights-2@voiceagent-test.com"
+    await make_user(admin_email)
+    admin_id = await _uid(admin_email)
+    await org_service.add_member(org, admin_id, "admin")
+
+    await inv.create_invitation(org, "ia-guest-rights-2@voiceagent-test.com", "admin", admin_id)
+    assert len(await inv.list_pending(org)) == 1
+
+    demoted = await client.patch(
+        f"/orgs/{org}/members/{admin_id}",
+        json={"role": "viewer"},
+        headers={**_bearer(owner), "X-Org-Id": org},
+    )
+    assert demoted.status_code == 200, demoted.text
+    assert await inv.list_pending(org) == []
+
+
+async def test_promoting_someone_leaves_their_invitations_alone(client):
+    """Only a LOSS of authority revokes. A promotion must not."""
+    owner_email = "ia-owner-rights-3@voiceagent-test.com"
+    owner = await make_user(owner_email)
+    org = _org_of_token[owner]
+    admin_email = "ia-admin-rights-3@voiceagent-test.com"
+    await make_user(admin_email)
+    admin_id = await _uid(admin_email)
+    await org_service.add_member(org, admin_id, "admin")
+
+    await inv.create_invitation(org, "ia-guest-rights-3@voiceagent-test.com", "member", admin_id)
+
+    promoted = await client.patch(
+        f"/orgs/{org}/members/{admin_id}",
+        json={"role": "owner"},
+        headers={**_bearer(owner), "X-Org-Id": org},
+    )
+    assert promoted.status_code == 200, promoted.text
+    assert len(await inv.list_pending(org)) == 1

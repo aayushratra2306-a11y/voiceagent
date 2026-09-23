@@ -79,10 +79,10 @@ describe('signed in with a matching email', () => {
   it('offers a way out when accepting keeps failing', async () => {
     // Review finding: this page sits outside AppShell, so it has no nav of
     // its own. Showing only an error plus a button that will never succeed
-    // strands the visitor. Reachable in practice: the client-side email
-    // check is a plain trim+lowercase while the server uses the users
-    // index's own normalisation, so the two can disagree — and the server,
-    // which is the authority, wins.
+    // strands the visitor. Reachable on a 409 ("already a member") and on
+    // any 404 — neither of which the page's own email check can predict,
+    // because the server is the authority and this page only guesses at
+    // which control to offer.
     stubAuth('tok', 'invitee@x.com')
     vi.spyOn(api, 'getInvitation').mockResolvedValue(PREVIEW)
     vi.spyOn(api, 'acceptInvitation').mockRejectedValue(
@@ -134,7 +134,14 @@ describe('an invalid, expired, revoked or already-used token', () => {
 })
 
 describe('signed in as the wrong account', () => {
-  it('says the invitation is for a different account without pairing both addresses, and offers a way out', async () => {
+  it('names the invited address so the visitor knows which account to use, and offers a way out', async () => {
+    // This reverses an earlier decision to hide the invited address. The
+    // whole-branch review showed hiding it bought nothing — it is in the
+    // getInvitation response and so in devtools regardless — while it cost
+    // the commonest path: register with the wrong address, get told the
+    // invitation is for a different account, and have no way to discover
+    // which one. The signed-in address is still not printed beside it;
+    // the visitor already knows that one.
     const logout = vi.fn()
     stubAuth('tok', 'someone-else@x.com', logout)
     vi.spyOn(api, 'getInvitation').mockResolvedValue(PREVIEW)
@@ -143,10 +150,8 @@ describe('signed in as the wrong account', () => {
     await waitFor(() => expect(screen.getAllByText(/different account/i).length).toBeGreaterThan(0))
     expect(screen.queryByRole('button', { name: /^accept/i })).not.toBeInTheDocument()
 
-    // Neither this account's address nor the invited one may be printed —
-    // pairing them would turn the page into an address-comparison oracle.
+    expect(screen.getAllByText(/invitee@x.com/).length).toBeGreaterThan(0)
     expect(screen.queryByText('someone-else@x.com')).not.toBeInTheDocument()
-    expect(screen.queryByText('invitee@x.com')).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /sign out/i }))
     expect(logout).toHaveBeenCalled()
