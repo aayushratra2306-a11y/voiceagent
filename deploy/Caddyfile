@@ -83,6 +83,20 @@
 		reverse_proxy backend:8080
 	}
 
+	# Task 5.2 (Task 3) — the invitation accept links. GET /invitations/{token}
+	# has no exact-path form (there's always a token), but /orgs already
+	# proved a single `handle /x/*` block is not enough on its own: Caddy's
+	# `handle` matches ONE path exactly OR everything under a `/*` glob, never
+	# both from one block, so both are listed even though only the second is
+	# ever hit in practice here — matching /orgs's shape rather than relying
+	# on that being true today.
+	handle /invitations {
+		reverse_proxy backend:8080
+	}
+	handle /invitations/* {
+		reverse_proxy backend:8080
+	}
+
 	# Static frontend build (vite's dist/), with SPA fallback so client-side
 	# routes like /dashboard survive a hard refresh.
 	handle {

@@ -34,6 +34,8 @@ EXEMPT = {
     ("GET", "/health/detail"): "operator view (5.7 will restrict)",
     ("GET", "/metrics"): "token-protected metrics",
     ("GET", "/test"): "static WebRTC test page",
+    ("GET", "/invitations/{token}"): "reached by invitation token, which names its own organisation",
+    ("POST", "/invitations/{token}/accept"): "reached by invitation token, which names its own organisation",
 }
 
 
