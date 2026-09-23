@@ -88,7 +88,14 @@ async def test_get_orgs_heals_a_user_with_no_membership(client):
     assert len(orgs) == 1 and orgs[0]["role"] == "owner"
 
 
-async def test_owner_adds_an_existing_user_who_then_sees_the_org(client):
+async def test_owner_invites_an_existing_user_who_accepts_and_then_sees_the_org(client):
+    # 5.2 — Task 2: /members now invites rather than adding directly (a
+    # 201-with-the-added-membership response would have to differ between
+    # a known and unknown address, which is the leak this task closes). The
+    # invitee only shows up in `viewer`'s orgs once they accept; there is
+    # no HTTP accept endpoint yet (a later task), so this calls the
+    # invitations service directly, the same way test_invitations_service.py
+    # does.
     owner = await make_user("orgs-3@voiceagent-test.com")
     viewer = await make_user("orgs-3v@voiceagent-test.com")
     org_id = (await client.post("/orgs", json={"name": "Acme"}, headers=_h(owner))).json()["id"]
@@ -96,12 +103,25 @@ async def test_owner_adds_an_existing_user_who_then_sees_the_org(client):
     r = await client.post(
         f"/orgs/{org_id}/members", json={"email": "orgs-3v@voiceagent-test.com", "role": "viewer"}, headers=_h(owner)
     )
-    assert r.status_code == 201
+    assert r.status_code == 202
+    assert r.json()["status"] == "invitation sent"
+
+    from app.models.user import User
+    from app.services import invitations as inv
+
+    token = r.json()["invite_path"].rsplit("/", 1)[-1]
+    viewer_user = await User.find_one(User.email == "orgs-3v@voiceagent-test.com")
+    await inv.accept(token, viewer_user)
+
     names = [o["name"] for o in (await client.get("/orgs", headers=_h(viewer))).json()]
     assert "Acme" in names
 
 
-async def test_adding_an_unknown_email_says_so(client):
+async def test_inviting_an_unknown_email_returns_the_same_202_as_a_known_one(client):
+    # 5.2 — Task 2 closes the 5.1 leak this test used to assert (a 404 with
+    # "No Voix account uses that email" for an unknown address). See
+    # test_invitations_api.py::test_inviting_an_unknown_address_looks_identical_to_a_known_one
+    # for the side-by-side comparison of both outcomes.
     owner = await make_user("orgs-4@voiceagent-test.com")
     org_id = (await client.post("/orgs", json={"name": "Acme4"}, headers=_h(owner))).json()["id"]
     r = await client.post(
@@ -109,17 +129,20 @@ async def test_adding_an_unknown_email_says_so(client):
         json={"email": "nobody-here@voiceagent-test.com", "role": "member"},
         headers=_h(owner),
     )
-    assert r.status_code == 404 and "No Voix account" in r.json()["detail"]
+    assert r.status_code == 202
+    assert r.json()["status"] == "invitation sent"
 
 
 async def test_an_admin_cannot_touch_an_owner(client):
     owner = await make_user("orgs-5@voiceagent-test.com")
     admin = await make_user("orgs-5a@voiceagent-test.com")
     org_id = (await client.post("/orgs", json={"name": "Acme5"}, headers=_h(owner))).json()["id"]
-    await client.post(
-        f"/orgs/{org_id}/members", json={"email": "orgs-5a@voiceagent-test.com", "role": "admin"}, headers=_h(owner)
-    )
     from app.models.user import User
+    # This test is about the owner-guard on PATCH/DELETE/POST below, not
+    # about the invite flow, so the admin membership is added directly
+    # (as test_org_role_matrix.py does) rather than through invite+accept.
+    admin_id = str((await User.find_one(User.email == "orgs-5a@voiceagent-test.com")).id)
+    await add_member(org_id, admin_id, "admin")
     owner_id = str((await User.find_one(User.email == "orgs-5@voiceagent-test.com")).id)
 
     r1 = await client.patch(f"/orgs/{org_id}/members/{owner_id}", json={"role": "member"}, headers=_h(admin))
@@ -136,12 +159,12 @@ async def test_the_last_owner_cannot_leave_but_a_viewer_can(client):
     owner = await make_user("orgs-6@voiceagent-test.com")
     viewer = await make_user("orgs-6v@voiceagent-test.com")
     org_id = (await client.post("/orgs", json={"name": "Acme6"}, headers=_h(owner))).json()["id"]
-    await client.post(
-        f"/orgs/{org_id}/members", json={"email": "orgs-6v@voiceagent-test.com", "role": "viewer"}, headers=_h(owner)
-    )
     from app.models.user import User
-    owner_id = str((await User.find_one(User.email == "orgs-6@voiceagent-test.com")).id)
+    # Membership setup, not the invite flow under test elsewhere — added
+    # directly, same as test_an_admin_cannot_touch_an_owner above.
     viewer_id = str((await User.find_one(User.email == "orgs-6v@voiceagent-test.com")).id)
+    await add_member(org_id, viewer_id, "viewer")
+    owner_id = str((await User.find_one(User.email == "orgs-6@voiceagent-test.com")).id)
 
     assert (await client.delete(f"/orgs/{org_id}/members/{owner_id}", headers=_h(owner))).status_code == 409
     assert (await client.delete(f"/orgs/{org_id}/members/{viewer_id}", headers=_h(viewer))).status_code == 204

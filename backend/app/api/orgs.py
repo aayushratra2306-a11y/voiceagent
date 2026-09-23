@@ -17,6 +17,7 @@ from app.models.bot import Bot
 from app.models.organisation import ROLE_RANK, Membership, Organisation, Role
 from app.models.user import User
 from app.models.webhook import WebhookSubscription
+from app.services import invitations as inv
 from app.services import orgs as svc
 
 router = APIRouter(prefix="/orgs", tags=["organisations"])
@@ -102,22 +103,26 @@ def _guard_owner_rules(ctx: OrgContext, *roles_involved: str) -> None:
         raise HTTPException(status_code=403, detail="Only an owner can change another owner")
 
 
-@router.post("/{org_id}/members", status_code=201)
+@router.post("/{org_id}/members", status_code=202)
 @limiter.limit("10/minute")
 async def add_member(
     request: Request, body: MemberIn, ctx: OrgContext = Depends(require_role("admin", from_path=True))
 ):
+    """Invites `body.email` to join, rather than adding them directly.
+
+    Deliberately does NOT look the address up in User first (that was the
+    5.1 defect: a 404 for an unknown address vs a 201 for a known one told
+    an admin whether an email had a Voix account at all). Every outcome —
+    unknown address, known address, already a member of this org, already
+    invited — returns this same 202 with this same body shape. Whether the
+    address is already a member is left for accept() to discover (see
+    app/services/invitations.py); surfacing it here would reopen the leak.
+    """
     _guard_owner_rules(ctx, body.role)
-    target = await User.find_one(User.email == body.email)
-    if target is None:
-        # Tells an admin whether an address has an account. Accepted for 5.1
-        # (admins only, rate-limited); 5.2's invitations make it uniform.
-        raise HTTPException(status_code=404, detail="No Voix account uses that email")
-    try:
-        await svc.add_member(ctx.org_id, str(target.id), body.role)
-    except svc.AlreadyMemberError as e:
-        raise HTTPException(status_code=409, detail="Already a member") from e
-    return {"user_id": str(target.id), "email": target.email, "role": body.role}
+    invite, raw_token = await inv.create_invitation(ctx.org_id, body.email, body.role, str(ctx.user.id))
+    invite_path = f"/invite/{raw_token}"
+    await inv.deliver_invitation(invite, invite_path)
+    return {"status": "invitation sent", "invite_path": invite_path, "expires_at": invite.expires_at.isoformat()}
 
 
 @router.patch("/{org_id}/members/{user_id}")
@@ -147,4 +152,32 @@ async def remove_member(user_id: str, ctx: OrgContext = Depends(require_role("vi
         await svc.remove_member(ctx.org_id, user_id)
     except svc.LastOwnerError as e:
         raise HTTPException(status_code=409, detail="An organisation needs at least one owner") from e
+    return Response(status_code=204)
+
+
+@router.get("/{org_id}/invitations")
+async def list_invitations(ctx: OrgContext = Depends(require_role("admin", from_path=True))):
+    pending = await inv.list_pending(ctx.org_id)
+    return [
+        {
+            "id": str(invite.id),
+            "email": invite.email,
+            "role": invite.role,
+            "invited_at": invite.created_at.isoformat(),
+            "expires_at": invite.expires_at.isoformat(),
+        }
+        for invite in pending
+    ]
+
+
+@router.delete("/{org_id}/invitations/{invitation_id}", status_code=204)
+async def revoke_invitation(
+    invitation_id: str, ctx: OrgContext = Depends(require_role("admin", from_path=True))
+):
+    # inv.revoke matches _id AND org_id in one query (see its docstring), so
+    # another organisation's invitation id can never be revoked through
+    # this org's path — the same rule fetch_org_bot etc. follow.
+    revoked = await inv.revoke(ctx.org_id, invitation_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Invitation not found")
     return Response(status_code=204)
