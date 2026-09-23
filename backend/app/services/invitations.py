@@ -14,7 +14,7 @@ from beanie import PydanticObjectId
 from loguru import logger
 
 from app.models.invitation import Invitation
-from app.models.organisation import Role
+from app.models.organisation import Organisation, Role
 from app.models.user import User
 from app.services import orgs as org_service
 
@@ -121,6 +121,18 @@ async def accept(raw_token: str, user: User) -> Invitation:
     admin revokes it.
     """
     invite = await find_valid(raw_token)
+
+    # An invitation must not outlive the organisation it points at. delete_org
+    # now revokes pending invitations, but that is not enough on its own: an
+    # org can be deleted between find_valid and add_member, and invitations
+    # created before that fix are still out there. Without this check,
+    # add_member writes a Membership for an organisation that no longer
+    # exists and the invitee is told they joined something that is gone.
+    # Raised as NotFoundError so a dead invitation is indistinguishable from
+    # any other unusable one.
+    if await Organisation.get(PydanticObjectId(invite.org_id)) is None:
+        raise NotFoundError
+
     if _normalise_email(user.email) != invite.email:
         raise EmailMismatchError
 
@@ -173,6 +185,19 @@ async def get_pending(org_id: str, invitation_id: str) -> Invitation | None:
         Invitation.org_id == org_id,
         Invitation.status == "pending",
     )
+
+
+async def revoke_all_for_org(org_id: str) -> int:
+    """Revokes every pending invitation for an organisation, and returns how
+    many. Called when the organisation is deleted: a link that still works
+    after its destination is gone is a loose end at best, and at worst
+    writes a membership pointing at nothing.
+    """
+    result = await Invitation.get_motor_collection().update_many(
+        {"org_id": org_id, "status": "pending"},
+        {"$set": {"status": "revoked"}},
+    )
+    return result.modified_count
 
 
 async def list_pending(org_id: str) -> list[Invitation]:

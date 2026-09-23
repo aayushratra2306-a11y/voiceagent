@@ -80,6 +80,13 @@ async def delete_org(ctx: OrgContext = Depends(require_role("owner", from_path=T
             status_code=409,
             detail="Only an empty organisation can be deleted: remove its bots, webhooks and pending approvals first",
         )
+    # Pending invitations die with the organisation. Without this a link
+    # sent yesterday still resolves today and, before the matching guard in
+    # invitations.accept, wrote a membership pointing at an org that no
+    # longer exists. Done BEFORE the deletes so an interruption leaves dead
+    # invitations to a live org — recoverable — rather than live
+    # invitations to a deleted one.
+    await inv.revoke_all_for_org(ctx.org_id)
     await Membership.find(Membership.org_id == ctx.org_id).delete()
     await Organisation.get_motor_collection().delete_one({"_id": PydanticObjectId(ctx.org_id)})
     return Response(status_code=204)

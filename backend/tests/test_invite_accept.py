@@ -15,6 +15,7 @@ collide on the one_membership_per_user_per_org index.
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from beanie import PydanticObjectId
 
 from app.models.organisation import Membership
 from app.models.user import User
@@ -210,3 +211,63 @@ async def test_accepting_an_expired_token_is_404(client):
 
     r = await client.post(f"/invitations/{raw}/accept", headers=_bearer(invitee_token))
     assert r.status_code == 404
+
+
+# --- review round 1 ------------------------------------------------------------
+
+async def test_accepting_an_invitation_to_a_deleted_org_creates_no_membership(client):
+    """Found in review: delete_org removed the org and its memberships but
+    left pending invitations behind, and accept() never checked the org was
+    still there. Accepting answered 200 "you joined" and wrote a Membership
+    pointing at an organisation that no longer exists."""
+    from app.models.organisation import Organisation
+
+    org, inviter = await _org_with_owner("del-1")
+    email = "ia-invitee-del-1@voiceagent-test.com"
+    invite, raw = await inv.create_invitation(org, email, "member", inviter)
+    invitee = await make_user(email)
+
+    await Membership.find(Membership.org_id == org).delete()
+    await Organisation.get_motor_collection().delete_one({"_id": PydanticObjectId(org)})
+
+    r = await client.post(f"/invitations/{raw}/accept", headers=_bearer(invitee))
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Invitation not found"
+    assert await Membership.find(Membership.org_id == org).count() == 0
+
+
+async def test_deleting_an_org_revokes_its_pending_invitations(client):
+    """The root cause: an invitation must not outlive the organisation it
+    points at, so the link stops working the moment the org is deleted."""
+    owner_email = "ia-owner-del-2@voiceagent-test.com"
+    owner = await make_user(owner_email)
+    personal = _org_of_token[owner]
+    made = await client.post("/orgs", json={"name": "Doomed"}, headers=_bearer(owner))
+    doomed = made.json()["id"]
+
+    inviter = await _uid(owner_email)
+    invite, raw = await inv.create_invitation(doomed, "ia-x-del-2@voiceagent-test.com", "member", inviter)
+    assert len(await inv.list_pending(doomed)) == 1
+
+    gone = await client.delete(f"/orgs/{doomed}", headers={**_bearer(owner), "X-Org-Id": doomed})
+    assert gone.status_code == 204, gone.text
+    assert await inv.list_pending(doomed) == []
+    assert personal  # the owner still has their personal org
+
+
+async def test_a_stranger_cannot_replay_someone_elses_accepted_token(client):
+    """The idempotency fallback returns 200 only to the user who actually
+    redeemed the token. Loosening that to match on the token alone would
+    let any logged-in user replay a used link and learn the org and role."""
+    org, inviter = await _org_with_owner("replay-1")
+    email = "ia-invitee-replay-1@voiceagent-test.com"
+    invite, raw = await inv.create_invitation(org, email, "member", inviter)
+    invitee = await make_user(email)
+    first = await client.post(f"/invitations/{raw}/accept", headers=_bearer(invitee))
+    assert first.status_code == 200
+
+    stranger = await make_user("ia-stranger-replay-1@voiceagent-test.com")
+    replay = await client.post(f"/invitations/{raw}/accept", headers=_bearer(stranger))
+    nonsense = await client.post("/invitations/not-a-real-token-at-all/accept", headers=_bearer(stranger))
+    assert replay.status_code == nonsense.status_code == 404
+    assert replay.json() == nonsense.json()
