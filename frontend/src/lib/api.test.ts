@@ -24,7 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { logout, trySilentRefresh } from './api'
-import { setActiveOrg, listBots, uploadDocument, fetchDocumentBlobUrl, listOrgs, addMember, connectBot } from './api'
+import { setActiveOrg, listBots, uploadDocument, fetchDocumentBlobUrl, listOrgs, inviteMember, connectBot } from './api'
 
 /** A promise whose settlement this test controls, to hold a fetch open. */
 function deferred<T>() {
@@ -178,8 +178,10 @@ describe('X-Org-Id', () => {
   })
 
   it('is left off the members endpoints, whose path names the organisation', async () => {
-    const spy = mockFetch(() => json({ user_id: 'u2', email: 'b@x.com', role: 'member', joined: 'now' }))
-    await addMember('org-2', 'b@x.com', 'member')
+    const spy = mockFetch(() => json({
+      status: 'invitation sent', invite_path: '/invite/tok', expires_at: 'now',
+    }))
+    await inviteMember('org-2', 'b@x.com', 'member')
     expect(headerOf(spy)['x-org-id']).toBeUndefined()
     expect(spy.mock.calls[0][0]).toBe('/orgs/org-2/members')
   })

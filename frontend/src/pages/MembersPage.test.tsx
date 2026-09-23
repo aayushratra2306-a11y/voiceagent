@@ -59,26 +59,32 @@ describe('MembersPage', () => {
     expect(screen.queryByLabelText('Email address')).not.toBeInTheDocument()
   })
 
-  it('lets an admin add a member', async () => {
+  // Task 5.2 — POST /orgs/{id}/members now creates an invitation rather
+  // than adding the member outright; the invite/revoke behaviour itself is
+  // covered in MembersPage.invite.test.tsx. This just keeps the page's
+  // pre-existing invitation call wired up to the form.
+  it('lets an admin submit an invitation', async () => {
     stubOrg('admin')
     stubAuth('admin@x.com')
     vi.spyOn(api, 'listMembers').mockResolvedValue(MEMBERS)
-    const add = vi.spyOn(api, 'addMember').mockResolvedValue({
-      user_id: 'u3', email: 'new@x.com', role: 'member', joined: '2026-03-01',
+    vi.spyOn(api, 'listInvitations').mockResolvedValue([])
+    const invite = vi.spyOn(api, 'inviteMember').mockResolvedValue({
+      status: 'invitation sent', invite_path: '/invite/tok', expires_at: '2026-03-08',
     })
     renderPage()
     await waitFor(() => expect(screen.getByText('owner@x.com')).toBeInTheDocument())
 
     await userEvent.type(screen.getByLabelText('Email address'), 'new@x.com')
-    await userEvent.click(screen.getByRole('button', { name: 'Add member' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Create invitation' }))
 
-    await waitFor(() => expect(add).toHaveBeenCalledWith('org-1', 'new@x.com', 'member'))
+    await waitFor(() => expect(invite).toHaveBeenCalledWith('org-1', 'new@x.com', 'member'))
   })
 
   it('does not offer an admin any control over an owner', async () => {
     stubOrg('admin')
     stubAuth('admin@x.com')
     vi.spyOn(api, 'listMembers').mockResolvedValue(MEMBERS)
+    vi.spyOn(api, 'listInvitations').mockResolvedValue([])
     renderPage()
     await waitFor(() => expect(screen.getByText('owner@x.com')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Remove owner@x.com' })).not.toBeInTheDocument()
@@ -89,6 +95,7 @@ describe('MembersPage', () => {
     stubOrg('owner')
     stubAuth('owner@x.com')
     vi.spyOn(api, 'listMembers').mockResolvedValue([MEMBERS[0]])
+    vi.spyOn(api, 'listInvitations').mockResolvedValue([])
     vi.spyOn(api, 'removeMember').mockRejectedValue(new Error('An organisation needs at least one owner'))
     renderPage()
     await waitFor(() => expect(screen.getByText('owner@x.com')).toBeInTheDocument())

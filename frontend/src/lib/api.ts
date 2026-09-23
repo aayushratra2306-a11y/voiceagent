@@ -636,14 +636,47 @@ export async function listMembers(orgId: string): Promise<Member[]> {
   return request(`/orgs/${orgId}/members`)
 }
 
-export async function addMember(orgId: string, email: string, role: Role): Promise<Member> {
-  return request(`/orgs/${orgId}/members`, { method: 'POST', body: JSON.stringify({ email, role }) })
-}
-
 export async function setMemberRole(orgId: string, userId: string, role: Role): Promise<Member> {
   return request(`/orgs/${orgId}/members/${userId}`, { method: 'PATCH', body: JSON.stringify({ role }) })
 }
 
 export async function removeMember(orgId: string, userId: string): Promise<void> {
   return request(`/orgs/${orgId}/members/${userId}`, { method: 'DELETE' })
+}
+
+// ── Invitations (Task 5.2) ──────────────────────────────────────────────────
+// Task 5.2 — POST /orgs/{id}/members no longer adds an existing user
+// directly; it creates an invitation instead, and it returns this SAME
+// shape whether or not the address has an account. That uniformity is a
+// deliberate security property (no email-enumeration leak), so nothing on
+// the frontend may read this response as "found" vs "not found" — it only
+// ever means "an invitation now exists".
+export interface InvitationCreated {
+  status: string
+  /** Path only, e.g. "/invite/<token>". The caller builds the absolute
+   *  link (window.location.origin + this) — the backend has no notion of
+   *  the frontend's origin. */
+  invite_path: string
+  expires_at: string
+}
+
+export interface Invitation {
+  id: string
+  email: string
+  role: Role
+  invited_at: string
+  expires_at: string
+}
+
+export async function inviteMember(orgId: string, email: string, role: Role): Promise<InvitationCreated> {
+  return request(`/orgs/${orgId}/members`, { method: 'POST', body: JSON.stringify({ email, role }) })
+}
+
+// Pending invitations only — an accepted or revoked one no longer appears.
+export async function listInvitations(orgId: string): Promise<Invitation[]> {
+  return request(`/orgs/${orgId}/invitations`)
+}
+
+export async function revokeInvitation(orgId: string, invitationId: string): Promise<void> {
+  return request(`/orgs/${orgId}/invitations/${invitationId}`, { method: 'DELETE' })
 }
