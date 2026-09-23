@@ -21,6 +21,11 @@ export default defineConfig({
       // had the same gap; that was outside frontend/, so out of scope here,
       // but it was fixed separately — commit 3a7becd.)
       '/orgs': 'http://localhost:8080',
+      // Task 5.2 — AcceptInvitePage's GET /invitations/:token and POST
+      // /invitations/:token/accept. Same gap as /orgs above: without this
+      // entry `npm run dev` falls through to the SPA and the accept page
+      // never gets past its loading state.
+      '/invitations': 'http://localhost:8080',
     },
   },
   // jsdom rather than the default node environment: what is worth testing on

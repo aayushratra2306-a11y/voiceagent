@@ -1,12 +1,24 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { login, register } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { readLastOrg } from '../lib/orgs'
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [searchParams] = useSearchParams()
+  // Task 5.2 — AcceptInvitePage sends a signed-out visitor here with
+  // ?next=/invite/<token> (and ?mode=register for its "Sign up" link) so
+  // signing in lands them back on the invitation instead of wherever this
+  // page would otherwise send them. Only a same-site path is honoured —
+  // anything else (a bare "//host/…" or an absolute URL) is an open
+  // redirect and gets the ordinary landing instead.
+  const next = searchParams.get('next')
+  const safeNext = next && next.startsWith('/') && !next.startsWith('//') ? next : null
+
+  const [mode, setMode] = useState<'login' | 'register'>(
+    searchParams.get('mode') === 'register' ? 'register' : 'login',
+  )
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -27,6 +39,10 @@ export default function LoginPage() {
       } else {
         const { access_token } = await login(email, password)
         saveToken(access_token)
+        if (safeNext) {
+          navigate(safeNext, { replace: true })
+          return
+        }
         // No organisation is in the address yet at this point — the
         // remembered one from a previous visit, or the chooser (which then
         // picks the personal organisation) when there isn't one.

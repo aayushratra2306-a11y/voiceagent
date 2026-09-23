@@ -15,6 +15,7 @@ import WebhooksPage from './pages/WebhooksPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import MembersPage from './pages/MembersPage'
 import OrgSettingsPage from './pages/OrgSettingsPage'
+import AcceptInvitePage from './pages/AcceptInvitePage'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, ready } = useAuth()
@@ -39,6 +40,16 @@ export default function App() {
           <ChromeProvider>
             <Routes>
               <Route path="/" element={<LoginPage />} />
+
+              {/* Task 5.2 — the invitee side. Deliberately OUTSIDE
+                  PrivateRoute and OUTSIDE OrgProvider's tree: whoever opens
+                  this link may have no account and no organisation at all.
+                  OrgProvider calls setActiveOrg + GET /orgs during render,
+                  which for a logged-out stranger means a failed request and
+                  (via its own "not a member" handling) a redirect away from
+                  the one page they were sent here to see. This route must
+                  never be nested under either. */}
+              <Route path="/invite/:token" element={<AcceptInvitePage />} />
 
               {/* Everything signed-in lives under /o/:orgId, so the address
                   says which organisation you are looking at and a link you

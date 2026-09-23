@@ -680,3 +680,28 @@ export async function listInvitations(orgId: string): Promise<Invitation[]> {
 export async function revokeInvitation(orgId: string, invitationId: string): Promise<void> {
   return request(`/orgs/${orgId}/invitations/${invitationId}`, { method: 'DELETE' })
 }
+
+// ── Accept-invitation page (Task 5.2) ───────────────────────────────────────
+// GET /invitations/{token} takes no auth: it's what lets AcceptInvitePage
+// show a preview to a visitor who isn't signed in and may have no account at
+// all. 404 covers an unknown, expired, revoked or already-used token —
+// deliberately indistinguishable, so the frontend must not try to tell them
+// apart either.
+export interface InvitationPreview {
+  org_name: string
+  role: Role
+  email: string
+  invited_by_email: string
+}
+
+export async function getInvitation(token: string): Promise<InvitationPreview> {
+  return request(`/invitations/${token}`)
+}
+
+// Auth required. 403 means signed in as the wrong address, 409 means
+// already a member, 404 covers everything else (same indistinguishable set
+// as the GET above) — all three arrive as a plain Error via request()'s own
+// error handling, message already safe to show as-is.
+export async function acceptInvitation(token: string): Promise<{ org_id: string; role: Role }> {
+  return request(`/invitations/${token}/accept`, { method: 'POST' })
+}
