@@ -1575,11 +1575,27 @@ flowchart TB
     </tbody>
   </table></div>
 
+  <h3>Invitations &mdash; the 5.2 vocabulary</h3>
+  <div class="tw"><table>
+    <thead><tr><th style="width:15%">Term</th><th style="width:29%">In plain English</th><th style="width:32%">What it actually means</th><th>Where it lives in your system</th></tr></thead>
+    <tbody>
+      <tr><td><b>Invitation</b></td><td>An admin&rsquo;s offer for a specific email address to join their organisation, with a role attached.</td><td>An Invitation record: org, email, role, an expiry, and a hash of a one-time token &mdash; never the token itself.</td><td class="mono">app/models/invitation.py</td></tr>
+      <tr><td><b>Invitation token</b></td><td>The random code in the link an admin shares by hand.</td><td>256 bits from secrets.token_urlsafe. Only its SHA-256 hash is stored, so a database leak yields no working links.</td><td class="mono">app/services/invitations.py</td></tr>
+      <tr><td><b>Bearer credential</b></td><td>Something that grants access to whoever simply holds it &mdash; no other proof needed.</td><td>What an invitation link is. Forwarding it forwards the access, which is why accepting also checks the signed-in email matches.</td><td class="mono">invitations.accept()</td></tr>
+      <tr><td><b>Delivery seam</b></td><td>Copy the link, send it yourself &mdash; today. A single marked function is where automatic sending will plug in later.</td><td>deliver_invitation() logs that an invitation is ready and does nothing else. Task 7.10 fills it in; nothing else needs to change when it does.</td><td class="mono">deliver_invitation()</td></tr>
+      <tr><td><b>Uniform response</b></td><td>The same answer whether or not an email address has an account &mdash; on purpose.</td><td>Inviting a known address and an unknown one return byte-for-byte the same 202. The old version leaked which addresses were registered.</td><td class="mono">POST /orgs/{id}/members</td></tr>
+      <tr><td><b>Email enumeration</b></td><td>Working out which email addresses are registered with a service by watching how it responds to each one.</td><td>The exact attack the uniform response closes. Confirmed closed by measurement, not just by code: identical status, body and response time for a known vs. unknown address.</td><td class="mono">tests/test_invitations_api.py</td></tr>
+      <tr><td><b>Indistinguishable failure</b></td><td>An unknown link, an expired one, a cancelled one and a used one all look exactly the same from the outside.</td><td>One NotFoundError covers all four. An unauthenticated visitor probing links learns nothing about which reason applies.</td><td class="mono">find_valid()</td></tr>
+      <tr><td><b>Open redirect</b></td><td>A link on a trusted site that can be made to send someone somewhere else entirely &mdash; useful for phishing, because the first click looks completely safe.</td><td>What the sign-in page&rsquo;s &ldquo;come back here after&rdquo; step could become if it accepted any address. Only a same-site path is honoured; tested directly.</td><td class="mono">lib/returnPath.ts</td></tr>
+    </tbody>
+  </table></div>
+
   <div class="callout ok">
     <strong>Why these words are worth keeping.</strong> Most of them name a decision, not just a thing.
     <b>Idempotent</b> is why the migration can be re-run after a failure. <b>Owner count</b> is why an
     organisation cannot be stranded without an owner. <b>Untagged</b> is why an old record cannot drift
-    into a new organisation. If a word here ever stops matching the code, the code changed and this list
+    into a new organisation. <b>Uniform response</b> is why 5.2 exists at all &mdash; it closes a real leak,
+    not a hypothetical one. If a word here ever stops matching the code, the code changed and this list
     should change with it.
   </div>
 </div>
