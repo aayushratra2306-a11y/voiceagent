@@ -126,8 +126,11 @@ async def test_a_member_cannot_list_or_revoke_invitations(client):
 # --- org-scoping (BOLA) ---------------------------------------------------------
 
 
-async def test_invitations_of_another_org_are_invisible(client):
-    """BOLA: the pending list must be scoped by the path org, in one query."""
+async def test_listing_an_org_you_do_not_belong_to_is_a_404(client):
+    """Stops at the org dependency, BEFORE list_pending runs — so this does
+    NOT prove the query itself is org-scoped. That is
+    test_list_returns_only_this_orgs_pending_invitations' job; keeping the
+    two separate was a review finding on this file."""
     org, admin, _ = await _org_with_admin_and_member("u4")
     other_org, _, _ = await _org_with_admin_and_member("u4-other")
     r = await client.get(f"/orgs/{other_org}/invitations", headers=_bearer(admin))
@@ -186,3 +189,45 @@ async def test_the_returned_path_actually_works(client):
     )
     token = r.json()["invite_path"].rsplit("/", 1)[-1]
     assert (await inv.find_valid(token)).email == "x-u6@voiceagent-test.com"
+
+
+# --- review round 1: revoking is an owner-touching action too ------------------
+
+async def test_an_admin_cannot_revoke_an_owner_invitation(client):
+    """Every other owner-touching action in orgs.py is guarded (add, remove,
+    promote, demote). Cancelling an owner's succession plan is one too: an
+    admin ranks below an owner and must not undo it unilaterally."""
+    org, admin, _ = await _org_with_admin_and_member("rev1")
+    invite, _ = await inv.create_invitation(org, "heir-rev1@voiceagent-test.com", "owner", "u1")
+    r = await client.delete(f"/orgs/{org}/invitations/{invite.id}", headers=_bearer(admin))
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Only an owner can change another owner"
+    assert len(await inv.list_pending(org)) == 1
+
+
+async def test_an_owner_can_revoke_an_owner_invitation(client):
+    owner_token = await make_user("inv-owner-rev2@voiceagent-test.com")
+    org = _org_of_token[owner_token]
+    invite, _ = await inv.create_invitation(org, "heir-rev2@voiceagent-test.com", "owner", "u1")
+    r = await client.delete(f"/orgs/{org}/invitations/{invite.id}", headers=_bearer(owner_token))
+    assert r.status_code == 204
+    assert await inv.list_pending(org) == []
+
+
+async def test_revoking_an_already_revoked_invitation_is_a_404(client):
+    org, admin, _ = await _org_with_admin_and_member("rev3")
+    invite, _ = await inv.create_invitation(org, "x-rev3@voiceagent-test.com", "member", "u1")
+    first = await client.delete(f"/orgs/{org}/invitations/{invite.id}", headers=_bearer(admin))
+    assert first.status_code == 204
+    again = await client.delete(f"/orgs/{org}/invitations/{invite.id}", headers=_bearer(admin))
+    assert again.status_code == 404
+
+
+async def test_revoking_an_accepted_invitation_is_a_404(client):
+    org, admin, _ = await _org_with_admin_and_member("rev4")
+    email = "joined-rev4@voiceagent-test.com"
+    invite, raw = await inv.create_invitation(org, email, "member", "u1")
+    await make_user(email)
+    await inv.accept(raw, await User.find_one(User.email == email))
+    r = await client.delete(f"/orgs/{org}/invitations/{invite.id}", headers=_bearer(admin))
+    assert r.status_code == 404

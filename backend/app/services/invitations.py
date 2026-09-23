@@ -155,6 +155,26 @@ async def revoke(org_id: str, invitation_id: str) -> bool:
     return result.modified_count > 0
 
 
+async def get_pending(org_id: str, invitation_id: str) -> Invitation | None:
+    """One pending invitation, matched by id AND org_id in a single query —
+    never fetched then compared, so another organisation's id cannot reach
+    this one.
+
+    Exists so a caller can inspect an invitation's role before acting on
+    it: revoking an *owner* invitation is an owner-touching action and has
+    to be guarded like every other one, which needs the role first.
+    """
+    try:
+        object_id = PydanticObjectId(invitation_id)
+    except Exception:
+        return None
+    return await Invitation.find_one(
+        Invitation.id == object_id,
+        Invitation.org_id == org_id,
+        Invitation.status == "pending",
+    )
+
+
 async def list_pending(org_id: str) -> list[Invitation]:
     return await Invitation.find(
         Invitation.org_id == org_id, Invitation.status == "pending"

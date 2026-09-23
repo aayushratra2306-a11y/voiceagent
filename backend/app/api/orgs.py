@@ -174,10 +174,16 @@ async def list_invitations(ctx: OrgContext = Depends(require_role("admin", from_
 async def revoke_invitation(
     invitation_id: str, ctx: OrgContext = Depends(require_role("admin", from_path=True))
 ):
-    # inv.revoke matches _id AND org_id in one query (see its docstring), so
-    # another organisation's invitation id can never be revoked through
-    # this org's path — the same rule fetch_org_bot etc. follow.
-    revoked = await inv.revoke(ctx.org_id, invitation_id)
-    if not revoked:
+    # Both calls match _id AND org_id in one query (see their docstrings), so
+    # another organisation's invitation id can never be reached through this
+    # org's path — the same rule fetch_org_bot etc. follow.
+    pending = await inv.get_pending(ctx.org_id, invitation_id)
+    if pending is None:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    # Cancelling an owner invitation is an owner-touching action, like adding,
+    # removing, promoting and demoting one. An admin ranks below an owner and
+    # must not undo an owner's succession plan on their own.
+    _guard_owner_rules(ctx, pending.role)
+    if not await inv.revoke(ctx.org_id, invitation_id):
         raise HTTPException(status_code=404, detail="Invitation not found")
     return Response(status_code=204)
