@@ -12,6 +12,7 @@ from app.models.bot import Bot
 from app.models.bot_tool import BotTool
 from app.models.conversation import ConversationTurn
 from app.models.document import Document
+from app.models.invitation import Invitation
 from app.models.order import Order
 from app.models.organisation import Membership, Organisation
 from app.models.payment import PaymentSession
@@ -22,7 +23,7 @@ from app.models.webhook import WebhookDelivery, WebhookOutboxItem, WebhookSubscr
 ALL_MODELS = [
     User, Bot, Document, Order, Appointment, ConversationTurn, RevokedRefreshToken,
     BotTool, PaymentSession, WebhookSubscription, WebhookDelivery, WebhookOutboxItem,
-    PendingApproval, Organisation, Membership,
+    PendingApproval, Organisation, Membership, Invitation,
 ]
 
 # Models deliberately without org_id, each with the reason.
