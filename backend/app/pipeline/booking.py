@@ -41,6 +41,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from loguru import logger
 from pipecat.services.llm_service import FunctionCallParams
 
+from app.core.times import utc_isoformat
 from app.models.appointment import Appointment
 from app.pipeline import call_context
 
@@ -717,7 +718,7 @@ async def _emit(event: str, appointment: Appointment) -> None:
                 "date": appointment.date,
                 "time": appointment.time,
                 "timezone": appointment.timezone,
-                "starts_at_utc": _utc_isoformat(appointment.starts_at_utc),
+                "starts_at_utc": utc_isoformat(appointment.starts_at_utc),
                 "purpose": appointment.purpose,
                 "caller_name": appointment.caller_name,
                 "bot_id": appointment.bot_id,
@@ -726,26 +727,6 @@ async def _emit(event: str, appointment: Appointment) -> None:
         )
     except Exception as e:
         logger.warning(f"[BOOKING] Could not emit {event}: {type(e).__name__}: {e}")
-
-
-def _utc_isoformat(dt: datetime | None) -> str | None:
-    """A datetime that definitely means UTC, as an ISO string that says so.
-
-    `appointment.starts_at_utc` is aware when it's the object this process
-    just built (book_appointment), but PyMongo hands back a NAIVE datetime
-    for one re-fetched from the database (cancel/reschedule both load the
-    booking first) — confirmed directly against bson's own codec: this
-    Motor client has no tz_aware=True. A naive value's own .isoformat()
-    would silently drop the "+00:00", handing a customer's webhook receiver
-    a timestamp with no zone attached — this is the fix, not `.astimezone`,
-    which would be actively wrong: called on a naive value it assumes the
-    OS's local zone and shifts the instant, rather than just labelling it.
-    """
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.isoformat()
 
 
 BOOKING_TOOLS = [

@@ -357,3 +357,50 @@ async def test_promoting_someone_leaves_their_invitations_alone(client):
     )
     assert promoted.status_code == 200, promoted.text
     assert len(await inv.list_pending(org)) == 1
+
+
+async def test_demoting_an_owner_to_admin_revokes_only_their_owner_invitations(client):
+    """Only an owner may invite someone AS an owner (_guard_owner_rules). An
+    owner demoted to admin loses that right but keeps the right to invite
+    below owner -- so their owner invitations must go, and the rest stay."""
+    owner_email = "ia-owner-rights-4@voiceagent-test.com"
+    owner = await make_user(owner_email)
+    org = _org_of_token[owner]
+    co_owner_email = "ia-coowner-rights-4@voiceagent-test.com"
+    await make_user(co_owner_email)
+    co_owner_id = await _uid(co_owner_email)
+    await org_service.add_member(org, co_owner_id, "owner")
+
+    as_owner, _ = await inv.create_invitation(org, "ia-guest-rights-4a@voiceagent-test.com", "owner", co_owner_id)
+    as_admin, _ = await inv.create_invitation(org, "ia-guest-rights-4b@voiceagent-test.com", "admin", co_owner_id)
+
+    demoted = await client.patch(
+        f"/orgs/{org}/members/{co_owner_id}",
+        json={"role": "admin"},
+        headers={**_bearer(owner), "X-Org-Id": org},
+    )
+    assert demoted.status_code == 200, demoted.text
+    assert [i.id for i in await inv.list_pending(org)] == [as_admin.id]
+
+
+async def test_losing_authority_in_one_org_leaves_invitations_in_another_alone(client):
+    """Revocation is per organisation: being removed from one organisation
+    says nothing about the authority the same person holds in another."""
+    owner_email = "ia-owner-rights-5@voiceagent-test.com"
+    owner = await make_user(owner_email)
+    org = _org_of_token[owner]
+    admin_email = "ia-admin-rights-5@voiceagent-test.com"
+    admin = await make_user(admin_email)
+    admin_id = await _uid(admin_email)
+    their_own_org = _org_of_token[admin]
+    await org_service.add_member(org, admin_id, "admin")
+
+    await inv.create_invitation(org, "ia-guest-rights-5a@voiceagent-test.com", "member", admin_id)
+    await inv.create_invitation(their_own_org, "ia-guest-rights-5b@voiceagent-test.com", "member", admin_id)
+
+    gone = await client.delete(
+        f"/orgs/{org}/members/{admin_id}", headers={**_bearer(owner), "X-Org-Id": org}
+    )
+    assert gone.status_code == 204, gone.text
+    assert await inv.list_pending(org) == []
+    assert len(await inv.list_pending(their_own_org)) == 1

@@ -149,13 +149,17 @@ async def change_role(user_id: str, body: RoleIn, ctx: OrgContext = Depends(requ
         await svc.set_role(ctx.org_id, user_id, body.role)
     except svc.LastOwnerError as e:
         raise HTTPException(status_code=409, detail="An organisation needs at least one owner") from e
-    # Losing the right to invite takes the outstanding invitations with it.
-    # Only a demotion below admin: a promotion leaves them alone. Done after
-    # the role change, so an interruption leaves the weaker role with live
-    # invitations (visible, revocable by any admin) rather than the stronger
-    # role with none.
+    # Losing the right to invite takes the outstanding invitations with it,
+    # and losing only part of it takes only that part: below admin, every
+    # invitation goes; an owner demoted to admin loses just the owner ones
+    # (only an owner may invite an owner -- _guard_owner_rules). A promotion
+    # leaves them alone. Done after the role change, so an interruption
+    # leaves the weaker role with live invitations (visible, revocable by
+    # any admin) rather than the stronger role with none.
     if ROLE_RANK[body.role] < ROLE_RANK["admin"]:
         await inv.revoke_all_by_inviter(ctx.org_id, user_id)
+    elif current.role == "owner" and body.role != "owner":
+        await inv.revoke_all_by_inviter(ctx.org_id, user_id, roles=["owner"])
     return {"user_id": user_id, "role": body.role}
 
 

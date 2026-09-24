@@ -200,20 +200,25 @@ async def revoke_all_for_org(org_id: str) -> int:
     return result.modified_count
 
 
-async def revoke_all_by_inviter(org_id: str, user_id: str) -> int:
+async def revoke_all_by_inviter(org_id: str, user_id: str, roles: list[str] | None = None) -> int:
     """Revokes every pending invitation a given person sent in a given
-    organisation, and returns how many.
+    organisation -- or, with `roles`, only those offering one of those
+    roles -- and returns how many.
 
     An invitation is an exercise of authority: it hands out a role the
     sender was entitled to hand out. When they lose that entitlement --
-    removed from the organisation, or demoted below admin -- their
-    outstanding invitations must not keep granting it for the rest of the
-    7 days, to whoever happens to hold the link. delete_org already had
-    this reasoning for the organisation itself; this is the same rule for
-    the person.
+    removed from the organisation, or demoted -- their outstanding
+    invitations must not keep granting it for the rest of the 7 days, to
+    whoever happens to hold the link. delete_org already had this
+    reasoning for the organisation itself; this is the same rule for the
+    person. `roles` exists for a partial loss: an owner demoted to admin
+    can still invite below owner, so only their owner invitations go.
     """
+    query = {"org_id": org_id, "invited_by": user_id, "status": "pending"}
+    if roles is not None:
+        query["role"] = {"$in": roles}
     result = await Invitation.get_motor_collection().update_many(
-        {"org_id": org_id, "invited_by": user_id, "status": "pending"},
+        query,
         {"$set": {"status": "revoked"}},
     )
     return result.modified_count
